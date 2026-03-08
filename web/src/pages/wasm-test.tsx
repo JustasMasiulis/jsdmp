@@ -1,13 +1,9 @@
 import { createSignal, Show } from "solid-js";
 import DumpSummary, { type ParsedDumpInfo } from "../components/DumpSummary";
+import type { WasmDisassemblerExports } from "../lib/disassembly";
 import { MiniDump } from "../lib/minidump";
 
-type WasmExports = {
-	wasm_get_disassembled_instruction: () => bigint;
-	wasm_get_disassembly_buffer: () => bigint;
-	wasm_disassemble: (length: number, runtime_address: number) => number;
-	wasm_mnemonic_string: (mnemonic: number) => string;
-};
+type WasmExports = WasmDisassemblerExports;
 
 const g_memory = new WebAssembly.Memory({
 	initial: 16n,
@@ -95,11 +91,12 @@ export default function WasmTest() {
 				systemInfo: parsed.systemInfo,
 				miscInfo: parsed.miscInfo,
 				exceptionStream: parsed.exceptionStream,
-				threadList: parsed.threadList,
-				threadInfoList: parsed.threadInfoList,
 				associatedThreads: parsed.associatedThreads,
 				moduleList: parsed.moduleList,
 				unloadedModuleList: parsed.unloadedModuleList,
+				memoryList: parsed.memoryList,
+				memory64List: parsed.memory64List,
+				debugView: null,
 			});
 		} catch (error) {
 			setDumpInfo(null);

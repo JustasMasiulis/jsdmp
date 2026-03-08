@@ -313,6 +313,18 @@ Design language notes for future re-additions:
 		margin: 0 0 0.25rem;
 	}
 
+	.dump-debugger-panel {
+		padding: 0.75rem;
+		margin-top: 0.75rem;
+		background: var(--color-bg2);
+		border: 1px solid var(--color-border2);
+		border-radius: var(--border-radius);
+	}
+
+	.dump-debugger-panel__title {
+		margin-bottom: 0.5rem;
+	}
+
 	.dump-info-table {
 		width: 100%;
 		min-width: 44rem;
@@ -332,5 +344,27 @@ Design language notes for future re-additions:
 	.dump-info-table th {
 		font-weight: 500;
 		background: var(--color-bg2);
+	}
+
+	.dump-disassembly-table {
+		width: auto;
+		min-width: unset;
+	}
+
+	.dump-disassembly-table td {
+		padding: 0;
+		border: none;
+	}
+
+	.dump-disassembly-table code {
+		padding: 0 0.375rem;
+	}
+
+	.dump-disassembly-table td:first-child > :first-child {
+		color: var(--color-fg2);
+	}
+
+	.dump-disassembly-table__current td {
+		background: color-mix(in oklab, var(--color-sidebar-indicator) 10%, white);
 	}
 }

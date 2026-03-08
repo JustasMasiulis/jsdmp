@@ -56,8 +56,6 @@ export type MinidumpSystemInfo = {
 	majorVersion: number;
 	minorVersion: number;
 	buildNumber: number;
-	platformId: number;
-	platformName: string;
 	csdVersion: string;
 	suiteMask: number;
 	cpu:
@@ -91,6 +89,12 @@ export type MinidumpMiscInfo = {
 export type MinidumpLocationDescriptor = {
 	dataSize: number;
 	rva: number;
+};
+
+export type MinidumpMemory64Range = {
+	address: bigint;
+	dataSize: bigint;
+	dataRva: bigint;
 };
 
 export type MinidumpCodeViewInfo =
@@ -170,61 +174,6 @@ export type MinidumpThread = {
 	threadContext: MinidumpLocationDescriptor;
 };
 
-enum ThreadPriorityClass {
-	NORMAL_PRIORITY_CLASS = 0x00000020,
-	IDLE_PRIORITY_CLASS = 0x00000040,
-	HIGH_PRIORITY_CLASS = 0x00000080,
-	REALTIME_PRIORITY_CLASS = 0x00000100,
-	BELOW_NORMAL_PRIORITY_CLASS = 0x4000,
-	ABOVE_NORMAL_PRIORITY_CLASS = 0x8000,
-}
-
-export function priorityToString(
-	priorityClass: number,
-	priority: number,
-): string {
-	const base = [4, 6, 8, 10, 13, 24];
-	const max = [15, 15, 15, 15, 15, 31];
-	const min = [1, 1, 1, 1, 1, 16];
-
-	let clasIdx: number;
-	switch (priorityClass) {
-		case ThreadPriorityClass.IDLE_PRIORITY_CLASS:
-			clasIdx = 0;
-			break;
-		case ThreadPriorityClass.BELOW_NORMAL_PRIORITY_CLASS:
-			clasIdx = 1;
-			break;
-		case ThreadPriorityClass.NORMAL_PRIORITY_CLASS:
-			clasIdx = 2;
-			break;
-		case ThreadPriorityClass.ABOVE_NORMAL_PRIORITY_CLASS:
-			clasIdx = 3;
-			break;
-		case ThreadPriorityClass.HIGH_PRIORITY_CLASS:
-			clasIdx = 4;
-			break;
-		case ThreadPriorityClass.REALTIME_PRIORITY_CLASS:
-			clasIdx = 5;
-			break;
-		default:
-			return `UNK ${priorityClass} ${priority}`;
-	}
-
-	if (priority > 15 || priority < -15) {
-		return `UNK ${priorityClass} ${priority}`;
-	}
-
-	let value = base[clasIdx] + priority;
-	if (value > max[clasIdx]) {
-		value = max[clasIdx];
-	} else if (value < min[clasIdx]) {
-		value = min[clasIdx];
-	}
-
-	return String(value);
-}
-
 export type MinidumpThreadInfo = {
 	threadId: number;
 	dumpFlags: number;
@@ -267,12 +216,11 @@ export class MiniDump {
 	streams: Map<number, DataView> = new Map();
 	systemInfo: MinidumpSystemInfo | null = null;
 	miscInfo: MinidumpMiscInfo | null = null;
-	threadList: MinidumpThread[] | null = null;
-	threadInfoList: MinidumpThreadInfo[] | null = null;
 	associatedThreads: MinidumpAssociatedThread[] | null = null;
 	exceptionStream: MinidumpExceptionStream | null = null;
 	moduleList: MinidumpModule[] | null = null;
 	unloadedModuleList: MinidumpUnloadedModule[] | null = null;
+	memoryRanges: MinidumpMemory64Range[] = [];
 
 	constructor(data: ArrayBuffer) {
 		this._data = new DataView(data);
@@ -293,6 +241,9 @@ export class MiniDump {
 
 		const numStreams = this._data.getUint32(8, true);
 		const streamOffset = this._data.getUint32(12, true);
+
+		let threadList: MinidumpThread[] = [];
+		let threadInfoList: MinidumpThreadInfo[] = [];
 
 		for (let i = 0; i < numStreams; i++) {
 			const offset = streamOffset + i * 12;
@@ -317,12 +268,13 @@ export class MiniDump {
 			} else if (streamType === MiniDumpStreamType.MiscInfoStream) {
 				this.miscInfo = this.parseMiscInfoStream(streamRva, streamSize);
 			} else if (streamType === MiniDumpStreamType.ThreadListStream) {
-				this.threadList = this.parseThreadListStream(streamRva, streamSize);
+				threadList = this.parseThreadListStream(streamRva, streamSize);
 			} else if (streamType === MiniDumpStreamType.ThreadInfoListStream) {
-				this.threadInfoList = this.parseThreadInfoListStream(
-					streamRva,
-					streamSize,
-				);
+				threadInfoList = this.parseThreadInfoListStream(streamRva, streamSize);
+			} else if (streamType === MiniDumpStreamType.MemoryListStream) {
+				this.parseMemoryListStream(streamRva, streamSize);
+			} else if (streamType === MiniDumpStreamType.Memory64ListStream) {
+				this.parseMemory64ListStream(streamRva, streamSize);
 			} else if (streamType === MiniDumpStreamType.ExceptionStream) {
 				this.exceptionStream = this.parseExceptionStream(streamRva, streamSize);
 			} else if (streamType === MiniDumpStreamType.ModuleListStream) {
@@ -335,13 +287,87 @@ export class MiniDump {
 			}
 		}
 
-		this.associatedThreads = this.associateThreadArrays();
+		this.memoryRanges = this.memoryRanges.sort((a, b) => {
+			if (a.address < b.address) {
+				return -1;
+			}
+			if (a.address > b.address) {
+				return 1;
+			}
+			return 0;
+		});
+
+		this.associatedThreads = this.associateThreadArrays(
+			threadList,
+			threadInfoList,
+		);
 	}
 
-	private associateThreadArrays(): MinidumpAssociatedThread[] | null {
+	readLocationBytes(location: MinidumpLocationDescriptor): Uint8Array | null {
+		if (
+			location.dataSize <= 0 ||
+			location.rva <= 0 ||
+			location.rva + location.dataSize > this._data.byteLength
+		) {
+			return null;
+		}
+
+		return new Uint8Array(
+			this._data.buffer.slice(location.rva, location.rva + location.dataSize),
+		);
+	}
+
+	findMemoryRange(address: bigint): MinidumpMemory64Range | null {
+		for (const range of this.memoryRanges) {
+			const start = range.address;
+			const endExclusive = start + range.dataSize;
+			if (address >= start && address < endExclusive) {
+				return range;
+			}
+		}
+
+		return null;
+	}
+
+	readMemoryAt(address: bigint, size: number): Uint8Array | null {
+		if (size <= 0) {
+			return null;
+		}
+
+		const range = this.findMemoryRange(address);
+		if (!range) {
+			return null;
+		}
+
+		const offset = address - range.address;
+		const available = range.dataSize - offset;
+		const requested = BigInt(size);
+		if (available < requested) {
+			return null;
+		}
+
+		const start = range.dataRva + offset;
+		const end = start + requested;
+		const maxByteLength = BigInt(this._data.byteLength);
+		if (start < 0n || end > maxByteLength) {
+			return null;
+		}
+
+		const maxSafeInteger = BigInt(Number.MAX_SAFE_INTEGER);
+		if (start > maxSafeInteger || end > maxSafeInteger) {
+			return null;
+		}
+
+		return new Uint8Array(this._data.buffer.slice(Number(start), Number(end)));
+	}
+
+	private associateThreadArrays(
+		threadList: MinidumpThread[],
+		threadInfoList: MinidumpThreadInfo[],
+	): MinidumpAssociatedThread[] | null {
 		const associated = new Map<number, MinidumpAssociatedThread>();
 
-		for (const thread of this.threadList ?? []) {
+		for (const thread of threadList) {
 			associated.set(thread.threadId, {
 				threadId: thread.threadId,
 				thread,
@@ -349,7 +375,7 @@ export class MiniDump {
 			});
 		}
 
-		for (const threadInfo of this.threadInfoList ?? []) {
+		for (const threadInfo of threadInfoList) {
 			const existing = associated.get(threadInfo.threadId);
 			if (existing) {
 				existing.threadInfo = threadInfo;
@@ -413,6 +439,89 @@ export class MiniDump {
 		}
 
 		return threads;
+	}
+
+	private parseMemoryListStream(streamRva: number, streamSize: number) {
+		if (streamSize < 4) {
+			throw new Error(`MemoryListStream is too small: ${streamSize} bytes`);
+		}
+
+		const view = new DataView(
+			this._data.buffer,
+			this._data.byteOffset + streamRva,
+			streamSize,
+		);
+		const numberOfMemoryRanges = view.getUint32(0, true);
+		const entrySize = 16;
+		const requiredSize = 4 + numberOfMemoryRanges * entrySize;
+
+		if (requiredSize > streamSize) {
+			throw new Error(
+				`MemoryListStream truncated: need ${requiredSize} bytes, got ${streamSize}`,
+			);
+		}
+
+		for (let i = 0; i < numberOfMemoryRanges; i++) {
+			const offset = 4 + i * entrySize;
+			this.memoryRanges.push({
+				address: view.getBigUint64(offset, true),
+				dataSize: BigInt(view.getUint32(offset + 8, true)),
+				dataRva: BigInt(view.getUint32(offset + 12, true)),
+			});
+		}
+	}
+
+	private parseMemory64ListStream(streamRva: number, streamSize: number) {
+		if (streamSize < 16) {
+			throw new Error(`Memory64ListStream is too small: ${streamSize} bytes`);
+		}
+
+		const view = new DataView(
+			this._data.buffer,
+			this._data.byteOffset + streamRva,
+			streamSize,
+		);
+
+		const numberOfMemoryRangesBig = view.getBigUint64(0, true);
+		const baseRva = view.getBigUint64(8, true);
+		const entrySize = 16n;
+		const requiredSize = 16n + numberOfMemoryRangesBig * entrySize;
+		if (requiredSize > BigInt(streamSize)) {
+			throw new Error(
+				`Memory64ListStream truncated: need ${requiredSize} bytes, got ${streamSize}`,
+			);
+		}
+
+		const maxSafeInteger = BigInt(Number.MAX_SAFE_INTEGER);
+		if (numberOfMemoryRangesBig > maxSafeInteger) {
+			throw new Error(
+				`Memory64ListStream range count is too large: ${numberOfMemoryRangesBig}`,
+			);
+		}
+
+		const numberOfMemoryRanges = Number(numberOfMemoryRangesBig);
+		let currentRva = baseRva;
+		const maxByteLength = BigInt(this._data.byteLength);
+
+		for (let i = 0; i < numberOfMemoryRanges; i++) {
+			const offset = 16 + i * 16;
+			const startOfMemoryRange = view.getBigUint64(offset, true);
+			const dataSize = view.getBigUint64(offset + 8, true);
+			const nextRva = currentRva + dataSize;
+			if (nextRva > maxByteLength) {
+				throw new Error(
+					`Memory64ListStream data exceeds file bounds at range index ${i}`,
+				);
+			}
+
+			this.memoryRanges.push({
+				address: startOfMemoryRange,
+				dataSize: dataSize,
+				dataRva: currentRva,
+			});
+
+			currentRva = nextRva;
+		}
 	}
 
 	private parseModuleListStream(
@@ -735,6 +844,10 @@ export class MiniDump {
 		const csdVersionRva = view.getUint32(24, true);
 		const suiteMask = view.getUint16(28, true);
 
+		if (platformId !== 2) {
+			throw new Error(`Unsupported platform ID: ${platformId}`);
+		}
+
 		const isIntel = processorArchitecture === 0;
 		const cpu = isIntel
 			? {
@@ -764,8 +877,6 @@ export class MiniDump {
 			majorVersion,
 			minorVersion,
 			buildNumber,
-			platformId,
-			platformName: this.resolvePlatformId(platformId),
 			csdVersion: csdVersionRva ? this.readMinidumpString(csdVersionRva) : "",
 			suiteMask,
 			cpu,
@@ -942,21 +1053,6 @@ export class MiniDump {
 				return "ARM64";
 			default:
 				return `unknown (${architecture})`;
-		}
-	}
-
-	private resolvePlatformId(platformId: number): string {
-		switch (platformId) {
-			case 0:
-				return "Win32s";
-			case 1:
-				return "Win32 Windows";
-			case 2:
-				return "Win32 NT";
-			case 3:
-				return "Win32 CE";
-			default:
-				return `unknown (${platformId})`;
 		}
 	}
 }

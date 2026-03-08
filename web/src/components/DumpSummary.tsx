@@ -1,14 +1,22 @@
 import { For, type ParentComponent } from "solid-js";
+import type { DebugDisassemblyView } from "../lib/disassembly";
+import {
+	fmtHex,
+	fmtOs,
+	fmtPriority,
+	fmtProductAndSuite,
+} from "../lib/formatting";
 import {
 	MiniDumpStreamType,
 	type MinidumpAssociatedThread,
 	type MinidumpCodeViewInfo,
 	type MinidumpExceptionStream,
+	type MinidumpMemory64Range,
+	type MinidumpMemoryRange,
 	type MinidumpMiscInfo,
 	type MinidumpModule,
 	type MinidumpSystemInfo,
 	type MinidumpUnloadedModule,
-	priorityToString,
 } from "../lib/minidump";
 
 export type ParsedDumpInfo = {
@@ -23,6 +31,9 @@ export type ParsedDumpInfo = {
 	associatedThreads: MinidumpAssociatedThread[] | null;
 	moduleList: MinidumpModule[] | null;
 	unloadedModuleList: MinidumpUnloadedModule[] | null;
+	memoryList: MinidumpMemoryRange[] | null;
+	memory64List: MinidumpMemory64Range[] | null;
+	debugView: DebugDisassemblyView | null;
 };
 
 type DumpSummaryProps = {
@@ -36,11 +47,11 @@ const Row: ParentComponent<{ label: string }> = (props) => (
 	</p>
 );
 
-const toHex = (value: number | bigint, padLength = 0) => {
-	const hex = value.toString(16).toUpperCase();
-	const padded = padLength > 0 ? hex.padStart(padLength, "0") : hex;
-	return `0x${padded}`;
-};
+const RawRow: ParentComponent<{}> = (props) => (
+	<p class="dump-info-panel__item">
+		<code>{props.children}</code>
+	</p>
+);
 
 const formatTimestamp = (timestamp: number) => {
 	if (!timestamp) return "0 (unset)";
@@ -52,6 +63,57 @@ const formatSeconds = (value: number) => `${value} sec`;
 
 const getStreamTypeName = (streamType: number) =>
 	MiniDumpStreamType[streamType] ?? `Unknown(${streamType})`;
+
+const formatBytes = (value: bigint) => `${value.toString()} B`;
+
+type MemoryListSummary = {
+	rangeCount: number;
+	totalBytes: bigint;
+	startAddress: bigint;
+	endAddressExclusive: bigint;
+};
+
+const summarizeMemoryList = (
+	memoryList: MinidumpMemoryRange[] | null,
+	memory64List: MinidumpMemory64Range[] | null,
+): MemoryListSummary | null => {
+	const ranges = [
+		...(memoryList ?? []).map((range) => ({
+			start: range.startOfMemoryRange,
+			size: BigInt(range.memory.dataSize),
+		})),
+		...(memory64List ?? []).map((range) => ({
+			start: range.address,
+			size: range.dataSize,
+		})),
+	];
+
+	if (ranges.length === 0) {
+		return null;
+	}
+
+	let totalBytes = 0n;
+	let startAddress = ranges[0].start;
+	let endAddressExclusive = startAddress + ranges[0].size;
+
+	for (const range of ranges) {
+		const rangeEnd = range.start + range.size;
+		totalBytes += range.size;
+		if (range.start < startAddress) {
+			startAddress = range.start;
+		}
+		if (rangeEnd > endAddressExclusive) {
+			endAddressExclusive = rangeEnd;
+		}
+	}
+
+	return {
+		rangeCount: ranges.length,
+		totalBytes,
+		startAddress,
+		endAddressExclusive,
+	};
+};
 
 type DumpTableProps = {
 	title: string;
@@ -106,24 +168,22 @@ const buildAssociatedRows = (
 		return [
 			String(associated.threadId),
 			thread ? String(thread.suspendCount) : emptyCell,
-			thread
-				? priorityToString(thread.priorityClass, thread.priority)
-				: emptyCell,
-			thread ? toHex(thread.teb, 16) : emptyCell,
-			thread ? toHex(thread.stack.startOfMemoryRange, 16) : emptyCell,
+			thread ? fmtPriority(thread.priorityClass, thread.priority) : emptyCell,
+			thread ? fmtHex(thread.teb, 16) : emptyCell,
+			thread ? fmtHex(thread.stack.startOfMemoryRange, 16) : emptyCell,
 			thread ? String(thread.stack.location.dataSize) : emptyCell,
-			thread ? toHex(thread.stack.location.rva, 8) : emptyCell,
+			thread ? fmtHex(thread.stack.location.rva, 8) : emptyCell,
 			thread ? String(thread.threadContext.dataSize) : emptyCell,
-			thread ? toHex(thread.threadContext.rva, 8) : emptyCell,
-			threadInfo ? toHex(threadInfo.dumpFlags, 8) : emptyCell,
-			threadInfo ? toHex(threadInfo.dumpError, 8) : emptyCell,
+			thread ? fmtHex(thread.threadContext.rva, 8) : emptyCell,
+			threadInfo ? fmtHex(threadInfo.dumpFlags, 8) : emptyCell,
+			threadInfo ? fmtHex(threadInfo.dumpError, 8) : emptyCell,
 			threadInfo ? String(threadInfo.exitStatus) : emptyCell,
-			threadInfo ? toHex(threadInfo.createTime, 16) : emptyCell,
-			threadInfo ? toHex(threadInfo.exitTime, 16) : emptyCell,
-			threadInfo ? toHex(threadInfo.kernelTime, 16) : emptyCell,
-			threadInfo ? toHex(threadInfo.userTime, 16) : emptyCell,
-			threadInfo ? toHex(threadInfo.startAddress, 16) : emptyCell,
-			threadInfo ? toHex(threadInfo.affinity, 16) : emptyCell,
+			threadInfo ? fmtHex(threadInfo.createTime, 16) : emptyCell,
+			threadInfo ? fmtHex(threadInfo.exitTime, 16) : emptyCell,
+			threadInfo ? fmtHex(threadInfo.kernelTime, 16) : emptyCell,
+			threadInfo ? fmtHex(threadInfo.userTime, 16) : emptyCell,
+			threadInfo ? fmtHex(threadInfo.startAddress, 16) : emptyCell,
+			threadInfo ? fmtHex(threadInfo.affinity, 16) : emptyCell,
 		];
 	});
 
@@ -131,7 +191,7 @@ const buildExceptionParameterRows = (
 	exceptionStream: MinidumpExceptionStream | null,
 ): string[][] =>
 	(exceptionStream?.exceptionRecord.exceptionInformation ?? []).map(
-		(value, index) => [String(index), toHex(value, 16)],
+		(value, index) => [String(index), fmtHex(value, 16)],
 	);
 
 const buildCodeViewColumns = (
@@ -153,14 +213,14 @@ const buildCodeViewColumns = (
 			return [
 				"NB10",
 				codeViewInfo.pdbFileName || emptyCell,
-				`${toHex(codeViewInfo.timestamp, 8)} @ ${toHex(codeViewInfo.offset, 8)}`,
+				`${fmtHex(codeViewInfo.timestamp, 8)} @ ${fmtHex(codeViewInfo.offset, 8)}`,
 				String(codeViewInfo.age),
 			];
 		case "unknown":
 			return [
 				codeViewInfo.signature,
 				emptyCell,
-				toHex(codeViewInfo.rawSignature, 8),
+				fmtHex(codeViewInfo.rawSignature, 8),
 				emptyCell,
 			];
 		case "invalid":
@@ -174,18 +234,18 @@ const buildModuleRows = (moduleList: MinidumpModule[] | null): string[][] =>
 			module.codeViewInfo,
 		);
 		return [
-			toHex(module.baseOfImage, 16),
-			toHex(module.sizeOfImage, 8),
-			toHex(module.checkSum, 8),
-			toHex(module.timeDateStamp, 8),
+			fmtHex(module.baseOfImage, 16),
+			fmtHex(module.sizeOfImage, 8),
+			fmtHex(module.checkSum, 8),
+			fmtHex(module.timeDateStamp, 8),
 			module.moduleName || emptyCell,
-			toHex(module.cvRecord.dataSize, 8),
+			fmtHex(module.cvRecord.dataSize, 8),
 			cvFormat,
 			cvPdb,
 			cvIdentifier,
 			cvAge,
-			toHex(module.miscRecord.dataSize, 8),
-			toHex(module.miscRecord.rva, 8),
+			fmtHex(module.miscRecord.dataSize, 8),
+			fmtHex(module.miscRecord.rva, 8),
 		];
 	});
 
@@ -193,12 +253,29 @@ const buildUnloadedModuleRows = (
 	unloadedModuleList: MinidumpUnloadedModule[] | null,
 ): string[][] =>
 	(unloadedModuleList ?? []).map((module) => [
-		toHex(module.baseOfImage, 16),
-		toHex(module.sizeOfImage, 8),
-		toHex(module.checkSum, 8),
-		toHex(module.timeDateStamp, 8),
+		fmtHex(module.baseOfImage, 16),
+		fmtHex(module.sizeOfImage, 8),
+		fmtHex(module.checkSum, 8),
+		fmtHex(module.timeDateStamp, 8),
 		module.moduleName || emptyCell,
 	]);
+
+const resolveDisassemblyStatusLabel = (
+	status: DebugDisassemblyView["status"],
+) => {
+	switch (status) {
+		case "ok":
+			return "Ready";
+		case "unsupported_arch":
+			return "Unsupported Architecture";
+		case "missing_context":
+			return "Context Missing";
+		case "missing_memory":
+			return "Memory Missing";
+		case "decode_error":
+			return "Decode Error";
+	}
+};
 
 export default function DumpSummary(props: DumpSummaryProps) {
 	const associatedRows = buildAssociatedRows(props.dumpInfo.associatedThreads);
@@ -209,14 +286,19 @@ export default function DumpSummary(props: DumpSummaryProps) {
 	const unloadedModuleRows = buildUnloadedModuleRows(
 		props.dumpInfo.unloadedModuleList,
 	);
+	const memoryListSummary = summarizeMemoryList(
+		props.dumpInfo.memoryList,
+		props.dumpInfo.memory64List,
+	);
 	const mergedThreadCount = associatedRows.length;
+	const debugView = props.dumpInfo.debugView;
 
 	return (
 		<section class="dump-info-panel" aria-label="Dump details">
 			<h2 class="dump-info-panel__title m0">Dump Summary</h2>
-			<Row label="Checksum">{toHex(props.dumpInfo.checksum, 8)}</Row>
+			<Row label="Checksum">{fmtHex(props.dumpInfo.checksum, 8)}</Row>
 			<Row label="Timestamp">{formatTimestamp(props.dumpInfo.timestamp)}</Row>
-			<Row label="Flags">{toHex(props.dumpInfo.flags, 16)}</Row>
+			<Row label="Flags">{fmtHex(props.dumpInfo.flags, 16)}</Row>
 			<Row label="Streams">{props.dumpInfo.streamCount}</Row>
 			<Row label="Stream Types">
 				{props.dumpInfo.streamTypes.length > 0
@@ -225,29 +307,13 @@ export default function DumpSummary(props: DumpSummaryProps) {
 			</Row>
 
 			{props.dumpInfo.systemInfo ? (
-				<>
-					<Row label="OS">
-						{props.dumpInfo.systemInfo.platformName}{" "}
-						{props.dumpInfo.systemInfo.majorVersion}.
-						{props.dumpInfo.systemInfo.minorVersion} (build{" "}
-						{props.dumpInfo.systemInfo.buildNumber})
-					</Row>
-					<Row label="Service Pack">
-						{props.dumpInfo.systemInfo.csdVersion || "none"}
-					</Row>
-					<Row label="CPU">
-						{props.dumpInfo.systemInfo.processorArchitectureName}{" "}
-						{props.dumpInfo.systemInfo.numberOfProcessors} processors
-					</Row>
-					<Row label="Suite Mask">
-						{toHex(props.dumpInfo.systemInfo.suiteMask, 4)}
-					</Row>
-					<Row label="Product Type">
-						{props.dumpInfo.systemInfo.productType}
-					</Row>
+				<div class="dump-info-panel__table-wrap">
+					<RawRow>{fmtOs(props.dumpInfo.systemInfo)}</RawRow>
+					<RawRow>{fmtProductAndSuite(props.dumpInfo.systemInfo)}</RawRow>
+
 					<Row label="CPU Revision">
 						level {props.dumpInfo.systemInfo.processorLevel}, rev{" "}
-						{toHex(props.dumpInfo.systemInfo.processorRevision, 4)}
+						{fmtHex(props.dumpInfo.systemInfo.processorRevision, 4)}
 					</Row>
 					{props.dumpInfo.systemInfo.cpu.type === "x86" ? (
 						<Row label="CPU Vendor">
@@ -255,18 +321,18 @@ export default function DumpSummary(props: DumpSummaryProps) {
 						</Row>
 					) : (
 						<Row label="CPU Features">
-							{toHex(props.dumpInfo.systemInfo.cpu.processorFeatures[0], 16)},{" "}
-							{toHex(props.dumpInfo.systemInfo.cpu.processorFeatures[1], 16)}
+							{fmtHex(props.dumpInfo.systemInfo.cpu.processorFeatures[0], 16)},{" "}
+							{fmtHex(props.dumpInfo.systemInfo.cpu.processorFeatures[1], 16)}
 						</Row>
 					)}
-				</>
+				</div>
 			) : null}
 
 			{props.dumpInfo.miscInfo ? (
 				<>
 					<Row label="MiscInfo Size">{props.dumpInfo.miscInfo.sizeOfInfo}</Row>
 					<Row label="MiscInfo Flags1">
-						{toHex(props.dumpInfo.miscInfo.flags1, 8)}
+						{fmtHex(props.dumpInfo.miscInfo.flags1, 8)}
 					</Row>
 					{props.dumpInfo.miscInfo.processId !== null ? (
 						<Row label="Process ID">{props.dumpInfo.miscInfo.processId}</Row>
@@ -320,25 +386,25 @@ export default function DumpSummary(props: DumpSummaryProps) {
 						{props.dumpInfo.exceptionStream.threadId}
 					</Row>
 					<Row label="Exception Code">
-						{toHex(
+						{fmtHex(
 							props.dumpInfo.exceptionStream.exceptionRecord.exceptionCode,
 							8,
 						)}
 					</Row>
 					<Row label="Exception Flags">
-						{toHex(
+						{fmtHex(
 							props.dumpInfo.exceptionStream.exceptionRecord.exceptionFlags,
 							8,
 						)}
 					</Row>
 					<Row label="Exception Address">
-						{toHex(
+						{fmtHex(
 							props.dumpInfo.exceptionStream.exceptionRecord.exceptionAddress,
 							16,
 						)}
 					</Row>
 					<Row label="Exception Record">
-						{toHex(
+						{fmtHex(
 							props.dumpInfo.exceptionStream.exceptionRecord.exceptionRecord,
 							16,
 						)}
@@ -348,7 +414,7 @@ export default function DumpSummary(props: DumpSummaryProps) {
 					</Row>
 					<Row label="Exception Context">
 						size={props.dumpInfo.exceptionStream.threadContext.dataSize}, rva=
-						{toHex(props.dumpInfo.exceptionStream.threadContext.rva, 8)}
+						{fmtHex(props.dumpInfo.exceptionStream.threadContext.rva, 8)}
 					</Row>
 					<DumpTable
 						title="Exception Information"
@@ -356,6 +422,173 @@ export default function DumpSummary(props: DumpSummaryProps) {
 						rows={exceptionParameterRows}
 					/>
 				</>
+			) : null}
+
+			{debugView ? (
+				<section class="dump-debugger-panel" aria-label="Disassembly view">
+					<h3 class="dump-debugger-panel__title m0">Disassembly</h3>
+					<Row label="Status">
+						{resolveDisassemblyStatusLabel(debugView.status)} (
+						{debugView.message})
+					</Row>
+					<Row label="Thread">
+						{debugView.threadId !== null ? debugView.threadId : "unknown"}
+					</Row>
+					<Row label="Instruction Pointer">
+						{debugView.instructionPointer !== null
+							? fmtHex(debugView.instructionPointer, 16)
+							: "unknown"}
+					</Row>
+					<Row label="Exception Address">
+						{debugView.exceptionAddress !== null
+							? fmtHex(debugView.exceptionAddress, 16)
+							: "unknown"}
+					</Row>
+					<Row label="Exception Code">
+						{debugView.exceptionCode !== null
+							? fmtHex(debugView.exceptionCode, 8)
+							: "unknown"}
+					</Row>
+
+					{debugView.registers ? (
+						<div class="dump-info-panel__table-wrap">
+							<p class="dump-info-panel__table-title text-medium">
+								Registers (x64)
+							</p>
+							<table class="dump-info-table">
+								<thead>
+									<tr>
+										<th>RIP</th>
+										<th>RSP</th>
+										<th>RBP</th>
+										<th>RAX</th>
+										<th>RBX</th>
+										<th>RCX</th>
+										<th>RDX</th>
+										<th>RSI</th>
+										<th>RDI</th>
+										<th>R8</th>
+										<th>R9</th>
+										<th>R10</th>
+										<th>R11</th>
+										<th>R12</th>
+										<th>R13</th>
+										<th>R14</th>
+										<th>R15</th>
+										<th>RFLAGS</th>
+									</tr>
+								</thead>
+								<tbody>
+									<tr>
+										<td>
+											<code>{fmtHex(debugView.registers.rip, 16)}</code>
+										</td>
+										<td>
+											<code>{fmtHex(debugView.registers.rsp, 16)}</code>
+										</td>
+										<td>
+											<code>{fmtHex(debugView.registers.rbp, 16)}</code>
+										</td>
+										<td>
+											<code>{fmtHex(debugView.registers.rax, 16)}</code>
+										</td>
+										<td>
+											<code>{fmtHex(debugView.registers.rbx, 16)}</code>
+										</td>
+										<td>
+											<code>{fmtHex(debugView.registers.rcx, 16)}</code>
+										</td>
+										<td>
+											<code>{fmtHex(debugView.registers.rdx, 16)}</code>
+										</td>
+										<td>
+											<code>{fmtHex(debugView.registers.rsi, 16)}</code>
+										</td>
+										<td>
+											<code>{fmtHex(debugView.registers.rdi, 16)}</code>
+										</td>
+										<td>
+											<code>{fmtHex(debugView.registers.r8, 16)}</code>
+										</td>
+										<td>
+											<code>{fmtHex(debugView.registers.r9, 16)}</code>
+										</td>
+										<td>
+											<code>{fmtHex(debugView.registers.r10, 16)}</code>
+										</td>
+										<td>
+											<code>{fmtHex(debugView.registers.r11, 16)}</code>
+										</td>
+										<td>
+											<code>{fmtHex(debugView.registers.r12, 16)}</code>
+										</td>
+										<td>
+											<code>{fmtHex(debugView.registers.r13, 16)}</code>
+										</td>
+										<td>
+											<code>{fmtHex(debugView.registers.r14, 16)}</code>
+										</td>
+										<td>
+											<code>{fmtHex(debugView.registers.r15, 16)}</code>
+										</td>
+										<td>
+											<code>{fmtHex(debugView.registers.rflags, 8)}</code>
+										</td>
+									</tr>
+								</tbody>
+							</table>
+						</div>
+					) : null}
+
+					<div class="dump-info-panel__table-wrap">
+						<p class="dump-info-panel__table-title text-medium">
+							Instruction Listing (surrounding)
+						</p>
+						<table class="dump-info-table dump-disassembly-table">
+							<thead>
+								<tr>
+									<th>Addr</th>
+									<th>Bytes</th>
+									<th>Instruction</th>
+								</tr>
+							</thead>
+							<tbody>
+								{debugView.lines.length > 0 ? (
+									<For each={debugView.lines}>
+										{(line) => (
+											<tr
+												class={
+													line.isCurrent
+														? "dump-disassembly-table__current"
+														: ""
+												}
+											>
+												<td>
+													<code>{fmtHex(line.address, 16)}</code>
+												</td>
+												<td>
+													<code>{line.bytesHex}</code>
+												</td>
+												<td>
+													<code>
+														{line.mnemonic}
+														{line.operands ? ` ${line.operands}` : ""}
+													</code>
+												</td>
+											</tr>
+										)}
+									</For>
+								) : (
+									<tr>
+										<td colSpan={4}>
+											<code>none</code>
+										</td>
+									</tr>
+								)}
+							</tbody>
+						</table>
+					</div>
+				</section>
 			) : null}
 
 			{props.dumpInfo.moduleList ? (
@@ -392,6 +625,29 @@ export default function DumpSummary(props: DumpSummaryProps) {
 						headers={["Base", "Size", "Checksum", "TimeDateStamp", "Name"]}
 						rows={unloadedModuleRows}
 					/>
+				</>
+			) : null}
+
+			{props.dumpInfo.memoryList || props.dumpInfo.memory64List ? (
+				<>
+					<Row label="Memory Ranges">
+						{memoryListSummary ? memoryListSummary.rangeCount : 0}
+					</Row>
+					<Row label="Memory64 Ranges">
+						{props.dumpInfo.memory64List?.length ?? 0}
+					</Row>
+					<Row label="Memory Bytes">
+						{memoryListSummary
+							? formatBytes(memoryListSummary.totalBytes)
+							: "0 B"}
+					</Row>
+					{memoryListSummary ? (
+						<Row label="Memory Address Span">
+							{fmtHex(memoryListSummary.startAddress, 16)} to{" "}
+							{fmtHex(memoryListSummary.endAddressExclusive, 16)} (end
+							exclusive)
+						</Row>
+					) : null}
 				</>
 			) : null}
 

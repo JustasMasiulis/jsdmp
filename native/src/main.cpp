@@ -27,6 +27,24 @@ uint8_t* wasm_get_disassembly_buffer()
   return disassembly_buffer;
 }
 
+extern "C" [[clang::export_name("wasm_get_disassembled_text")]]
+const char* wasm_get_disassembled_text()
+{
+  return disassembled_instr.text;
+}
+
+extern "C" [[clang::export_name("wasm_get_disassembled_length")]]
+uint32_t wasm_get_disassembled_length()
+{
+  return disassembled_instr.info.length;
+}
+
+extern "C" [[clang::export_name("wasm_get_disassembled_mnemonic")]]
+uint32_t wasm_get_disassembled_mnemonic()
+{
+  return disassembled_instr.info.mnemonic;
+}
+
 extern "C" int32_t wasm_disassemble(
   uint32_t length,
   uint64_t runtime_address

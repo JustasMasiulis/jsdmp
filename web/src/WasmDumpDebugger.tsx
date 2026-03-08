@@ -1,13 +1,13 @@
 import { createSignal, Show } from "solid-js";
 import DumpSummary, { type ParsedDumpInfo } from "./components/DumpSummary";
+import {
+	buildDisassemblyView,
+	type DebugDisassemblyView,
+	type WasmDisassemblerExports,
+} from "./lib/disassembly";
 import { MiniDump } from "./lib/minidump";
 
-type WasmExports = {
-	wasm_get_disassembled_instruction: () => bigint;
-	wasm_get_disassembly_buffer: () => bigint;
-	wasm_disassemble: (length: number, runtimeAddress: number) => number;
-	wasm_mnemonic_string: (mnemonic: number) => string;
-};
+type WasmExports = WasmDisassemblerExports;
 
 const memory = new WebAssembly.Memory({
 	initial: 16n,
@@ -80,6 +80,29 @@ export default function WasmDumpDebugger() {
 			const data = await file.arrayBuffer();
 			const parsed = new MiniDump(data);
 			const streamTypes = [...parsed.streams.keys()].sort((a, b) => a - b);
+			let debugView: DebugDisassemblyView | null = null;
+
+			try {
+				await initWasm();
+				if (exportsRef) {
+					debugView = buildDisassemblyView(parsed, exportsRef, memory);
+				}
+			} catch (error) {
+				const message = error instanceof Error ? error.message : String(error);
+				debugView = {
+					status: "decode_error",
+					message: `Disassembler initialization failed: ${message}`,
+					threadId: parsed.exceptionStream?.threadId ?? null,
+					instructionPointer:
+						parsed.exceptionStream?.exceptionRecord.exceptionAddress ?? null,
+					exceptionAddress:
+						parsed.exceptionStream?.exceptionRecord.exceptionAddress ?? null,
+					exceptionCode:
+						parsed.exceptionStream?.exceptionRecord.exceptionCode ?? null,
+					lines: [],
+					registers: null,
+				};
+			}
 
 			setDumpInfo({
 				checksum: parsed.checksum,
@@ -90,11 +113,12 @@ export default function WasmDumpDebugger() {
 				systemInfo: parsed.systemInfo,
 				miscInfo: parsed.miscInfo,
 				exceptionStream: parsed.exceptionStream,
-				threadList: parsed.threadList,
-				threadInfoList: parsed.threadInfoList,
 				associatedThreads: parsed.associatedThreads,
 				moduleList: parsed.moduleList,
 				unloadedModuleList: parsed.unloadedModuleList,
+				memoryList: parsed.memoryList,
+				memory64List: parsed.memory64List,
+				debugView,
 			});
 		} catch (error) {
 			setDumpInfo(null);
