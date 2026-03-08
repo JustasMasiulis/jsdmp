@@ -1,0 +1,22 @@
+{
+  "name": "wasm-dump-debugger",
+  "version": "0.0.0",
+  "description": "",
+  "type": "module",
+  "scripts": {
+    "start": "vite",
+    "dev": "vite",
+    "build": "vite build",
+    "serve": "vite preview",
+    "lint": "biome check ."
+  },
+  "devDependencies": {
+    "@biomejs/biome": "^2.3.8",
+    "typescript": "^5.9.3",
+    "vite": "^6.4.1",
+    "vite-plugin-solid": "^2.11.10"
+  },
+  "dependencies": {
+    "solid-js": "^1.9.10"
+  }
+}

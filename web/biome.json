@@ -1,0 +1,14 @@
+{
+  "linter": {
+    "domains": {
+      "solid": "all"
+    }
+  },
+  "assist": {
+    "actions": {
+      "source": {
+        "useSortedProperties": "on"
+      }
+    }
+  }
+}
