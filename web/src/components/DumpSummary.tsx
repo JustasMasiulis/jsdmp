@@ -2,12 +2,12 @@ import { For, type ParentComponent } from "solid-js";
 import {
 	MiniDumpStreamType,
 	type MinidumpAssociatedThread,
+	type MinidumpCodeViewInfo,
 	type MinidumpExceptionStream,
 	type MinidumpMiscInfo,
 	type MinidumpModule,
 	type MinidumpSystemInfo,
-	type MinidumpThread,
-	type MinidumpThreadInfoList,
+	type MinidumpUnloadedModule,
 	priorityToString,
 } from "../lib/minidump";
 
@@ -20,10 +20,9 @@ export type ParsedDumpInfo = {
 	systemInfo: MinidumpSystemInfo | null;
 	miscInfo: MinidumpMiscInfo | null;
 	exceptionStream: MinidumpExceptionStream | null;
-	threadList: MinidumpThread[] | null;
-	threadInfoList: MinidumpThreadInfoList | null;
 	associatedThreads: MinidumpAssociatedThread[] | null;
 	moduleList: MinidumpModule[] | null;
+	unloadedModuleList: MinidumpUnloadedModule[] | null;
 };
 
 type DumpSummaryProps = {
@@ -135,17 +134,70 @@ const buildExceptionParameterRows = (
 		(value, index) => [String(index), toHex(value, 16)],
 	);
 
+const buildCodeViewColumns = (
+	codeViewInfo: MinidumpCodeViewInfo | null,
+): [string, string, string, string] => {
+	if (!codeViewInfo) {
+		return [emptyCell, emptyCell, emptyCell, emptyCell];
+	}
+
+	switch (codeViewInfo.format) {
+		case "RSDS":
+			return [
+				"RSDS",
+				codeViewInfo.pdbFileName || emptyCell,
+				codeViewInfo.guid,
+				String(codeViewInfo.age),
+			];
+		case "NB10":
+			return [
+				"NB10",
+				codeViewInfo.pdbFileName || emptyCell,
+				`${toHex(codeViewInfo.timestamp, 8)} @ ${toHex(codeViewInfo.offset, 8)}`,
+				String(codeViewInfo.age),
+			];
+		case "unknown":
+			return [
+				codeViewInfo.signature,
+				emptyCell,
+				toHex(codeViewInfo.rawSignature, 8),
+				emptyCell,
+			];
+		case "invalid":
+			return ["invalid", codeViewInfo.error, emptyCell, emptyCell];
+	}
+};
+
 const buildModuleRows = (moduleList: MinidumpModule[] | null): string[][] =>
-	(moduleList ?? []).map((module) => [
+	(moduleList ?? []).map((module) => {
+		const [cvFormat, cvPdb, cvIdentifier, cvAge] = buildCodeViewColumns(
+			module.codeViewInfo,
+		);
+		return [
+			toHex(module.baseOfImage, 16),
+			toHex(module.sizeOfImage, 8),
+			toHex(module.checkSum, 8),
+			toHex(module.timeDateStamp, 8),
+			module.moduleName || emptyCell,
+			toHex(module.cvRecord.dataSize, 8),
+			cvFormat,
+			cvPdb,
+			cvIdentifier,
+			cvAge,
+			toHex(module.miscRecord.dataSize, 8),
+			toHex(module.miscRecord.rva, 8),
+		];
+	});
+
+const buildUnloadedModuleRows = (
+	unloadedModuleList: MinidumpUnloadedModule[] | null,
+): string[][] =>
+	(unloadedModuleList ?? []).map((module) => [
 		toHex(module.baseOfImage, 16),
 		toHex(module.sizeOfImage, 8),
 		toHex(module.checkSum, 8),
 		toHex(module.timeDateStamp, 8),
 		module.moduleName || emptyCell,
-		toHex(module.cvRecord.dataSize, 8),
-		toHex(module.cvRecord.rva, 8),
-		toHex(module.miscRecord.dataSize, 8),
-		toHex(module.miscRecord.rva, 8),
 	]);
 
 export default function DumpSummary(props: DumpSummaryProps) {
@@ -154,6 +206,9 @@ export default function DumpSummary(props: DumpSummaryProps) {
 		props.dumpInfo.exceptionStream,
 	);
 	const moduleRows = buildModuleRows(props.dumpInfo.moduleList);
+	const unloadedModuleRows = buildUnloadedModuleRows(
+		props.dumpInfo.unloadedModuleList,
+	);
 	const mergedThreadCount = associatedRows.length;
 
 	return (
@@ -315,7 +370,10 @@ export default function DumpSummary(props: DumpSummaryProps) {
 							"TimeDateStamp",
 							"Name",
 							"CV Size",
-							"CV RVA",
+							"CV Format",
+							"CV PDB",
+							"CV Identifier",
+							"CV Age",
 							"Misc Size",
 							"Misc RVA",
 						]}
@@ -324,15 +382,22 @@ export default function DumpSummary(props: DumpSummaryProps) {
 				</>
 			) : null}
 
+			{props.dumpInfo.unloadedModuleList ? (
+				<>
+					<Row label="Unloaded Modules">
+						{props.dumpInfo.unloadedModuleList.length}
+					</Row>
+					<DumpTable
+						title="Unloaded Module Entries"
+						headers={["Base", "Size", "Checksum", "TimeDateStamp", "Name"]}
+						rows={unloadedModuleRows}
+					/>
+				</>
+			) : null}
+
 			{props.dumpInfo.associatedThreads ? (
 				<>
 					<Row label="Threads (Merged)">{mergedThreadCount}</Row>
-					{props.dumpInfo.threadInfoList ? (
-						<Row label="ThreadInfo Header">
-							size={props.dumpInfo.threadInfoList.sizeOfHeader}, entry=
-							{props.dumpInfo.threadInfoList.sizeOfEntry}
-						</Row>
-					) : null}
 					<DumpTable
 						title="Merged Thread Entries"
 						headers={[

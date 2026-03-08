@@ -93,6 +93,30 @@ export type MinidumpLocationDescriptor = {
 	rva: number;
 };
 
+export type MinidumpCodeViewInfo =
+	| {
+			format: "RSDS";
+			guid: string;
+			age: number;
+			pdbFileName: string;
+	  }
+	| {
+			format: "NB10";
+			offset: number;
+			timestamp: number;
+			age: number;
+			pdbFileName: string;
+	  }
+	| {
+			format: "unknown";
+			signature: string;
+			rawSignature: number;
+	  }
+	| {
+			format: "invalid";
+			error: string;
+	  };
+
 export type MinidumpVsFixedFileInfo = {
 	signature: number;
 	structVersion: number;
@@ -118,9 +142,19 @@ export type MinidumpModule = {
 	moduleName: string;
 	versionInfo: MinidumpVsFixedFileInfo;
 	cvRecord: MinidumpLocationDescriptor;
+	codeViewInfo: MinidumpCodeViewInfo | null;
 	miscRecord: MinidumpLocationDescriptor;
 	reserved0: bigint;
 	reserved1: bigint;
+};
+
+export type MinidumpUnloadedModule = {
+	baseOfImage: bigint;
+	sizeOfImage: number;
+	checkSum: number;
+	timeDateStamp: number;
+	moduleNameRva: number;
+	moduleName: string;
 };
 
 export type MinidumpThread = {
@@ -204,13 +238,6 @@ export type MinidumpThreadInfo = {
 	affinity: bigint;
 };
 
-export type MinidumpThreadInfoList = {
-	sizeOfHeader: number;
-	sizeOfEntry: number;
-	numberOfEntries: number;
-	entries: MinidumpThreadInfo[];
-};
-
 export type MinidumpAssociatedThread = {
 	threadId: number;
 	thread: MinidumpThread | null;
@@ -241,10 +268,11 @@ export class MiniDump {
 	systemInfo: MinidumpSystemInfo | null = null;
 	miscInfo: MinidumpMiscInfo | null = null;
 	threadList: MinidumpThread[] | null = null;
-	threadInfoList: MinidumpThreadInfoList | null = null;
+	threadInfoList: MinidumpThreadInfo[] | null = null;
 	associatedThreads: MinidumpAssociatedThread[] | null = null;
 	exceptionStream: MinidumpExceptionStream | null = null;
 	moduleList: MinidumpModule[] | null = null;
+	unloadedModuleList: MinidumpUnloadedModule[] | null = null;
 
 	constructor(data: ArrayBuffer) {
 		this._data = new DataView(data);
@@ -286,29 +314,24 @@ export class MiniDump {
 
 			if (streamType === MiniDumpStreamType.SystemInfoStream) {
 				this.systemInfo = this.parseSystemInfoStream(streamRva, streamSize);
-			}
-
-			if (streamType === MiniDumpStreamType.MiscInfoStream) {
+			} else if (streamType === MiniDumpStreamType.MiscInfoStream) {
 				this.miscInfo = this.parseMiscInfoStream(streamRva, streamSize);
-			}
-
-			if (streamType === MiniDumpStreamType.ThreadListStream) {
+			} else if (streamType === MiniDumpStreamType.ThreadListStream) {
 				this.threadList = this.parseThreadListStream(streamRva, streamSize);
-			}
-
-			if (streamType === MiniDumpStreamType.ThreadInfoListStream) {
+			} else if (streamType === MiniDumpStreamType.ThreadInfoListStream) {
 				this.threadInfoList = this.parseThreadInfoListStream(
 					streamRva,
 					streamSize,
 				);
-			}
-
-			if (streamType === MiniDumpStreamType.ExceptionStream) {
+			} else if (streamType === MiniDumpStreamType.ExceptionStream) {
 				this.exceptionStream = this.parseExceptionStream(streamRva, streamSize);
-			}
-
-			if (streamType === MiniDumpStreamType.ModuleListStream) {
+			} else if (streamType === MiniDumpStreamType.ModuleListStream) {
 				this.moduleList = this.parseModuleListStream(streamRva, streamSize);
+			} else if (streamType === MiniDumpStreamType.UnloadedModuleListStream) {
+				this.unloadedModuleList = this.parseUnloadedModuleListStream(
+					streamRva,
+					streamSize,
+				);
 			}
 		}
 
@@ -326,7 +349,7 @@ export class MiniDump {
 			});
 		}
 
-		for (const threadInfo of this.threadInfoList?.entries ?? []) {
+		for (const threadInfo of this.threadInfoList ?? []) {
 			const existing = associated.get(threadInfo.threadId);
 			if (existing) {
 				existing.threadInfo = threadInfo;
@@ -419,6 +442,14 @@ export class MiniDump {
 		for (let i = 0; i < numberOfModules; i++) {
 			const offset = 4 + i * entrySize;
 			const moduleNameRva = view.getUint32(offset + 20, true);
+			const cvRecord = {
+				dataSize: view.getUint32(offset + 76, true),
+				rva: view.getUint32(offset + 80, true),
+			};
+			const miscRecord = {
+				dataSize: view.getUint32(offset + 84, true),
+				rva: view.getUint32(offset + 88, true),
+			};
 
 			modules.push({
 				baseOfImage: view.getBigUint64(offset, true),
@@ -442,14 +473,9 @@ export class MiniDump {
 					fileDateMs: view.getUint32(offset + 68, true),
 					fileDateLs: view.getUint32(offset + 72, true),
 				},
-				cvRecord: {
-					dataSize: view.getUint32(offset + 76, true),
-					rva: view.getUint32(offset + 80, true),
-				},
-				miscRecord: {
-					dataSize: view.getUint32(offset + 84, true),
-					rva: view.getUint32(offset + 88, true),
-				},
+				cvRecord,
+				codeViewInfo: this.parseCodeViewInfo(cvRecord),
+				miscRecord,
 				reserved0: view.getBigUint64(offset + 92, true),
 				reserved1: view.getBigUint64(offset + 100, true),
 			});
@@ -458,10 +484,66 @@ export class MiniDump {
 		return modules;
 	}
 
+	private parseUnloadedModuleListStream(
+		streamRva: number,
+		streamSize: number,
+	): MinidumpUnloadedModule[] {
+		if (streamSize < 12) {
+			throw new Error(
+				`UnloadedModuleListStream is too small: ${streamSize} bytes`,
+			);
+		}
+
+		const view = new DataView(
+			this._data.buffer,
+			this._data.byteOffset + streamRva,
+			streamSize,
+		);
+
+		const sizeOfHeader = view.getUint32(0, true);
+		const sizeOfEntry = view.getUint32(4, true);
+		const numberOfEntries = view.getUint32(8, true);
+
+		if (sizeOfHeader < 12 || sizeOfHeader > streamSize) {
+			throw new Error(
+				`Invalid UnloadedModuleList header size: ${sizeOfHeader}`,
+			);
+		}
+
+		if (sizeOfEntry < 24) {
+			throw new Error(
+				`Unsupported UnloadedModuleList entry size: ${sizeOfEntry}`,
+			);
+		}
+
+		const requiredSize = sizeOfHeader + numberOfEntries * sizeOfEntry;
+		if (requiredSize > streamSize) {
+			throw new Error(
+				`UnloadedModuleListStream truncated: need ${requiredSize} bytes, got ${streamSize}`,
+			);
+		}
+
+		const unloadedModules: MinidumpUnloadedModule[] = [];
+		for (let i = 0; i < numberOfEntries; i++) {
+			const offset = sizeOfHeader + i * sizeOfEntry;
+			const moduleNameRva = view.getUint32(offset + 20, true);
+			unloadedModules.push({
+				baseOfImage: view.getBigUint64(offset, true),
+				sizeOfImage: view.getUint32(offset + 8, true),
+				checkSum: view.getUint32(offset + 12, true),
+				timeDateStamp: view.getUint32(offset + 16, true),
+				moduleNameRva,
+				moduleName: moduleNameRva ? this.readMinidumpString(moduleNameRva) : "",
+			});
+		}
+
+		return unloadedModules;
+	}
+
 	private parseThreadInfoListStream(
 		streamRva: number,
 		streamSize: number,
-	): MinidumpThreadInfoList {
+	): MinidumpThreadInfo[] {
 		if (streamSize < 12) {
 			throw new Error(`ThreadInfoListStream is too small: ${streamSize} bytes`);
 		}
@@ -508,12 +590,7 @@ export class MiniDump {
 			});
 		}
 
-		return {
-			sizeOfHeader,
-			sizeOfEntry,
-			numberOfEntries,
-			entries,
-		};
+		return entries;
 	}
 
 	private parseExceptionStream(
@@ -707,6 +784,130 @@ export class MiniDump {
 			value += String.fromCharCode(bytes[i]);
 		}
 		return value;
+	}
+
+	private parseCodeViewInfo(
+		cvRecord: MinidumpLocationDescriptor,
+	): MinidumpCodeViewInfo | null {
+		const { dataSize, rva } = cvRecord;
+		if (dataSize === 0 && rva === 0) {
+			return null;
+		}
+
+		if (dataSize === 0 || rva === 0) {
+			return {
+				format: "invalid",
+				error: `invalid location (size=${dataSize}, rva=${rva})`,
+			};
+		}
+
+		const end = rva + dataSize;
+		if (end < rva || end > this._data.byteLength) {
+			return {
+				format: "invalid",
+				error: `out of bounds (size=${dataSize}, rva=${rva})`,
+			};
+		}
+
+		if (dataSize < 4) {
+			return {
+				format: "invalid",
+				error: `record too small: ${dataSize} bytes`,
+			};
+		}
+
+		const view = new DataView(
+			this._data.buffer,
+			this._data.byteOffset + rva,
+			dataSize,
+		);
+		const rawSignature = view.getUint32(0, true);
+		const signature = this.fourCcFromUint32(rawSignature);
+
+		if (signature === "RSDS") {
+			if (dataSize < 24) {
+				return {
+					format: "invalid",
+					error: `RSDS record too small: ${dataSize} bytes`,
+				};
+			}
+
+			return {
+				format: "RSDS",
+				guid: this.readCodeViewGuid(view, 4),
+				age: view.getUint32(20, true),
+				pdbFileName: this.readNullTerminatedAscii(view, 24),
+			};
+		}
+
+		if (signature === "NB10") {
+			if (dataSize < 16) {
+				return {
+					format: "invalid",
+					error: `NB10 record too small: ${dataSize} bytes`,
+				};
+			}
+
+			return {
+				format: "NB10",
+				offset: view.getUint32(4, true),
+				timestamp: view.getUint32(8, true),
+				age: view.getUint32(12, true),
+				pdbFileName: this.readNullTerminatedAscii(view, 16),
+			};
+		}
+
+		return {
+			format: "unknown",
+			signature,
+			rawSignature,
+		};
+	}
+
+	private fourCcFromUint32(value: number): string {
+		let text = "";
+		for (let i = 0; i < 4; i++) {
+			const code = (value >>> (i * 8)) & 0xff;
+			text += code >= 32 && code <= 126 ? String.fromCharCode(code) : "\uFFFD";
+		}
+		return text;
+	}
+
+	private readCodeViewGuid(view: DataView, offset: number): string {
+		const data1 = view.getUint32(offset, true);
+		const data2 = view.getUint16(offset + 4, true);
+		const data3 = view.getUint16(offset + 6, true);
+		const data4_0 = view.getUint8(offset + 8);
+		const data4_1 = view.getUint8(offset + 9);
+
+		let suffix = "";
+		for (let i = 10; i < 16; i++) {
+			suffix += this.formatHex(view.getUint8(offset + i), 2);
+		}
+
+		return `${this.formatHex(data1, 8)}-${this.formatHex(data2, 4)}-${this.formatHex(data3, 4)}-${this.formatHex(data4_0, 2)}${this.formatHex(data4_1, 2)}-${suffix}`;
+	}
+
+	private readNullTerminatedAscii(view: DataView, offset: number): string {
+		if (offset >= view.byteLength) {
+			return "";
+		}
+
+		const bytes = new Uint8Array(
+			view.buffer,
+			view.byteOffset + offset,
+			view.byteLength - offset,
+		);
+
+		let value = "";
+		for (let i = 0; i < bytes.length && bytes[i] !== 0; i++) {
+			value += String.fromCharCode(bytes[i]);
+		}
+		return value;
+	}
+
+	private formatHex(value: number, width: number): string {
+		return value.toString(16).toUpperCase().padStart(width, "0");
 	}
 
 	private readMinidumpString(rva: number): string {

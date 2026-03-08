@@ -94,6 +94,7 @@ export default function WasmDumpDebugger() {
 				threadInfoList: parsed.threadInfoList,
 				associatedThreads: parsed.associatedThreads,
 				moduleList: parsed.moduleList,
+				unloadedModuleList: parsed.unloadedModuleList,
 			});
 		} catch (error) {
 			setDumpInfo(null);
