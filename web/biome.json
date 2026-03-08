@@ -1,14 +1,17 @@
 {
-  "linter": {
-    "domains": {
-      "solid": "all"
-    }
-  },
-  "assist": {
-    "actions": {
-      "source": {
-        "useSortedProperties": "on"
-      }
-    }
-  }
+	"files": {
+		"includes": ["src/**/*.tsx", "src/**/*.ts"]
+	},
+	"linter": {
+		"domains": {
+			"solid": "all"
+		}
+	},
+	"assist": {
+		"actions": {
+			"source": {
+				"useSortedProperties": "on"
+			}
+		}
+	}
 }

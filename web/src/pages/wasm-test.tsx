@@ -1,22 +1,20 @@
-import { Show, createSignal } from "solid-js";
+import { createSignal, Show } from "solid-js";
 import DumpSummary, { type ParsedDumpInfo } from "../components/DumpSummary";
-import {
-	MiniDump,
-} from "../lib/minidump";
+import { MiniDump } from "../lib/minidump";
 
 type WasmExports = {
-	wasm_get_disassembled_instruction: () => BigInt;
-	wasm_get_disassembly_buffer: () => BigInt;
+	wasm_get_disassembled_instruction: () => bigint;
+	wasm_get_disassembly_buffer: () => bigint;
 	wasm_disassemble: (length: number, runtime_address: number) => number;
 	wasm_mnemonic_string: (mnemonic: number) => string;
-}
+};
 
-let g_memory = new WebAssembly.Memory({
+const g_memory = new WebAssembly.Memory({
 	initial: 16n,
 	maximum: 16n,
 	shared: true,
-	address: "i64"
-})
+	address: "i64",
+});
 
 let g_exports: WasmExports;
 
@@ -28,10 +26,10 @@ async function initWasm() {
 		throw new Error(`HTTP ${response.status} for wasm_dmp.wasm`);
 	}
 
-	let imports: WebAssembly.Imports = {
+	const imports: WebAssembly.Imports = {
 		env: {
-			memory: g_memory
-		}
+			memory: g_memory,
+		},
 	};
 
 	const module = await WebAssembly.compileStreaming(response);
@@ -47,16 +45,17 @@ export default function WasmTest() {
 	const [dumpInfo, setDumpInfo] = createSignal<ParsedDumpInfo | null>(null);
 	const [isParsing, setIsParsing] = createSignal(false);
 	const [uploadError, setUploadError] = createSignal("");
-	const [dragDepth, setDragDepth] = createSignal(0);
 	const [isDragging, setIsDragging] = createSignal(false);
 	let dumpInputRef: HTMLInputElement | undefined;
+	let dragDepth = 0;
 
 	const allowedDumpExtensions = [".dmp", ".mdmp", ".dump"];
 
 	const formatBytes = (bytes: number) => {
 		if (bytes < 1024) return `${bytes} B`;
 		if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-		if (bytes < 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+		if (bytes < 1024 * 1024 * 1024)
+			return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 		return `${(bytes / (1024 * 1024 * 1024)).toFixed(1)} GB`;
 	};
 
@@ -99,6 +98,7 @@ export default function WasmTest() {
 				threadList: parsed.threadList,
 				threadInfoList: parsed.threadInfoList,
 				associatedThreads: parsed.associatedThreads,
+				moduleList: parsed.moduleList,
 			});
 		} catch (error) {
 			setDumpInfo(null);
@@ -113,17 +113,16 @@ export default function WasmTest() {
 		dumpInputRef?.click();
 	};
 
-	const handleFileInputChange = (event: Event & { currentTarget: HTMLInputElement }) => {
+	const handleFileInputChange = (
+		event: Event & { currentTarget: HTMLInputElement },
+	) => {
 		void selectDumpFile(event.currentTarget.files?.[0]);
 	};
 
 	const handleDragEnter = (event: DragEvent) => {
 		event.preventDefault();
-		setDragDepth((prev) => {
-			const next = prev + 1;
-			setIsDragging(true);
-			return next;
-		});
+		dragDepth += 1;
+		setIsDragging(true);
 	};
 
 	const handleDragOver = (event: DragEvent) => {
@@ -135,25 +134,15 @@ export default function WasmTest() {
 
 	const handleDragLeave = (event: DragEvent) => {
 		event.preventDefault();
-		setDragDepth((prev) => {
-			const next = Math.max(0, prev - 1);
-			setIsDragging(next > 0);
-			return next;
-		});
+		dragDepth = Math.max(0, dragDepth - 1);
+		setIsDragging(dragDepth > 0);
 	};
 
 	const handleDrop = (event: DragEvent) => {
 		event.preventDefault();
-		setDragDepth(0);
+		dragDepth = 0;
 		setIsDragging(false);
 		void selectDumpFile(event.dataTransfer?.files?.[0]);
-	};
-
-	const handleDropzoneKeyDown = (event: KeyboardEvent) => {
-		if (event.key === "Enter" || event.key === " ") {
-			event.preventDefault();
-			openFilePicker();
-		}
 	};
 
 	return (
@@ -170,23 +159,21 @@ export default function WasmTest() {
 				style={{ display: "none" }}
 			/>
 
-			<div
+			<button
+				type="button"
 				class={`dump-dropzone${isDragging() ? " is-dragging" : ""}`}
-				role="button"
-				tabindex={0}
 				aria-label="Upload dump file"
 				onClick={openFilePicker}
-				onKeyDown={handleDropzoneKeyDown}
 				onDragEnter={handleDragEnter}
 				onDragOver={handleDragOver}
 				onDragLeave={handleDragLeave}
 				onDrop={handleDrop}
 			>
-				<p class="dump-dropzone__title">Drop dump file here</p>
-				<p class="dump-dropzone__hint">
+				<span class="dump-dropzone__title">Drop dump file here</span>
+				<span class="dump-dropzone__hint">
 					or click to browse ({allowedDumpExtensions.join(", ")})
-				</p>
-			</div>
+				</span>
+			</button>
 
 			<p class="dump-dropzone__file">
 				{dumpFile()
@@ -194,11 +181,17 @@ export default function WasmTest() {
 					: "No dump file selected."}
 			</p>
 
-			{isParsing() ? <p class="dump-dropzone__file">Parsing dump file...</p> : null}
+			{isParsing() ? (
+				<p class="dump-dropzone__file">Parsing dump file...</p>
+			) : null}
 
-			{uploadError() ? <p class="dump-dropzone__error">{uploadError()}</p> : null}
+			{uploadError() ? (
+				<p class="dump-dropzone__error">{uploadError()}</p>
+			) : null}
 
-			<Show when={dumpInfo()}>{(info) => <DumpSummary dumpInfo={info()} />}</Show>
+			<Show when={dumpInfo()}>
+				{(info) => <DumpSummary dumpInfo={info()} />}
+			</Show>
 		</section>
 	);
 }

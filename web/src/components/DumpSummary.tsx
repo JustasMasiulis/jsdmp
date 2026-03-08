@@ -1,14 +1,14 @@
 import { For, type ParentComponent } from "solid-js";
 import {
-	MINIDUMP_STREAM_TYPE,
 	MiniDumpStreamType,
-	priorityToString,
 	type MinidumpAssociatedThread,
 	type MinidumpExceptionStream,
 	type MinidumpMiscInfo,
+	type MinidumpModule,
 	type MinidumpSystemInfo,
 	type MinidumpThread,
 	type MinidumpThreadInfoList,
+	priorityToString,
 } from "../lib/minidump";
 
 export type ParsedDumpInfo = {
@@ -23,6 +23,7 @@ export type ParsedDumpInfo = {
 	threadList: MinidumpThread[] | null;
 	threadInfoList: MinidumpThreadInfoList | null;
 	associatedThreads: MinidumpAssociatedThread[] | null;
+	moduleList: MinidumpModule[] | null;
 };
 
 type DumpSummaryProps = {
@@ -31,7 +32,8 @@ type DumpSummaryProps = {
 
 const Row: ParentComponent<{ label: string }> = (props) => (
 	<p class="dump-info-panel__item">
-		<span class="text-medium">{props.label}:</span> <code>{props.children}</code>
+		<span class="text-medium">{props.label}:</span>{" "}
+		<code>{props.children}</code>
 	</p>
 );
 
@@ -72,7 +74,13 @@ const DumpTable = (props: DumpTableProps) => (
 					<For each={props.rows}>
 						{(row) => (
 							<tr>
-								<For each={row}>{(cell) => <td><code>{cell}</code></td>}</For>
+								<For each={row}>
+									{(cell) => (
+										<td>
+											<code>{cell}</code>
+										</td>
+									)}
+								</For>
 							</tr>
 						)}
 					</For>
@@ -99,7 +107,9 @@ const buildAssociatedRows = (
 		return [
 			String(associated.threadId),
 			thread ? String(thread.suspendCount) : emptyCell,
-			thread ? priorityToString(thread.priorityClass, thread.priority) : emptyCell,
+			thread
+				? priorityToString(thread.priorityClass, thread.priority)
+				: emptyCell,
 			thread ? toHex(thread.teb, 16) : emptyCell,
 			thread ? toHex(thread.stack.startOfMemoryRange, 16) : emptyCell,
 			thread ? String(thread.stack.location.dataSize) : emptyCell,
@@ -121,14 +131,29 @@ const buildAssociatedRows = (
 const buildExceptionParameterRows = (
 	exceptionStream: MinidumpExceptionStream | null,
 ): string[][] =>
-	(exceptionStream?.exceptionRecord.exceptionInformation ?? []).map((value, index) => [
-		String(index),
-		toHex(value, 16),
+	(exceptionStream?.exceptionRecord.exceptionInformation ?? []).map(
+		(value, index) => [String(index), toHex(value, 16)],
+	);
+
+const buildModuleRows = (moduleList: MinidumpModule[] | null): string[][] =>
+	(moduleList ?? []).map((module) => [
+		toHex(module.baseOfImage, 16),
+		toHex(module.sizeOfImage, 8),
+		toHex(module.checkSum, 8),
+		toHex(module.timeDateStamp, 8),
+		module.moduleName || emptyCell,
+		toHex(module.cvRecord.dataSize, 8),
+		toHex(module.cvRecord.rva, 8),
+		toHex(module.miscRecord.dataSize, 8),
+		toHex(module.miscRecord.rva, 8),
 	]);
 
 export default function DumpSummary(props: DumpSummaryProps) {
 	const associatedRows = buildAssociatedRows(props.dumpInfo.associatedThreads);
-	const exceptionParameterRows = buildExceptionParameterRows(props.dumpInfo.exceptionStream);
+	const exceptionParameterRows = buildExceptionParameterRows(
+		props.dumpInfo.exceptionStream,
+	);
+	const moduleRows = buildModuleRows(props.dumpInfo.moduleList);
 	const mergedThreadCount = associatedRows.length;
 
 	return (
@@ -162,7 +187,9 @@ export default function DumpSummary(props: DumpSummaryProps) {
 					<Row label="Suite Mask">
 						{toHex(props.dumpInfo.systemInfo.suiteMask, 4)}
 					</Row>
-					<Row label="Product Type">{props.dumpInfo.systemInfo.productType}</Row>
+					<Row label="Product Type">
+						{props.dumpInfo.systemInfo.productType}
+					</Row>
 					<Row label="CPU Revision">
 						level {props.dumpInfo.systemInfo.processorLevel}, rev{" "}
 						{toHex(props.dumpInfo.systemInfo.processorRevision, 4)}
@@ -238,16 +265,28 @@ export default function DumpSummary(props: DumpSummaryProps) {
 						{props.dumpInfo.exceptionStream.threadId}
 					</Row>
 					<Row label="Exception Code">
-						{toHex(props.dumpInfo.exceptionStream.exceptionRecord.exceptionCode, 8)}
+						{toHex(
+							props.dumpInfo.exceptionStream.exceptionRecord.exceptionCode,
+							8,
+						)}
 					</Row>
 					<Row label="Exception Flags">
-						{toHex(props.dumpInfo.exceptionStream.exceptionRecord.exceptionFlags, 8)}
+						{toHex(
+							props.dumpInfo.exceptionStream.exceptionRecord.exceptionFlags,
+							8,
+						)}
 					</Row>
 					<Row label="Exception Address">
-						{toHex(props.dumpInfo.exceptionStream.exceptionRecord.exceptionAddress, 16)}
+						{toHex(
+							props.dumpInfo.exceptionStream.exceptionRecord.exceptionAddress,
+							16,
+						)}
 					</Row>
 					<Row label="Exception Record">
-						{toHex(props.dumpInfo.exceptionStream.exceptionRecord.exceptionRecord, 16)}
+						{toHex(
+							props.dumpInfo.exceptionStream.exceptionRecord.exceptionRecord,
+							16,
+						)}
 					</Row>
 					<Row label="Exception Parameters">
 						{props.dumpInfo.exceptionStream.exceptionRecord.numberParameters}
@@ -260,6 +299,27 @@ export default function DumpSummary(props: DumpSummaryProps) {
 						title="Exception Information"
 						headers={["Index", "Value"]}
 						rows={exceptionParameterRows}
+					/>
+				</>
+			) : null}
+
+			{props.dumpInfo.moduleList ? (
+				<>
+					<Row label="Modules">{props.dumpInfo.moduleList.length}</Row>
+					<DumpTable
+						title="Module Entries"
+						headers={[
+							"Base",
+							"Size",
+							"Checksum",
+							"TimeDateStamp",
+							"Name",
+							"CV Size",
+							"CV RVA",
+							"Misc Size",
+							"Misc RVA",
+						]}
+						rows={moduleRows}
 					/>
 				</>
 			) : null}
