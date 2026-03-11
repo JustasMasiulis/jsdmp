@@ -8,7 +8,7 @@
 		"dev": "vite",
 		"build": "vite build",
 		"serve": "vite preview",
-		"lint": "biome check ."
+		"lint": "biome check . --write"
 	},
 	"devDependencies": {
 		"@biomejs/biome": "2.4.6",
@@ -17,6 +17,7 @@
 		"vite-plugin-solid": "^2.11.10"
 	},
 	"dependencies": {
+		"dockview-core": "^5.1.0",
 		"solid-js": "^1.9.10"
 	}
 }

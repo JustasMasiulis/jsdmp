@@ -97,6 +97,16 @@ export type MinidumpMemory64Range = {
 	dataRva: bigint;
 };
 
+export type MinidumpMemoryRangeMatch = {
+	range: MinidumpMemory64Range;
+	index: number;
+};
+
+export type MinidumpMemoryReadView = {
+	bytes: Uint8Array;
+	rangeIndex: number;
+};
+
 export type MinidumpCodeViewInfo =
 	| {
 			format: "RSDS";
@@ -318,27 +328,87 @@ export class MiniDump {
 	}
 
 	findMemoryRange(address: bigint): MinidumpMemory64Range | null {
-		for (const range of this.memoryRanges) {
+		return this.findMemoryRangeAt(address)?.range ?? null;
+	}
+
+	findMemoryRangeIndex(address: bigint, hintRangeIndex?: number): number {
+		return this.findMemoryRangeAt(address, hintRangeIndex)?.index ?? -1;
+	}
+
+	findMemoryRangeAt(
+		address: bigint,
+		hintRangeIndex?: number,
+	): MinidumpMemoryRangeMatch | null {
+		const ranges = this.memoryRanges;
+		if (ranges.length === 0) {
+			return null;
+		}
+
+		if (hintRangeIndex !== undefined) {
+			const hinted = ranges[hintRangeIndex];
+			if (hinted) {
+				const hintedEnd = hinted.address + hinted.dataSize;
+				if (address >= hinted.address && address < hintedEnd) {
+					return {
+						range: hinted,
+						index: hintRangeIndex,
+					};
+				}
+			}
+
+			const nextHinted = ranges[hintRangeIndex + 1];
+			if (nextHinted) {
+				const nextHintedEnd = nextHinted.address + nextHinted.dataSize;
+				if (address >= nextHinted.address && address < nextHintedEnd) {
+					return {
+						range: nextHinted,
+						index: hintRangeIndex + 1,
+					};
+				}
+			}
+		}
+
+		let low = 0;
+		let high = ranges.length - 1;
+		while (low <= high) {
+			const mid = (low + high) >> 1;
+			const range = ranges[mid];
 			const start = range.address;
 			const endExclusive = start + range.dataSize;
-			if (address >= start && address < endExclusive) {
-				return range;
+			if (address < start) {
+				high = mid - 1;
+				continue;
 			}
+
+			if (address >= endExclusive) {
+				low = mid + 1;
+				continue;
+			}
+
+			return {
+				range,
+				index: mid,
+			};
 		}
 
 		return null;
 	}
 
-	readMemoryAt(address: bigint, size: number): Uint8Array | null {
+	readMemoryViewAt(
+		address: bigint,
+		size: number,
+		hintRangeIndex?: number,
+	): MinidumpMemoryReadView | null {
 		if (size <= 0) {
 			return null;
 		}
 
-		const range = this.findMemoryRange(address);
-		if (!range) {
+		const match = this.findMemoryRangeAt(address, hintRangeIndex);
+		if (!match) {
 			return null;
 		}
 
+		const { range, index } = match;
 		const offset = address - range.address;
 		const available = range.dataSize - offset;
 		const requested = BigInt(size);
@@ -358,7 +428,27 @@ export class MiniDump {
 			return null;
 		}
 
-		return new Uint8Array(this._data.buffer.slice(Number(start), Number(end)));
+		return {
+			bytes: new Uint8Array(
+				this._data.buffer,
+				this._data.byteOffset + Number(start),
+				size,
+			),
+			rangeIndex: index,
+		};
+	}
+
+	readMemoryAt(
+		address: bigint,
+		size: number,
+		hintRangeIndex?: number,
+	): Uint8Array | null {
+		const view = this.readMemoryViewAt(address, size, hintRangeIndex);
+		if (!view) {
+			return null;
+		}
+
+		return new Uint8Array(view.bytes);
 	}
 
 	private associateThreadArrays(

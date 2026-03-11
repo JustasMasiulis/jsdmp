@@ -12,7 +12,8 @@ import {
 	type MinidumpCodeViewInfo,
 	type MinidumpExceptionStream,
 	type MinidumpMemory64Range,
-	type MinidumpMemoryRange,
+	type MinidumpMemoryRangeMatch,
+	type MinidumpMemoryReadView,
 	type MinidumpMiscInfo,
 	type MinidumpModule,
 	type MinidumpSystemInfo,
@@ -31,13 +32,31 @@ export type ParsedDumpInfo = {
 	associatedThreads: MinidumpAssociatedThread[] | null;
 	moduleList: MinidumpModule[] | null;
 	unloadedModuleList: MinidumpUnloadedModule[] | null;
-	memoryList: MinidumpMemoryRange[] | null;
-	memory64List: MinidumpMemory64Range[] | null;
+	memoryRanges: MinidumpMemory64Range[];
+	readMemoryAt: (address: bigint, size: number) => Uint8Array | null;
+	readMemoryViewAt: (
+		address: bigint,
+		size: number,
+		hintRangeIndex?: number,
+	) => MinidumpMemoryReadView | null;
+	findMemoryRangeAt: (
+		address: bigint,
+		hintRangeIndex?: number,
+	) => MinidumpMemoryRangeMatch | null;
 	debugView: DebugDisassemblyView | null;
 };
 
+export type DumpSection =
+	| "summary"
+	| "exception"
+	| "disassembly"
+	| "modules"
+	| "threads"
+	| "memory";
+
 type DumpSummaryProps = {
 	dumpInfo: ParsedDumpInfo;
+	sections?: readonly DumpSection[];
 };
 
 const Row: ParentComponent<{ label: string }> = (props) => (
@@ -74,15 +93,10 @@ type MemoryListSummary = {
 };
 
 const summarizeMemoryList = (
-	memoryList: MinidumpMemoryRange[] | null,
-	memory64List: MinidumpMemory64Range[] | null,
+	memoryRanges: MinidumpMemory64Range[],
 ): MemoryListSummary | null => {
 	const ranges = [
-		...(memoryList ?? []).map((range) => ({
-			start: range.startOfMemoryRange,
-			size: BigInt(range.memory.dataSize),
-		})),
-		...(memory64List ?? []).map((range) => ({
+		...memoryRanges.map((range) => ({
 			start: range.address,
 			size: range.dataSize,
 		})),
@@ -287,100 +301,117 @@ export default function DumpSummary(props: DumpSummaryProps) {
 		props.dumpInfo.unloadedModuleList,
 	);
 	const memoryListSummary = summarizeMemoryList(
-		props.dumpInfo.memoryList,
-		props.dumpInfo.memory64List,
+		props.dumpInfo.memoryRanges ?? [],
 	);
 	const mergedThreadCount = associatedRows.length;
 	const debugView = props.dumpInfo.debugView;
+	const hasSection = (section: DumpSection) =>
+		props.sections ? props.sections.includes(section) : true;
 
 	return (
 		<section class="dump-info-panel" aria-label="Dump details">
-			<h2 class="dump-info-panel__title m0">Dump Summary</h2>
-			<Row label="Checksum">{fmtHex(props.dumpInfo.checksum, 8)}</Row>
-			<Row label="Timestamp">{formatTimestamp(props.dumpInfo.timestamp)}</Row>
-			<Row label="Flags">{fmtHex(props.dumpInfo.flags, 16)}</Row>
-			<Row label="Streams">{props.dumpInfo.streamCount}</Row>
-			<Row label="Stream Types">
-				{props.dumpInfo.streamTypes.length > 0
-					? props.dumpInfo.streamTypes.map(getStreamTypeName).join(", ")
-					: "none"}
-			</Row>
-
-			{props.dumpInfo.systemInfo ? (
-				<div class="dump-info-panel__table-wrap">
-					<RawRow>{fmtOs(props.dumpInfo.systemInfo)}</RawRow>
-					<RawRow>{fmtProductAndSuite(props.dumpInfo.systemInfo)}</RawRow>
-
-					<Row label="CPU Revision">
-						level {props.dumpInfo.systemInfo.processorLevel}, rev{" "}
-						{fmtHex(props.dumpInfo.systemInfo.processorRevision, 4)}
-					</Row>
-					{props.dumpInfo.systemInfo.cpu.type === "x86" ? (
-						<Row label="CPU Vendor">
-							{props.dumpInfo.systemInfo.cpu.vendorId || "unknown"}
-						</Row>
-					) : (
-						<Row label="CPU Features">
-							{fmtHex(props.dumpInfo.systemInfo.cpu.processorFeatures[0], 16)},{" "}
-							{fmtHex(props.dumpInfo.systemInfo.cpu.processorFeatures[1], 16)}
-						</Row>
-					)}
-				</div>
-			) : null}
-
-			{props.dumpInfo.miscInfo ? (
+			{hasSection("summary") ? (
 				<>
-					<Row label="MiscInfo Size">{props.dumpInfo.miscInfo.sizeOfInfo}</Row>
-					<Row label="MiscInfo Flags1">
-						{fmtHex(props.dumpInfo.miscInfo.flags1, 8)}
+					<h2 class="dump-info-panel__title m0">Dump Summary</h2>
+					<Row label="Checksum">{fmtHex(props.dumpInfo.checksum, 8)}</Row>
+					<Row label="Timestamp">
+						{formatTimestamp(props.dumpInfo.timestamp)}
 					</Row>
-					{props.dumpInfo.miscInfo.processId !== null ? (
-						<Row label="Process ID">{props.dumpInfo.miscInfo.processId}</Row>
+					<Row label="Flags">{fmtHex(props.dumpInfo.flags, 16)}</Row>
+					<Row label="Streams">{props.dumpInfo.streamCount}</Row>
+					<Row label="Stream Types">
+						{props.dumpInfo.streamTypes.length > 0
+							? props.dumpInfo.streamTypes.map(getStreamTypeName).join(", ")
+							: "none"}
+					</Row>
+					{props.dumpInfo.systemInfo ? (
+						<div class="dump-info-panel__table-wrap">
+							<RawRow>{fmtOs(props.dumpInfo.systemInfo)}</RawRow>
+							<RawRow>{fmtProductAndSuite(props.dumpInfo.systemInfo)}</RawRow>
+
+							<Row label="CPU Revision">
+								level {props.dumpInfo.systemInfo.processorLevel}, rev{" "}
+								{fmtHex(props.dumpInfo.systemInfo.processorRevision, 4)}
+							</Row>
+							{props.dumpInfo.systemInfo.cpu.type === "x86" ? (
+								<Row label="CPU Vendor">
+									{props.dumpInfo.systemInfo.cpu.vendorId || "unknown"}
+								</Row>
+							) : (
+								<Row label="CPU Features">
+									{fmtHex(
+										props.dumpInfo.systemInfo.cpu.processorFeatures[0],
+										16,
+									)}
+									,{" "}
+									{fmtHex(
+										props.dumpInfo.systemInfo.cpu.processorFeatures[1],
+										16,
+									)}
+								</Row>
+							)}
+						</div>
 					) : null}
-					{props.dumpInfo.miscInfo.processCreateTime !== null ? (
-						<Row label="Process Create Time">
-							{formatTimestamp(props.dumpInfo.miscInfo.processCreateTime)}
-						</Row>
-					) : null}
-					{props.dumpInfo.miscInfo.processUserTime !== null ? (
-						<Row label="Process User Time">
-							{formatSeconds(props.dumpInfo.miscInfo.processUserTime)}
-						</Row>
-					) : null}
-					{props.dumpInfo.miscInfo.processKernelTime !== null ? (
-						<Row label="Process Kernel Time">
-							{formatSeconds(props.dumpInfo.miscInfo.processKernelTime)}
-						</Row>
-					) : null}
-					{props.dumpInfo.miscInfo.processorMaxMhz !== null ? (
-						<Row label="CPU Max MHz">
-							{props.dumpInfo.miscInfo.processorMaxMhz}
-						</Row>
-					) : null}
-					{props.dumpInfo.miscInfo.processorCurrentMhz !== null ? (
-						<Row label="CPU Current MHz">
-							{props.dumpInfo.miscInfo.processorCurrentMhz}
-						</Row>
-					) : null}
-					{props.dumpInfo.miscInfo.processorMhzLimit !== null ? (
-						<Row label="CPU MHz Limit">
-							{props.dumpInfo.miscInfo.processorMhzLimit}
-						</Row>
-					) : null}
-					{props.dumpInfo.miscInfo.processorMaxIdleState !== null ? (
-						<Row label="CPU Max Idle State">
-							{props.dumpInfo.miscInfo.processorMaxIdleState}
-						</Row>
-					) : null}
-					{props.dumpInfo.miscInfo.processorCurrentIdleState !== null ? (
-						<Row label="CPU Current Idle State">
-							{props.dumpInfo.miscInfo.processorCurrentIdleState}
-						</Row>
+
+					{props.dumpInfo.miscInfo ? (
+						<>
+							<Row label="MiscInfo Size">
+								{props.dumpInfo.miscInfo.sizeOfInfo}
+							</Row>
+							<Row label="MiscInfo Flags1">
+								{fmtHex(props.dumpInfo.miscInfo.flags1, 8)}
+							</Row>
+							{props.dumpInfo.miscInfo.processId !== null ? (
+								<Row label="Process ID">
+									{props.dumpInfo.miscInfo.processId}
+								</Row>
+							) : null}
+							{props.dumpInfo.miscInfo.processCreateTime !== null ? (
+								<Row label="Process Create Time">
+									{formatTimestamp(props.dumpInfo.miscInfo.processCreateTime)}
+								</Row>
+							) : null}
+							{props.dumpInfo.miscInfo.processUserTime !== null ? (
+								<Row label="Process User Time">
+									{formatSeconds(props.dumpInfo.miscInfo.processUserTime)}
+								</Row>
+							) : null}
+							{props.dumpInfo.miscInfo.processKernelTime !== null ? (
+								<Row label="Process Kernel Time">
+									{formatSeconds(props.dumpInfo.miscInfo.processKernelTime)}
+								</Row>
+							) : null}
+							{props.dumpInfo.miscInfo.processorMaxMhz !== null ? (
+								<Row label="CPU Max MHz">
+									{props.dumpInfo.miscInfo.processorMaxMhz}
+								</Row>
+							) : null}
+							{props.dumpInfo.miscInfo.processorCurrentMhz !== null ? (
+								<Row label="CPU Current MHz">
+									{props.dumpInfo.miscInfo.processorCurrentMhz}
+								</Row>
+							) : null}
+							{props.dumpInfo.miscInfo.processorMhzLimit !== null ? (
+								<Row label="CPU MHz Limit">
+									{props.dumpInfo.miscInfo.processorMhzLimit}
+								</Row>
+							) : null}
+							{props.dumpInfo.miscInfo.processorMaxIdleState !== null ? (
+								<Row label="CPU Max Idle State">
+									{props.dumpInfo.miscInfo.processorMaxIdleState}
+								</Row>
+							) : null}
+							{props.dumpInfo.miscInfo.processorCurrentIdleState !== null ? (
+								<Row label="CPU Current Idle State">
+									{props.dumpInfo.miscInfo.processorCurrentIdleState}
+								</Row>
+							) : null}
+						</>
 					) : null}
 				</>
 			) : null}
 
-			{props.dumpInfo.exceptionStream ? (
+			{hasSection("exception") && props.dumpInfo.exceptionStream ? (
 				<>
 					<Row label="Exception Thread ID">
 						{props.dumpInfo.exceptionStream.threadId}
@@ -424,7 +455,7 @@ export default function DumpSummary(props: DumpSummaryProps) {
 				</>
 			) : null}
 
-			{debugView ? (
+			{hasSection("disassembly") && debugView ? (
 				<section class="dump-debugger-panel" aria-label="Disassembly view">
 					<h3 class="dump-debugger-panel__title m0">Disassembly</h3>
 					<Row label="Status">
@@ -591,7 +622,7 @@ export default function DumpSummary(props: DumpSummaryProps) {
 				</section>
 			) : null}
 
-			{props.dumpInfo.moduleList ? (
+			{hasSection("modules") && props.dumpInfo.moduleList ? (
 				<>
 					<Row label="Modules">{props.dumpInfo.moduleList.length}</Row>
 					<DumpTable
@@ -615,7 +646,7 @@ export default function DumpSummary(props: DumpSummaryProps) {
 				</>
 			) : null}
 
-			{props.dumpInfo.unloadedModuleList ? (
+			{hasSection("modules") && props.dumpInfo.unloadedModuleList ? (
 				<>
 					<Row label="Unloaded Modules">
 						{props.dumpInfo.unloadedModuleList.length}
@@ -628,13 +659,10 @@ export default function DumpSummary(props: DumpSummaryProps) {
 				</>
 			) : null}
 
-			{props.dumpInfo.memoryList || props.dumpInfo.memory64List ? (
+			{hasSection("memory") && props.dumpInfo.memoryRanges ? (
 				<>
 					<Row label="Memory Ranges">
 						{memoryListSummary ? memoryListSummary.rangeCount : 0}
-					</Row>
-					<Row label="Memory64 Ranges">
-						{props.dumpInfo.memory64List?.length ?? 0}
 					</Row>
 					<Row label="Memory Bytes">
 						{memoryListSummary
@@ -651,7 +679,7 @@ export default function DumpSummary(props: DumpSummaryProps) {
 				</>
 			) : null}
 
-			{props.dumpInfo.associatedThreads ? (
+			{hasSection("threads") && props.dumpInfo.associatedThreads ? (
 				<>
 					<Row label="Threads (Merged)">{mergedThreadCount}</Row>
 					<DumpTable

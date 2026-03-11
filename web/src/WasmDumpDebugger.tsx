@@ -1,5 +1,6 @@
 import { createSignal, Show } from "solid-js";
-import DumpSummary, { type ParsedDumpInfo } from "./components/DumpSummary";
+import DockviewDumpLayout from "./components/DockviewDumpLayout";
+import type { ParsedDumpInfo } from "./components/DumpSummary";
 import {
 	buildDisassemblyView,
 	type DebugDisassemblyView,
@@ -116,8 +117,10 @@ export default function WasmDumpDebugger() {
 				associatedThreads: parsed.associatedThreads,
 				moduleList: parsed.moduleList,
 				unloadedModuleList: parsed.unloadedModuleList,
-				memoryList: parsed.memoryList,
-				memory64List: parsed.memory64List,
+				memoryRanges: parsed.memoryRanges,
+				readMemoryAt: parsed.readMemoryAt.bind(parsed),
+				readMemoryViewAt: parsed.readMemoryViewAt.bind(parsed),
+				findMemoryRangeAt: parsed.findMemoryRangeAt.bind(parsed),
 				debugView,
 			});
 		} catch (error) {
@@ -208,7 +211,7 @@ export default function WasmDumpDebugger() {
 				<p class="dump-dropzone__error">{uploadError()}</p>
 			) : null}
 			<Show when={dumpInfo()}>
-				{(info) => <DumpSummary dumpInfo={info()} />}
+				{(info) => <DockviewDumpLayout dumpInfo={info()} />}
 			</Show>
 		</section>
 	);

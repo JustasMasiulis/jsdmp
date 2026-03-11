@@ -1,5 +1,6 @@
 /* @refresh reload */
 import "./index.css";
+import "dockview-core/dist/styles/dockview.css";
 import { render } from "solid-js/web";
 import WasmDumpDebugger from "./WasmDumpDebugger";
 

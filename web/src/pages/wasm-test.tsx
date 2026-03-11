@@ -94,8 +94,10 @@ export default function WasmTest() {
 				associatedThreads: parsed.associatedThreads,
 				moduleList: parsed.moduleList,
 				unloadedModuleList: parsed.unloadedModuleList,
-				memoryList: parsed.memoryList,
-				memory64List: parsed.memory64List,
+				memoryRanges: parsed.memoryRanges,
+				readMemoryAt: parsed.readMemoryAt.bind(parsed),
+				readMemoryViewAt: parsed.readMemoryViewAt.bind(parsed),
+				findMemoryRangeAt: parsed.findMemoryRangeAt.bind(parsed),
 				debugView: null,
 			});
 		} catch (error) {
