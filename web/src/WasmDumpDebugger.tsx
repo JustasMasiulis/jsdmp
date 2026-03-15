@@ -1,40 +1,18 @@
-import { createSignal, Show } from "solid-js";
+import { createResource, createSignal, Show } from "solid-js";
 import DockviewDumpLayout from "./components/DockviewDumpLayout";
 import type { ParsedDumpInfo } from "./components/DumpSummary";
 import {
-	buildDisassemblyView,
-	type DebugDisassemblyView,
-	type WasmDisassemblerExports,
-} from "./lib/disassembly";
+	type DebugDisassemblyContext,
+	resolveDisassemblyContext,
+} from "./lib/debugDisassembly";
 import { MiniDump } from "./lib/minidump";
-
-type WasmExports = WasmDisassemblerExports;
-
-const memory = new WebAssembly.Memory({
-	initial: 16n,
-	maximum: 16n,
-	shared: true,
-	address: "i64",
-});
-
-let exportsRef: WasmExports | undefined;
-
-async function initWasm() {
-	if (exportsRef) return;
-
-	const response = await fetch("/web_dmp.wasm");
-	if (!response.ok) {
-		throw new Error(`HTTP ${response.status} for web_dmp.wasm`);
-	}
-
-	const module = await WebAssembly.compileStreaming(response);
-	const instance = await WebAssembly.instantiate(module, { env: { memory } });
-	exportsRef = instance.exports as WasmExports;
-}
-
-void initWasm();
+import { WASM_PROMISE } from "./lib/wasm";
 
 export default function WasmDumpDebugger() {
+	createResource(async () => {
+		await WASM_PROMISE;
+	});
+
 	const [dumpFile, setDumpFile] = createSignal<File | null>(null);
 	const [dumpInfo, setDumpInfo] = createSignal<ParsedDumpInfo | null>(null);
 	const [isParsing, setIsParsing] = createSignal(false);
@@ -81,29 +59,39 @@ export default function WasmDumpDebugger() {
 			const data = await file.arrayBuffer();
 			const parsed = new MiniDump(data);
 			const streamTypes = [...parsed.streams.keys()].sort((a, b) => a - b);
-			let debugView: DebugDisassemblyView | null = null;
+			const contextErrorView = (message: string): DebugDisassemblyContext => ({
+				status: "missing_context",
+				message,
+				threadId: parsed.exceptionStream?.threadId ?? null,
+				instructionPointer:
+					parsed.exceptionStream?.exceptionRecord.exceptionAddress ?? null,
+				exceptionAddress:
+					parsed.exceptionStream?.exceptionRecord.exceptionAddress ?? null,
+				exceptionCode:
+					parsed.exceptionStream?.exceptionRecord.exceptionCode ?? null,
+				registers: null,
+			});
 
-			try {
-				await initWasm();
-				if (exportsRef) {
-					debugView = buildDisassemblyView(parsed, exportsRef, memory);
+			let debugContextPromise: Promise<DebugDisassemblyContext> | null = null;
+			const loadDebugContext = async (): Promise<DebugDisassemblyContext> => {
+				if (debugContextPromise) {
+					return debugContextPromise;
 				}
-			} catch (error) {
-				const message = error instanceof Error ? error.message : String(error);
-				debugView = {
-					status: "decode_error",
-					message: `Disassembler initialization failed: ${message}`,
-					threadId: parsed.exceptionStream?.threadId ?? null,
-					instructionPointer:
-						parsed.exceptionStream?.exceptionRecord.exceptionAddress ?? null,
-					exceptionAddress:
-						parsed.exceptionStream?.exceptionRecord.exceptionAddress ?? null,
-					exceptionCode:
-						parsed.exceptionStream?.exceptionRecord.exceptionCode ?? null,
-					lines: [],
-					registers: null,
-				};
-			}
+
+				debugContextPromise = Promise.resolve().then(() => {
+					try {
+						return resolveDisassemblyContext(parsed);
+					} catch (error) {
+						const message =
+							error instanceof Error ? error.message : String(error);
+						return contextErrorView(
+							`Failed to resolve disassembly context: ${message}`,
+						);
+					}
+				});
+
+				return debugContextPromise;
+			};
 
 			setDumpInfo({
 				checksum: parsed.checksum,
@@ -121,7 +109,8 @@ export default function WasmDumpDebugger() {
 				readMemoryAt: parsed.readMemoryAt.bind(parsed),
 				readMemoryViewAt: parsed.readMemoryViewAt.bind(parsed),
 				findMemoryRangeAt: parsed.findMemoryRangeAt.bind(parsed),
-				debugView,
+				debugContext: null,
+				loadDebugContext,
 			});
 		} catch (error) {
 			setDumpInfo(null);

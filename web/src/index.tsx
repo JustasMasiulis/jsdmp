@@ -2,6 +2,7 @@
 import "./index.css";
 import "dockview-core/dist/styles/dockview.css";
 import { render } from "solid-js/web";
+import { WASM_PROMISE } from "./lib/wasm";
 import WasmDumpDebugger from "./WasmDumpDebugger";
 
 const root = document.getElementById("root");
@@ -12,4 +13,5 @@ if (import.meta.env.DEV && !(root instanceof HTMLElement)) {
 	);
 }
 
+// load the was module before rendering the app
 render(() => <WasmDumpDebugger />, root as HTMLElement);

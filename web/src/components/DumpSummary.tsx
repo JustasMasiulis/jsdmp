@@ -1,5 +1,5 @@
 import { For, type ParentComponent } from "solid-js";
-import type { DebugDisassemblyView } from "../lib/disassembly";
+import type { DebugDisassemblyContext } from "../lib/debugDisassembly";
 import {
 	fmtHex,
 	fmtOs,
@@ -43,7 +43,8 @@ export type ParsedDumpInfo = {
 		address: bigint,
 		hintRangeIndex?: number,
 	) => MinidumpMemoryRangeMatch | null;
-	debugView: DebugDisassemblyView | null;
+	debugContext: DebugDisassemblyContext | null;
+	loadDebugContext?: () => Promise<DebugDisassemblyContext>;
 };
 
 export type DumpSection =
@@ -274,23 +275,6 @@ const buildUnloadedModuleRows = (
 		module.moduleName || emptyCell,
 	]);
 
-const resolveDisassemblyStatusLabel = (
-	status: DebugDisassemblyView["status"],
-) => {
-	switch (status) {
-		case "ok":
-			return "Ready";
-		case "unsupported_arch":
-			return "Unsupported Architecture";
-		case "missing_context":
-			return "Context Missing";
-		case "missing_memory":
-			return "Memory Missing";
-		case "decode_error":
-			return "Decode Error";
-	}
-};
-
 export default function DumpSummary(props: DumpSummaryProps) {
 	const associatedRows = buildAssociatedRows(props.dumpInfo.associatedThreads);
 	const exceptionParameterRows = buildExceptionParameterRows(
@@ -304,7 +288,6 @@ export default function DumpSummary(props: DumpSummaryProps) {
 		props.dumpInfo.memoryRanges ?? [],
 	);
 	const mergedThreadCount = associatedRows.length;
-	const debugView = props.dumpInfo.debugView;
 	const hasSection = (section: DumpSection) =>
 		props.sections ? props.sections.includes(section) : true;
 
@@ -453,173 +436,6 @@ export default function DumpSummary(props: DumpSummaryProps) {
 						rows={exceptionParameterRows}
 					/>
 				</>
-			) : null}
-
-			{hasSection("disassembly") && debugView ? (
-				<section class="dump-debugger-panel" aria-label="Disassembly view">
-					<h3 class="dump-debugger-panel__title m0">Disassembly</h3>
-					<Row label="Status">
-						{resolveDisassemblyStatusLabel(debugView.status)} (
-						{debugView.message})
-					</Row>
-					<Row label="Thread">
-						{debugView.threadId !== null ? debugView.threadId : "unknown"}
-					</Row>
-					<Row label="Instruction Pointer">
-						{debugView.instructionPointer !== null
-							? fmtHex(debugView.instructionPointer, 16)
-							: "unknown"}
-					</Row>
-					<Row label="Exception Address">
-						{debugView.exceptionAddress !== null
-							? fmtHex(debugView.exceptionAddress, 16)
-							: "unknown"}
-					</Row>
-					<Row label="Exception Code">
-						{debugView.exceptionCode !== null
-							? fmtHex(debugView.exceptionCode, 8)
-							: "unknown"}
-					</Row>
-
-					{debugView.registers ? (
-						<div class="dump-info-panel__table-wrap">
-							<p class="dump-info-panel__table-title text-medium">
-								Registers (x64)
-							</p>
-							<table class="dump-info-table">
-								<thead>
-									<tr>
-										<th>RIP</th>
-										<th>RSP</th>
-										<th>RBP</th>
-										<th>RAX</th>
-										<th>RBX</th>
-										<th>RCX</th>
-										<th>RDX</th>
-										<th>RSI</th>
-										<th>RDI</th>
-										<th>R8</th>
-										<th>R9</th>
-										<th>R10</th>
-										<th>R11</th>
-										<th>R12</th>
-										<th>R13</th>
-										<th>R14</th>
-										<th>R15</th>
-										<th>RFLAGS</th>
-									</tr>
-								</thead>
-								<tbody>
-									<tr>
-										<td>
-											<code>{fmtHex(debugView.registers.rip, 16)}</code>
-										</td>
-										<td>
-											<code>{fmtHex(debugView.registers.rsp, 16)}</code>
-										</td>
-										<td>
-											<code>{fmtHex(debugView.registers.rbp, 16)}</code>
-										</td>
-										<td>
-											<code>{fmtHex(debugView.registers.rax, 16)}</code>
-										</td>
-										<td>
-											<code>{fmtHex(debugView.registers.rbx, 16)}</code>
-										</td>
-										<td>
-											<code>{fmtHex(debugView.registers.rcx, 16)}</code>
-										</td>
-										<td>
-											<code>{fmtHex(debugView.registers.rdx, 16)}</code>
-										</td>
-										<td>
-											<code>{fmtHex(debugView.registers.rsi, 16)}</code>
-										</td>
-										<td>
-											<code>{fmtHex(debugView.registers.rdi, 16)}</code>
-										</td>
-										<td>
-											<code>{fmtHex(debugView.registers.r8, 16)}</code>
-										</td>
-										<td>
-											<code>{fmtHex(debugView.registers.r9, 16)}</code>
-										</td>
-										<td>
-											<code>{fmtHex(debugView.registers.r10, 16)}</code>
-										</td>
-										<td>
-											<code>{fmtHex(debugView.registers.r11, 16)}</code>
-										</td>
-										<td>
-											<code>{fmtHex(debugView.registers.r12, 16)}</code>
-										</td>
-										<td>
-											<code>{fmtHex(debugView.registers.r13, 16)}</code>
-										</td>
-										<td>
-											<code>{fmtHex(debugView.registers.r14, 16)}</code>
-										</td>
-										<td>
-											<code>{fmtHex(debugView.registers.r15, 16)}</code>
-										</td>
-										<td>
-											<code>{fmtHex(debugView.registers.rflags, 8)}</code>
-										</td>
-									</tr>
-								</tbody>
-							</table>
-						</div>
-					) : null}
-
-					<div class="dump-info-panel__table-wrap">
-						<p class="dump-info-panel__table-title text-medium">
-							Instruction Listing (surrounding)
-						</p>
-						<table class="dump-info-table dump-disassembly-table">
-							<thead>
-								<tr>
-									<th>Addr</th>
-									<th>Bytes</th>
-									<th>Instruction</th>
-								</tr>
-							</thead>
-							<tbody>
-								{debugView.lines.length > 0 ? (
-									<For each={debugView.lines}>
-										{(line) => (
-											<tr
-												class={
-													line.isCurrent
-														? "dump-disassembly-table__current"
-														: ""
-												}
-											>
-												<td>
-													<code>{fmtHex(line.address, 16)}</code>
-												</td>
-												<td>
-													<code>{line.bytesHex}</code>
-												</td>
-												<td>
-													<code>
-														{line.mnemonic}
-														{line.operands ? ` ${line.operands}` : ""}
-													</code>
-												</td>
-											</tr>
-										)}
-									</For>
-								) : (
-									<tr>
-										<td colSpan={4}>
-											<code>none</code>
-										</td>
-									</tr>
-								)}
-							</tbody>
-						</table>
-					</div>
-				</section>
 			) : null}
 
 			{hasSection("modules") && props.dumpInfo.moduleList ? (

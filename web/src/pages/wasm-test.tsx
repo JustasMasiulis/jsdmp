@@ -1,40 +1,6 @@
 import { createSignal, Show } from "solid-js";
 import DumpSummary, { type ParsedDumpInfo } from "../components/DumpSummary";
-import type { WasmDisassemblerExports } from "../lib/disassembly";
 import { MiniDump } from "../lib/minidump";
-
-type WasmExports = WasmDisassemblerExports;
-
-const g_memory = new WebAssembly.Memory({
-	initial: 16n,
-	maximum: 16n,
-	shared: true,
-	address: "i64",
-});
-
-let g_exports: WasmExports;
-
-async function initWasm() {
-	if (g_exports) return;
-
-	const response = await fetch("/web_dmp.wasm");
-	if (!response.ok) {
-		throw new Error(`HTTP ${response.status} for wasm_dmp.wasm`);
-	}
-
-	const imports: WebAssembly.Imports = {
-		env: {
-			memory: g_memory,
-		},
-	};
-
-	const module = await WebAssembly.compileStreaming(response);
-	const instance = await WebAssembly.instantiate(module, imports);
-	g_exports = instance.exports as WasmExports;
-	console.log(g_exports);
-}
-
-initWasm();
 
 export default function WasmTest() {
 	const [dumpFile, setDumpFile] = createSignal<File | null>(null);
@@ -98,7 +64,7 @@ export default function WasmTest() {
 				readMemoryAt: parsed.readMemoryAt.bind(parsed),
 				readMemoryViewAt: parsed.readMemoryViewAt.bind(parsed),
 				findMemoryRangeAt: parsed.findMemoryRangeAt.bind(parsed),
-				debugView: null,
+				debugContext: null,
 			});
 		} catch (error) {
 			setDumpInfo(null);

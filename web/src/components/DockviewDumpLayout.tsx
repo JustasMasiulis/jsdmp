@@ -8,6 +8,7 @@ import {
 } from "dockview-core";
 import { createSignal, For, onCleanup, onMount } from "solid-js";
 import { render } from "solid-js/web";
+import DisassemblyViewPanel from "./DisassemblyViewPanel";
 import DumpSummary, {
 	type DumpSection,
 	type ParsedDumpInfo,
@@ -16,6 +17,7 @@ import MemoryViewPanel from "./MemoryViewPanel";
 
 const LAYOUT_STORAGE_KEY = "wasm-dump-debugger:dockview:v1";
 const MEMORY_COMPONENT = "memory-view";
+const DISASSEMBLY_COMPONENT = "disassembly";
 const MEMORY_BASE_ID = "memory";
 
 const PANEL_SPECS = [
@@ -98,6 +100,27 @@ const createMemoryRenderer = (
 
 	const dispose = render(
 		() => <MemoryViewPanel dumpInfo={dumpInfo} panelId={panelId} />,
+		element,
+	);
+
+	return {
+		element,
+		init: () => {
+			// Solid content is mounted eagerly into `element`.
+		},
+		dispose,
+	};
+};
+
+const createDisassemblyRenderer = (
+	dumpInfo: ParsedDumpInfo,
+	panelId: string,
+): IContentRenderer => {
+	const element = document.createElement("div");
+	element.className = "dump-dockview-panel size-full";
+
+	const dispose = render(
+		() => <DisassemblyViewPanel dumpInfo={dumpInfo} panelId={panelId} />,
 		element,
 	);
 
@@ -299,6 +322,9 @@ export default function DockviewDumpLayout(props: DockviewDumpLayoutProps) {
 			createComponent: (options) => {
 				if (options.name === MEMORY_COMPONENT) {
 					return createMemoryRenderer(props.dumpInfo, options.id);
+				}
+				if (options.name === DISASSEMBLY_COMPONENT) {
+					return createDisassemblyRenderer(props.dumpInfo, options.id);
 				}
 
 				return createSummaryRenderer(

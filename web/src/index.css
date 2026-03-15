@@ -368,6 +368,10 @@ Design language notes for future re-additions:
 		background: color-mix(in oklab, var(--color-sidebar-indicator) 10%, white);
 	}
 
+	.memory-view-table__row.dump-disassembly-table__current {
+		background: color-mix(in oklab, var(--color-sidebar-indicator) 10%, white);
+	}
+
 	.dump-dockview-shell {
 		display: flex;
 		flex-direction: column;
@@ -575,6 +579,11 @@ Design language notes for future re-additions:
 	}
 
 	.memory-view-table__cell--hex {
+		user-select: text;
+		-webkit-user-select: text;
+	}
+
+	.memory-view-table__cell--instruction {
 		user-select: text;
 		-webkit-user-select: text;
 	}
