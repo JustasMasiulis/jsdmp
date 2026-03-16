@@ -1,7 +1,9 @@
 import { For, type ParentComponent } from "solid-js";
-import type { DebugDisassemblyContext } from "../lib/debugDisassembly";
+import type { ResolvedDumpContext } from "../lib/context";
 import {
 	fmtHex,
+	fmtHex8,
+	fmtHex16,
 	fmtOs,
 	fmtPriority,
 	fmtProductAndSuite,
@@ -43,8 +45,7 @@ export type ParsedDumpInfo = {
 		address: bigint,
 		hintRangeIndex?: number,
 	) => MinidumpMemoryRangeMatch | null;
-	debugContext: DebugDisassemblyContext | null;
-	loadDebugContext?: () => Promise<DebugDisassemblyContext>;
+	resolvedContext: ResolvedDumpContext | null;
 };
 
 export type DumpSection =
@@ -177,28 +178,36 @@ const emptyCell = "-";
 const buildAssociatedRows = (
 	associatedThreads: MinidumpAssociatedThread[] | null,
 ): string[][] =>
-	(associatedThreads ?? []).map((associated) => {
-		const thread = associated.thread;
-		const threadInfo = associated.threadInfo;
+	(associatedThreads ?? []).map((thread) => {
 		return [
-			String(associated.threadId),
-			thread ? String(thread.suspendCount) : emptyCell,
-			thread ? fmtPriority(thread.priorityClass, thread.priority) : emptyCell,
-			thread ? fmtHex(thread.teb, 16) : emptyCell,
-			thread ? fmtHex(thread.stack.startOfMemoryRange, 16) : emptyCell,
-			thread ? String(thread.stack.location.dataSize) : emptyCell,
-			thread ? fmtHex(thread.stack.location.rva, 8) : emptyCell,
-			thread ? String(thread.threadContext.dataSize) : emptyCell,
-			thread ? fmtHex(thread.threadContext.rva, 8) : emptyCell,
-			threadInfo ? fmtHex(threadInfo.dumpFlags, 8) : emptyCell,
-			threadInfo ? fmtHex(threadInfo.dumpError, 8) : emptyCell,
-			threadInfo ? String(threadInfo.exitStatus) : emptyCell,
-			threadInfo ? fmtHex(threadInfo.createTime, 16) : emptyCell,
-			threadInfo ? fmtHex(threadInfo.exitTime, 16) : emptyCell,
-			threadInfo ? fmtHex(threadInfo.kernelTime, 16) : emptyCell,
-			threadInfo ? fmtHex(threadInfo.userTime, 16) : emptyCell,
-			threadInfo ? fmtHex(threadInfo.startAddress, 16) : emptyCell,
-			threadInfo ? fmtHex(threadInfo.affinity, 16) : emptyCell,
+			String(thread.threadId),
+			thread.suspendCount ? String(thread.suspendCount) : emptyCell,
+			thread.priorityClass
+				? fmtPriority(thread.priorityClass, thread.priority)
+				: emptyCell,
+			thread.teb ? fmtHex16(thread.teb) : emptyCell,
+			thread.stack.startOfMemoryRange
+				? fmtHex16(thread.stack.startOfMemoryRange)
+				: emptyCell,
+			thread.stack.location.dataSize
+				? String(thread.stack.location.dataSize)
+				: emptyCell,
+			thread.stack.location.rva
+				? fmtHex8(thread.stack.location.rva)
+				: emptyCell,
+			thread.threadContext.dataSize
+				? String(thread.threadContext.dataSize)
+				: emptyCell,
+			thread.threadContext.rva ? fmtHex8(thread.threadContext.rva) : emptyCell,
+			thread.dumpFlags ? fmtHex8(thread.dumpFlags) : emptyCell,
+			thread.dumpError ? fmtHex8(thread.dumpError) : emptyCell,
+			thread.exitStatus ? String(thread.exitStatus) : emptyCell,
+			thread.createTime ? fmtHex16(thread.createTime) : emptyCell,
+			thread.exitTime ? fmtHex16(thread.exitTime) : emptyCell,
+			thread.kernelTime ? fmtHex16(thread.kernelTime) : emptyCell,
+			thread.userTime ? fmtHex16(thread.userTime) : emptyCell,
+			thread.startAddress ? fmtHex16(thread.startAddress) : emptyCell,
+			thread.affinity ? fmtHex16(thread.affinity) : emptyCell,
 		];
 	});
 

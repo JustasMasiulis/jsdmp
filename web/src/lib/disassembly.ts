@@ -1,5 +1,5 @@
 import { readCString } from "./reader";
-import { getWasm, WASM_EXPORTS, WASM_MEMORY } from "./wasm";
+import { WASM_EXPORTS, WASM_MEMORY } from "./wasm";
 
 export const MAX_INSTRUCTION_LENGTH = 15;
 

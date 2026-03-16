@@ -19,3 +19,15 @@ export function readCString(
 
 	return textDecoder.decode(copy);
 }
+
+export function readU64(memory: DataView, offset: number): bigint {
+	return memory.getBigUint64(offset, true);
+}
+
+export function readU32(memory: DataView, offset: number): number {
+	return memory.getUint32(offset, true);
+}
+
+export function readU16(memory: DataView, offset: number): number {
+	return memory.getUint16(offset, true);
+}

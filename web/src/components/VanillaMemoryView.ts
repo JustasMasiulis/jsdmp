@@ -357,11 +357,7 @@ export class VanillaMemoryView {
 	}
 
 	private instructionPointer() {
-		return (
-			this.dumpInfo.debugContext?.instructionPointer ??
-			this.dumpInfo.exceptionStream?.exceptionRecord.exceptionAddress ??
-			null
-		);
+		return this.dumpInfo.resolvedContext?.anchorAddress ?? null;
 	}
 
 	private maybeFollowInstructionPointer() {

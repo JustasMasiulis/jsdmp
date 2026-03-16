@@ -68,6 +68,14 @@ export function fmtHex(value: number | bigint, padLength = 0): string {
 	return padLength > 0 ? hex.padStart(padLength, "0") : hex;
 }
 
+export function fmtHex8(value: number | bigint): string {
+	return fmtHex(value, 8);
+}
+
+export function fmtHex16(value: number | bigint): string {
+	return fmtHex(value, 16);
+}
+
 enum ThreadPriorityClass {
 	NORMAL_PRIORITY_CLASS = 0x00000020,
 	IDLE_PRIORITY_CLASS = 0x00000040,

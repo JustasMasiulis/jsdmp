@@ -197,11 +197,9 @@ export type MinidumpThreadInfo = {
 	affinity: bigint;
 };
 
-export type MinidumpAssociatedThread = {
-	threadId: number;
-	thread: MinidumpThread | null;
-	threadInfo: MinidumpThreadInfo | null;
-};
+export type MinidumpAssociatedThread =
+	| (MinidumpThread & Partial<MinidumpThreadInfo>)
+	| (MinidumpThreadInfo & Partial<MinidumpThread>);
 
 export type MinidumpException = {
 	exceptionCode: number;
@@ -226,10 +224,10 @@ export class MiniDump {
 	streams: Map<number, DataView> = new Map();
 	systemInfo: MinidumpSystemInfo | null = null;
 	miscInfo: MinidumpMiscInfo | null = null;
-	associatedThreads: MinidumpAssociatedThread[] | null = null;
+	associatedThreads: MinidumpAssociatedThread[] = [];
 	exceptionStream: MinidumpExceptionStream | null = null;
-	moduleList: MinidumpModule[] | null = null;
-	unloadedModuleList: MinidumpUnloadedModule[] | null = null;
+	moduleList: MinidumpModule[] = [];
+	unloadedModuleList: MinidumpUnloadedModule[] = [];
 	memoryRanges: MinidumpMemory64Range[] = [];
 
 	constructor(data: ArrayBuffer) {
@@ -314,6 +312,20 @@ export class MiniDump {
 	}
 
 	readLocationBytes(location: MinidumpLocationDescriptor): Uint8Array | null {
+		const view = this.readLocationView(location);
+		if (!view) {
+			return null;
+		}
+
+		return new Uint8Array(
+			this._data.buffer.slice(
+				view.byteOffset,
+				view.byteOffset + view.byteLength,
+			),
+		);
+	}
+
+	readLocationView(location: MinidumpLocationDescriptor): DataView | null {
 		if (
 			location.dataSize <= 0 ||
 			location.rva <= 0 ||
@@ -322,8 +334,10 @@ export class MiniDump {
 			return null;
 		}
 
-		return new Uint8Array(
-			this._data.buffer.slice(location.rva, location.rva + location.dataSize),
+		return new DataView(
+			this._data.buffer,
+			this._data.byteOffset + location.rva,
+			location.dataSize,
 		);
 	}
 
@@ -454,32 +468,24 @@ export class MiniDump {
 	private associateThreadArrays(
 		threadList: MinidumpThread[],
 		threadInfoList: MinidumpThreadInfo[],
-	): MinidumpAssociatedThread[] | null {
+	): MinidumpAssociatedThread[] {
 		const associated = new Map<number, MinidumpAssociatedThread>();
 
 		for (const thread of threadList) {
-			associated.set(thread.threadId, {
-				threadId: thread.threadId,
-				thread,
-				threadInfo: null,
-			});
+			associated.set(thread.threadId, thread);
 		}
 
 		for (const threadInfo of threadInfoList) {
 			const existing = associated.get(threadInfo.threadId);
 			if (existing) {
-				existing.threadInfo = threadInfo;
+				Object.assign(existing, threadInfo);
 				continue;
 			}
 
-			associated.set(threadInfo.threadId, {
-				threadId: threadInfo.threadId,
-				thread: null,
-				threadInfo,
-			});
+			associated.set(threadInfo.threadId, threadInfo);
 		}
 
-		return associated.size > 0 ? [...associated.values()] : null;
+		return [...associated.values()];
 	}
 
 	private parseThreadListStream(

@@ -1,5 +1,6 @@
 import { createSignal, Show } from "solid-js";
 import DumpSummary, { type ParsedDumpInfo } from "../components/DumpSummary";
+import { resolveDumpContext } from "../lib/context";
 import { MiniDump } from "../lib/minidump";
 
 export default function WasmTest() {
@@ -47,6 +48,13 @@ export default function WasmTest() {
 			const data = await file.arrayBuffer();
 			const parsed = new MiniDump(data);
 			const streamTypes = [...parsed.streams.keys()].sort((a, b) => a - b);
+			const resolvedContext = (() => {
+				try {
+					return resolveDumpContext(parsed);
+				} catch {
+					return null;
+				}
+			})();
 
 			setDumpInfo({
 				checksum: parsed.checksum,
@@ -64,7 +72,7 @@ export default function WasmTest() {
 				readMemoryAt: parsed.readMemoryAt.bind(parsed),
 				readMemoryViewAt: parsed.readMemoryViewAt.bind(parsed),
 				findMemoryRangeAt: parsed.findMemoryRangeAt.bind(parsed),
-				debugContext: null,
+				resolvedContext,
 			});
 		} catch (error) {
 			setDumpInfo(null);

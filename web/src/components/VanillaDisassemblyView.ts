@@ -1,6 +1,6 @@
+import type { ResolvedDumpContext } from "../lib/context";
 import {
 	buildDisassemblyListing,
-	type DebugDisassemblyContext,
 	type DebugDisassemblyListing,
 	loadNextDisassemblyLines,
 	loadPreviousDisassemblyLines,
@@ -86,15 +86,13 @@ const toDecodeErrorListing = (
 export class VanillaDisassemblyView {
 	private readonly panelId: string;
 	private dumpInfo: ParsedDumpInfo;
-	private debugContext: DebugDisassemblyContext | null;
+	private resolvedContext: ResolvedDumpContext | null;
 	private listing: DebugDisassemblyListing | null = null;
 	private followInstructionPointer = true;
 	private manualAddress: bigint | null = null;
 	private addressError = "";
-	private isLoading = false;
 	private isLoadingPrevious = false;
 	private isLoadingNext = false;
-	private loadRequestVersion = 0;
 	private isDisposed = false;
 
 	private readonly root: HTMLElement;
@@ -110,7 +108,7 @@ export class VanillaDisassemblyView {
 		const next = this.followCheckbox.checked;
 		this.followInstructionPointer = next;
 		if (!next && this.manualAddress === null) {
-			const followAddress = this.debugContext?.instructionPointer;
+			const followAddress = this.resolvedContext?.anchorAddress;
 			if (followAddress !== null && followAddress !== undefined) {
 				this.manualAddress = followAddress;
 			}
@@ -148,21 +146,21 @@ export class VanillaDisassemblyView {
 		viewport: VirtualListingViewportState,
 	) => {
 		if (viewport.logicalStartRow <= BACKWARD_LOAD_THRESHOLD_ROWS) {
-			void this.maybeLoadPreviousLines();
+			this.maybeLoadPreviousLines();
 		}
 
 		if (
 			viewport.logicalStartRow + viewport.viewportRows >=
 			viewport.rowCount - FORWARD_LOAD_THRESHOLD_ROWS
 		) {
-			void this.maybeLoadNextLines();
+			this.maybeLoadNextLines();
 		}
 	};
 
 	constructor(options: DisassemblyViewPanelOptions) {
 		this.panelId = options.panelId;
 		this.dumpInfo = options.dumpInfo;
-		this.debugContext = options.dumpInfo.debugContext;
+		this.resolvedContext = options.dumpInfo.resolvedContext;
 		this.root = this.createRoot(options.panelId);
 		this.table = new FixedRowVirtualTable<DisassemblyRowState>({
 			adapter: this.createDisassemblyAdapter(),
@@ -195,13 +193,11 @@ export class VanillaDisassemblyView {
 
 		const changed = nextDumpInfo !== this.dumpInfo;
 		this.dumpInfo = nextDumpInfo;
-		this.debugContext = nextDumpInfo.debugContext;
+		this.resolvedContext = nextDumpInfo.resolvedContext;
 		if (changed) {
 			this.listing = null;
-			this.isLoading = false;
 			this.isLoadingPrevious = false;
 			this.isLoadingNext = false;
-			this.loadRequestVersion += 1;
 			this.clearAddressError();
 		}
 		this.refreshView(true);
@@ -213,7 +209,6 @@ export class VanillaDisassemblyView {
 		}
 
 		this.isDisposed = true;
-		this.loadRequestVersion += 1;
 		this.root.removeEventListener("submit", this.onAddressSubmit);
 		this.followCheckbox.removeEventListener("change", this.onFollowChange);
 		this.table.dispose();
@@ -361,7 +356,7 @@ export class VanillaDisassemblyView {
 
 	private currentAnchor() {
 		if (this.followInstructionPointer) {
-			return this.debugContext?.instructionPointer ?? null;
+			return this.resolvedContext?.anchorAddress ?? null;
 		}
 
 		if (this.manualAddress === null) {
@@ -373,13 +368,40 @@ export class VanillaDisassemblyView {
 			: null;
 	}
 
-	private refreshView(allowLazyLoad: boolean) {
+	private refreshView(reloadListing: boolean) {
 		this.syncDisplayedAddress();
+		if (reloadListing) {
+			this.reloadListing();
+		}
 		this.recomputeRows(true);
 		this.syncControlState();
 		this.requestRender(true);
-		if (allowLazyLoad) {
-			void this.ensureListingLoaded();
+	}
+
+	private reloadListing() {
+		this.isLoadingPrevious = false;
+		this.isLoadingNext = false;
+
+		const context = this.resolvedContext;
+		if (!context) {
+			this.listing = null;
+			return;
+		}
+
+		const anchorAddress = this.currentAnchor();
+		if (anchorAddress === null) {
+			this.listing = null;
+			return;
+		}
+
+		try {
+			this.listing = buildDisassemblyListing(this.dumpInfo, anchorAddress);
+		} catch (error) {
+			const message = error instanceof Error ? error.message : String(error);
+			this.listing = toDecodeErrorListing(
+				`Disassembly loading failed: ${message}`,
+				anchorAddress,
+			);
 		}
 	}
 
@@ -403,7 +425,7 @@ export class VanillaDisassemblyView {
 	}
 
 	private firstLoadedAddress() {
-		return this.lines()[0]?.address ?? null;
+		return this.lines()[3]?.address ?? null;
 	}
 
 	private lastLoadedEndAddress() {
@@ -447,35 +469,26 @@ export class VanillaDisassemblyView {
 	}
 
 	private emptyMessage() {
-		if (this.isLoading) {
-			return "Loading disassembly...";
-		}
 		if (this.addressError) {
 			return this.listing?.message || "No disassembly instructions available.";
 		}
 		if (this.listing) {
 			return this.listing.message || "No disassembly instructions available.";
 		}
-		if (this.debugContext) {
+		if (
+			!this.followInstructionPointer &&
+			this.manualAddress !== null &&
+			!this.dumpInfo.findMemoryRangeAt(this.manualAddress)
+		) {
+			return "Enter an address that exists in dump memory to view disassembly.";
+		}
+		if (this.resolvedContext) {
 			if (
 				this.followInstructionPointer &&
-				this.debugContext.instructionPointer === null
+				this.resolvedContext.anchorAddress === null
 			) {
-				return this.debugContext.message || "No instruction pointer available.";
+				return "No instruction pointer available.";
 			}
-			if (
-				!this.followInstructionPointer &&
-				this.manualAddress !== null &&
-				!this.dumpInfo.findMemoryRangeAt(this.manualAddress)
-			) {
-				return "Enter an address that exists in dump memory to view disassembly.";
-			}
-			if (this.debugContext.status === "unsupported_arch") {
-				return this.debugContext.message;
-			}
-		}
-		if (this.dumpInfo.loadDebugContext) {
-			return "Disassembly has not been loaded yet.";
 		}
 		return "Disassembly view is unavailable for this dump.";
 	}
@@ -494,103 +507,28 @@ export class VanillaDisassemblyView {
 		this.syncControlState();
 	}
 
-	private async ensureListingLoaded() {
-		const requestVersion = ++this.loadRequestVersion;
-		this.isLoading = true;
-		this.isLoadingPrevious = false;
-		this.isLoadingNext = false;
-		this.syncControlState();
-
-		try {
-			const context = await this.ensureDebugContextLoaded();
-			if (this.isDisposed || requestVersion !== this.loadRequestVersion) {
-				return;
-			}
-
-			if (!context) {
-				this.listing = null;
-				return;
-			}
-
-			if (context.status === "unsupported_arch") {
-				this.listing = {
-					status: context.status,
-					message: context.message,
-					anchorAddress: null,
-					anchorLineIndex: -1,
-					hasMorePrevious: false,
-					hasMoreNext: false,
-					lines: [],
-				};
-				return;
-			}
-
-			const anchorAddress = this.currentAnchor();
-			if (anchorAddress === null) {
-				this.listing = null;
-				return;
-			}
-
-			if (this.isDisposed || requestVersion !== this.loadRequestVersion) {
-				return;
-			}
-
-			this.listing = buildDisassemblyListing(
-				this.dumpInfo,
-				context,
-				anchorAddress,
-			);
-		} catch (error) {
-			if (this.isDisposed || requestVersion !== this.loadRequestVersion) {
-				return;
-			}
-
-			const message = error instanceof Error ? error.message : String(error);
-			this.listing = toDecodeErrorListing(
-				`Disassembly loading failed: ${message}`,
-				this.currentAnchor(),
-			);
-		} finally {
-			if (!this.isDisposed && requestVersion === this.loadRequestVersion) {
-				this.isLoading = false;
-				this.syncDisplayedAddress();
-				this.recomputeRows(true);
-				this.syncControlState();
-				this.requestRender(true);
-			}
-		}
-	}
-
-	private async maybeLoadPreviousLines() {
-		if (
-			this.isDisposed ||
-			this.isLoading ||
-			this.isLoadingPrevious ||
-			this.isLoadingNext
-		) {
+	private maybeLoadPreviousLines() {
+		if (this.isDisposed || this.isLoadingPrevious || this.isLoadingNext) {
 			return;
 		}
 
 		const listing = this.listing;
 		const beforeAddress = this.firstLoadedAddress();
 		if (!listing || beforeAddress === null || !listing.hasMorePrevious) {
+			console.log("no previous lines 1", listing, beforeAddress);
 			return;
 		}
 
-		const requestVersion = this.loadRequestVersion;
 		this.isLoadingPrevious = true;
 
 		try {
-			if (this.isDisposed || requestVersion !== this.loadRequestVersion) {
-				return;
-			}
-
 			const currentListing = this.listing;
 			if (
 				!currentListing ||
 				currentListing.lines.length === 0 ||
 				currentListing.lines[0]?.address !== beforeAddress
 			) {
+				console.log("no previous lines 2");
 				return;
 			}
 
@@ -600,6 +538,7 @@ export class VanillaDisassemblyView {
 			);
 			currentListing.hasMorePrevious = previousLoad.hasMoreBefore;
 			if (previousLoad.lines.length === 0) {
+				console.log("no previous lines");
 				return;
 			}
 
@@ -610,26 +549,19 @@ export class VanillaDisassemblyView {
 			this.table.setRowCount(currentListing.lines.length);
 			this.table.shiftViewportRows(previousLoad.lines.length);
 		} catch {
-			if (!this.isDisposed && requestVersion === this.loadRequestVersion) {
-				const currentListing = this.listing;
-				if (currentListing) {
-					currentListing.hasMorePrevious = false;
-				}
+			const currentListing = this.listing;
+			if (currentListing) {
+				currentListing.hasMorePrevious = false;
 			}
 		} finally {
-			if (!this.isDisposed && requestVersion === this.loadRequestVersion) {
+			if (!this.isDisposed) {
 				this.isLoadingPrevious = false;
 			}
 		}
 	}
 
-	private async maybeLoadNextLines() {
-		if (
-			this.isDisposed ||
-			this.isLoading ||
-			this.isLoadingPrevious ||
-			this.isLoadingNext
-		) {
+	private maybeLoadNextLines() {
+		if (this.isDisposed || this.isLoadingPrevious || this.isLoadingNext) {
 			return;
 		}
 
@@ -639,14 +571,9 @@ export class VanillaDisassemblyView {
 			return;
 		}
 
-		const requestVersion = this.loadRequestVersion;
 		this.isLoadingNext = true;
 
 		try {
-			if (this.isDisposed || requestVersion !== this.loadRequestVersion) {
-				return;
-			}
-
 			const currentListing = this.listing;
 			if (!currentListing || this.lastLoadedEndAddress() !== startAddress) {
 				return;
@@ -662,37 +589,15 @@ export class VanillaDisassemblyView {
 			this.table.setRowCount(currentListing.lines.length);
 			this.requestRender(true);
 		} catch {
-			if (!this.isDisposed && requestVersion === this.loadRequestVersion) {
-				const currentListing = this.listing;
-				if (currentListing) {
-					currentListing.hasMoreNext = false;
-				}
+			const currentListing = this.listing;
+			if (currentListing) {
+				currentListing.hasMoreNext = false;
 			}
 		} finally {
-			if (!this.isDisposed && requestVersion === this.loadRequestVersion) {
+			if (!this.isDisposed) {
 				this.isLoadingNext = false;
 			}
 		}
-	}
-
-	private async ensureDebugContextLoaded() {
-		if (this.debugContext) {
-			return this.debugContext;
-		}
-
-		const load = this.dumpInfo.loadDebugContext;
-		if (!load) {
-			return null;
-		}
-
-		const loaded = await load();
-		if (this.isDisposed || this.dumpInfo.loadDebugContext !== load) {
-			return null;
-		}
-
-		this.debugContext = loaded;
-		this.dumpInfo.debugContext = loaded;
-		return loaded;
 	}
 
 	private requestRender(forceRows: boolean) {

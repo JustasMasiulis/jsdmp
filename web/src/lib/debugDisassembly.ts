@@ -1,47 +1,11 @@
 import { disassembleInstruction, MAX_INSTRUCTION_LENGTH } from "./disassembly";
-import type {
-	MiniDump,
-	MinidumpAssociatedThread,
-	MinidumpLocationDescriptor,
-	MinidumpMemoryRangeMatch,
-} from "./minidump";
+import type { MinidumpMemoryRangeMatch } from "./minidump";
 import { maxU64 } from "./utils";
 
-const CONTEXT_AMD64 = 0x00100000;
-const DISASSEMBLY_LOOKBACK_BYTES = 64;
+const DISASSEMBLY_LOOKBACK_BYTES = 256;
 const DISASSEMBLY_PAGE_BYTES = 0x1000;
 
-export type DecodedThreadContextX64 = {
-	contextFlags: number;
-	rflags: number;
-	rax: bigint;
-	rbx: bigint;
-	rcx: bigint;
-	rdx: bigint;
-	rsi: bigint;
-	rdi: bigint;
-	rbp: bigint;
-	rsp: bigint;
-	r8: bigint;
-	r9: bigint;
-	r10: bigint;
-	r11: bigint;
-	r12: bigint;
-	r13: bigint;
-	r14: bigint;
-	r15: bigint;
-	rip: bigint;
-};
-
-export type DebugDisassemblyContextStatus =
-	| "ok"
-	| "unsupported_arch"
-	| "missing_context";
-
-export type DisassemblyStatus =
-	| DebugDisassemblyContextStatus
-	| "missing_memory"
-	| "decode_error";
+export type DisassemblyStatus = "ok" | "missing_memory" | "decode_error";
 
 export type DisassemblyLine = {
 	address: bigint;
@@ -50,16 +14,6 @@ export type DisassemblyLine = {
 	mnemonic: string;
 	operands: string;
 	isCurrent: boolean;
-};
-
-export type DebugDisassemblyContext = {
-	status: DebugDisassemblyContextStatus;
-	message: string;
-	threadId: number | null;
-	instructionPointer: bigint | null;
-	exceptionAddress: bigint | null;
-	exceptionCode: number | null;
-	registers: DecodedThreadContextX64 | null;
 };
 
 export type DebugDisassemblyListing = {
@@ -98,7 +52,7 @@ type DecodedInstruction = {
 	operands: string;
 };
 
-type DecodedLineResult = {
+type LoadedLine = {
 	line: DisassemblyLine;
 	nextAddress: bigint;
 };
@@ -106,171 +60,31 @@ type DecodedLineResult = {
 const fmtAddress = (value: bigint) =>
 	`0x${value.toString(16).toUpperCase().padStart(16, "0")}`;
 
-const formatBytesHex = (bytes: Uint8Array) =>
+const formatBytes = (bytes: Uint8Array) =>
 	[...bytes]
 		.map((value) => value.toString(16).toUpperCase().padStart(2, "0"))
 		.join(" ");
 
-const decodeX64Context = (
-	contextBytes: Uint8Array,
-): DecodedThreadContextX64 | null => {
-	if (contextBytes.byteLength < 0x100) {
-		return null;
-	}
-
-	const view = new DataView(
-		contextBytes.buffer,
-		contextBytes.byteOffset,
-		contextBytes.byteLength,
-	);
-	const contextFlags = view.getUint32(0x30, true);
-	if ((contextFlags & CONTEXT_AMD64) !== CONTEXT_AMD64) {
-		return null;
-	}
-
-	const readU64 = (offset: number) => view.getBigUint64(offset, true);
-
-	return {
-		contextFlags,
-		rflags: view.getUint32(0x44, true),
-		rax: readU64(0x78),
-		rbx: readU64(0x90),
-		rcx: readU64(0x80),
-		rdx: readU64(0x88),
-		rsi: readU64(0xa8),
-		rdi: readU64(0xb0),
-		rbp: readU64(0xa0),
-		rsp: readU64(0x98),
-		r8: readU64(0xb8),
-		r9: readU64(0xc0),
-		r10: readU64(0xc8),
-		r11: readU64(0xd0),
-		r12: readU64(0xd8),
-		r13: readU64(0xe0),
-		r14: readU64(0xe8),
-		r15: readU64(0xf0),
-		rip: readU64(0xf8),
-	};
-};
-
-const decodeContextFromLocation = (
-	dump: MiniDump,
-	location: MinidumpLocationDescriptor | null | undefined,
-): DecodedThreadContextX64 | null => {
-	if (!location) {
-		return null;
-	}
-
-	const bytes = dump.readLocationBytes(location);
-	if (!bytes) {
-		return null;
-	}
-
-	return decodeX64Context(bytes);
-};
-
-const resolveContext = (
-	dump: MiniDump,
-): {
-	threadId: number | null;
-	registers: DecodedThreadContextX64 | null;
-} => {
-	const exceptionThreadId = dump.exceptionStream?.threadId ?? null;
-	const exceptionContext = decodeContextFromLocation(
-		dump,
-		dump.exceptionStream?.threadContext,
-	);
-	if (exceptionContext) {
-		return { threadId: exceptionThreadId, registers: exceptionContext };
-	}
-
-	const tryThread = (thread: MinidumpAssociatedThread) => {
-		const decoded = decodeContextFromLocation(
-			dump,
-			thread.thread?.threadContext,
-		);
-		if (!decoded) {
-			return null;
-		}
-		return {
-			threadId: thread.threadId,
-			registers: decoded,
-		};
-	};
-
-	if (exceptionThreadId !== null) {
-		const exceptionThread = (dump.associatedThreads ?? []).find(
-			(thread) => thread.threadId === exceptionThreadId,
-		);
-		if (exceptionThread) {
-			const resolved = tryThread(exceptionThread);
-			if (resolved) {
-				return resolved;
-			}
-		}
-	}
-
-	for (const thread of dump.associatedThreads ?? []) {
-		const resolved = tryThread(thread);
-		if (resolved) {
-			return resolved;
-		}
-	}
-
-	return {
-		threadId: exceptionThreadId,
-		registers: null,
-	};
-};
-
-const decodeInstructionAt = (
-	source: DisassemblyMemorySource,
-	address: bigint,
-	maxBytes = MAX_INSTRUCTION_LENGTH,
-): DecodedInstruction | null => {
-	const boundedMaxBytes = Math.max(
-		1,
-		Math.min(MAX_INSTRUCTION_LENGTH, Math.floor(maxBytes)),
-	);
-	const bytes = source.readMemoryAt(address, boundedMaxBytes);
-	if (!bytes || bytes.byteLength === 0) {
-		return null;
-	}
-
-	const decoded = disassembleInstruction(bytes, address);
-	if (!decoded) {
-		return null;
-	}
-
-	return {
-		address,
-		length: decoded.length,
-		bytesHex: formatBytesHex(decoded.bytes),
-		mnemonic: decoded.mnemonic,
-		operands: decoded.operands,
-	};
-};
-
 const formatDbOperand = (value: number) =>
 	`0x${value.toString(16).toUpperCase().padStart(2, "0")}`;
 
-const baseContext = (
-	dump: MiniDump,
-	threadId: number | null,
-	registers: DecodedThreadContextX64 | null,
-	instructionPointer: bigint | null,
-): DebugDisassemblyContext => ({
-	status: "ok",
-	message: "",
-	threadId,
-	registers,
-	instructionPointer,
-	exceptionAddress:
-		dump.exceptionStream?.exceptionRecord.exceptionAddress ?? null,
-	exceptionCode: dump.exceptionStream?.exceptionRecord.exceptionCode ?? null,
+const makeLine = (
+	address: bigint,
+	byteLength: number,
+	bytesHex: string,
+	mnemonic: string,
+	operands: string,
+	isCurrent: boolean,
+): DisassemblyLine => ({
+	address,
+	byteLength,
+	bytesHex,
+	mnemonic,
+	operands,
+	isCurrent,
 });
 
-const toListing = (
+const makeListing = (
 	status: DisassemblyStatus,
 	message: string,
 	anchorAddress: bigint | null,
@@ -288,123 +102,153 @@ const toListing = (
 	lines,
 });
 
-const buildFallbackLine = (
+const emptyPreviousLoad = (
+	lines: DisassemblyLine[] = [],
+	hasMoreBefore = false,
+): PreviousDisassemblyLoadResult => ({
+	lines,
+	hasMoreBefore,
+});
+
+const emptyNextLoad = (
+	lines: DisassemblyLine[] = [],
+	hasMoreAfter = false,
+): NextDisassemblyLoadResult => ({
+	lines,
+	hasMoreAfter,
+});
+
+const decodeInstructionAt = (
 	source: DisassemblyMemorySource,
 	address: bigint,
-	isCurrent: boolean,
-): DecodedLineResult | null => {
-	const fallbackByte = source.readMemoryAt(address, 1);
-	if (!fallbackByte || fallbackByte.byteLength === 0) {
+	maxBytes = MAX_INSTRUCTION_LENGTH,
+): DecodedInstruction | null => {
+	const bytes = source.readMemoryAt(
+		address,
+		Math.max(1, Math.min(MAX_INSTRUCTION_LENGTH, Math.floor(maxBytes))),
+	);
+	if (!bytes || bytes.byteLength === 0) {
 		return null;
 	}
 
-	return {
-		line: {
-			address,
-			byteLength: 1,
-			bytesHex: formatBytesHex(fallbackByte),
-			mnemonic: "db",
-			operands: formatDbOperand(fallbackByte[0]),
-			isCurrent,
-		},
-		nextAddress: address + 1n,
-	};
+	const decoded = disassembleInstruction(bytes, address);
+	return decoded
+		? {
+				address,
+				length: decoded.length,
+				bytesHex: formatBytes(decoded.bytes),
+				mnemonic: decoded.mnemonic,
+				operands: decoded.operands,
+			}
+		: null;
 };
 
-const decodeOrFallbackLine = (
+const decodeLine = (
 	source: DisassemblyMemorySource,
 	address: bigint,
 	maxBytes: number,
 	isCurrent: boolean,
-): DecodedLineResult | null => {
+): LoadedLine | null => {
 	const decoded = decodeInstructionAt(source, address, maxBytes);
 	if (decoded) {
 		return {
-			line: {
-				address: decoded.address,
-				byteLength: decoded.length,
-				bytesHex: decoded.bytesHex,
-				mnemonic: decoded.mnemonic,
-				operands: decoded.operands,
+			line: makeLine(
+				decoded.address,
+				decoded.length,
+				decoded.bytesHex,
+				decoded.mnemonic,
+				decoded.operands,
 				isCurrent,
-			},
+			),
 			nextAddress: decoded.address + BigInt(decoded.length),
 		};
 	}
 
-	return buildFallbackLine(source, address, isCurrent);
+	const fallback = source.readMemoryAt(address, 1);
+	if (!fallback || fallback.byteLength === 0) {
+		return null;
+	}
+
+	return {
+		line: makeLine(
+			address,
+			1,
+			formatBytes(fallback),
+			"db",
+			formatDbOperand(fallback[0]),
+			isCurrent,
+		),
+		nextAddress: address + 1n,
+	};
 };
+
+const countLoadedBytes = (lines: readonly DisassemblyLine[]) =>
+	lines.reduce((total, line) => total + line.byteLength, 0);
 
 const buildPreviousGuessLines = (
 	source: DisassemblyMemorySource,
-	anchorAddress: bigint,
+	endAddress: bigint,
 	rangeStart: bigint,
 ): DisassemblyLine[] => {
-	if (anchorAddress <= rangeStart) {
+	if (endAddress <= rangeStart) {
+		console.log("no previous lines 7");
 		return [];
 	}
 
-	const lookbackStart = maxU64(
+	const searchStart = maxU64(
 		rangeStart,
-		anchorAddress - BigInt(DISASSEMBLY_LOOKBACK_BYTES),
+		endAddress - BigInt(DISASSEMBLY_LOOKBACK_BYTES),
 	);
-	const memo = new Map<bigint, DecodedInstruction[]>();
+	const bestChains = new Map<bigint, DecodedInstruction[]>();
 
-	const findBestChainEndingAt = (endAddress: bigint): DecodedInstruction[] => {
-		const cached = memo.get(endAddress);
+	const bestChainEndingAt = (candidateEnd: bigint): DecodedInstruction[] => {
+		const cached = bestChains.get(candidateEnd);
 		if (cached) {
 			return cached;
 		}
 
-		let bestChain: DecodedInstruction[] = [];
+		let best: DecodedInstruction[] = [];
 		const candidateStart = maxU64(
-			lookbackStart,
-			endAddress - BigInt(MAX_INSTRUCTION_LENGTH),
+			searchStart,
+			candidateEnd - BigInt(MAX_INSTRUCTION_LENGTH),
 		);
 
-		for (let start = candidateStart; start < endAddress; start += 1n) {
-			const instructionLength = Number(endAddress - start);
+		for (let start = candidateStart; start < candidateEnd; start += 1n) {
+			const instructionLength = Number(candidateEnd - start);
 			const decoded = decodeInstructionAt(source, start, instructionLength);
 			if (!decoded || decoded.length !== instructionLength) {
 				continue;
 			}
 
-			const prefix = start > lookbackStart ? findBestChainEndingAt(start) : [];
+			const prefix = start > searchStart ? bestChainEndingAt(start) : [];
 			const chain = [...prefix, decoded];
-			const bestStart = bestChain[0]?.address ?? null;
-
+			const currentBestStart = best[0]?.address ?? null;
 			if (
-				chain.length > bestChain.length ||
-				(chain.length === bestChain.length &&
-					(bestStart === null || chain[0].address < bestStart))
+				chain.length > best.length ||
+				(chain.length === best.length &&
+					(currentBestStart === null || chain[0].address < currentBestStart))
 			) {
-				bestChain = chain;
+				best = chain;
 			}
 		}
 
-		memo.set(endAddress, bestChain);
-		return bestChain;
+		bestChains.set(candidateEnd, best);
+		return best;
 	};
 
-	const bestChain = findBestChainEndingAt(anchorAddress);
-	const bestStart = bestChain[0]?.address ?? null;
-
-	if (bestChain.length === 0 || bestStart === null) {
-		return [];
-	}
-
-	return bestChain.map((decoded) => ({
-		address: decoded.address,
-		byteLength: decoded.length,
-		bytesHex: decoded.bytesHex,
-		mnemonic: decoded.mnemonic,
-		operands: decoded.operands,
-		isCurrent: false,
-	}));
+	const best = bestChainEndingAt(endAddress);
+	console.log("best chains at end address", fmtAddress(endAddress), best);
+	return best.map((decoded) =>
+		makeLine(
+			decoded.address,
+			decoded.length,
+			decoded.bytesHex,
+			decoded.mnemonic,
+			decoded.operands,
+			false,
+		),
+	);
 };
-
-const totalLoadedBytes = (lines: readonly DisassemblyLine[]) =>
-	lines.reduce((sum, line) => sum + line.byteLength, 0);
 
 const loadPreviousWindow = (
 	source: DisassemblyMemorySource,
@@ -412,10 +256,8 @@ const loadPreviousWindow = (
 	rangeStart: bigint,
 ): PreviousDisassemblyLoadResult => {
 	if (beforeAddress <= rangeStart) {
-		return {
-			lines: [],
-			hasMoreBefore: false,
-		};
+		console.log("no previous lines 3");
+		return emptyPreviousLoad();
 	}
 
 	const lines: DisassemblyLine[] = [];
@@ -423,38 +265,33 @@ const loadPreviousWindow = (
 	let loadedBytes = 0;
 
 	while (cursor > rangeStart && loadedBytes < DISASSEMBLY_PAGE_BYTES) {
-		const previousLines = buildPreviousGuessLines(source, cursor, rangeStart);
-		if (previousLines.length === 0) {
-			return {
-				lines,
-				hasMoreBefore: false,
-			};
+		const batch = buildPreviousGuessLines(source, cursor, rangeStart);
+		if (batch.length === 0) {
+			console.log(
+				`no previous lines 4: ${fmtAddress(cursor)} ${fmtAddress(rangeStart)}`,
+			);
+			return emptyPreviousLoad(lines, false);
 		}
 
-		lines.unshift(...previousLines);
-		loadedBytes += totalLoadedBytes(previousLines);
-		const nextCursor = previousLines[0].address;
+		lines.unshift(...batch);
+		loadedBytes += countLoadedBytes(batch);
+		const nextCursor = batch[0].address;
 		if (nextCursor >= cursor) {
-			return {
-				lines,
-				hasMoreBefore: false,
-			};
+			console.log("no previous lines 5");
+			return emptyPreviousLoad(lines, false);
 		}
-
 		cursor = nextCursor;
 	}
 
 	if (cursor <= rangeStart) {
-		return {
-			lines,
-			hasMoreBefore: false,
-		};
+		console.log("no previous lines 6");
+		return emptyPreviousLoad(lines, false);
 	}
 
-	return {
+	return emptyPreviousLoad(
 		lines,
-		hasMoreBefore: buildPreviousGuessLines(source, cursor, rangeStart).length > 0,
-	};
+		buildPreviousGuessLines(source, cursor, rangeStart).length > 0,
+	);
 };
 
 const loadForwardWindow = (
@@ -464,10 +301,7 @@ const loadForwardWindow = (
 ): NextDisassemblyLoadResult => {
 	const match = source.findMemoryRangeAt(startAddress);
 	if (!match) {
-		return {
-			lines: [],
-			hasMoreAfter: false,
-		};
+		return emptyNextLoad();
 	}
 
 	const rangeEnd = match.range.address + match.range.dataSize;
@@ -476,91 +310,40 @@ const loadForwardWindow = (
 	let loadedBytes = 0;
 
 	while (cursor < rangeEnd && loadedBytes < DISASSEMBLY_PAGE_BYTES) {
-		const remaining = rangeEnd - cursor;
 		const maxBytes = Number(
-			remaining > BigInt(MAX_INSTRUCTION_LENGTH)
+			rangeEnd - cursor > BigInt(MAX_INSTRUCTION_LENGTH)
 				? BigInt(MAX_INSTRUCTION_LENGTH)
-				: remaining,
+				: rangeEnd - cursor,
 		);
 		if (maxBytes <= 0) {
 			break;
 		}
 
-		const decoded = decodeOrFallbackLine(
+		const loaded = decodeLine(
 			source,
 			cursor,
 			maxBytes,
 			isCurrentStart && cursor === startAddress,
 		);
-		if (!decoded) {
+		if (!loaded) {
 			break;
 		}
 
-		lines.push(decoded.line);
-		cursor = decoded.nextAddress;
-		loadedBytes += decoded.line.byteLength;
+		lines.push(loaded.line);
+		cursor = loaded.nextAddress;
+		loadedBytes += loaded.line.byteLength;
 	}
 
-	return {
-		lines,
-		hasMoreAfter: cursor < rangeEnd,
-	};
-};
-
-export const resolveDisassemblyContext = (
-	dump: MiniDump,
-): DebugDisassemblyContext => {
-	const processorArchitecture = dump.systemInfo?.processorArchitecture;
-	if (processorArchitecture !== undefined && processorArchitecture !== 9) {
-		return {
-			...baseContext(dump, null, null, null),
-			status: "unsupported_arch",
-			message: "Disassembly view currently supports x64 dumps only.",
-		};
-	}
-
-	const resolved = resolveContext(dump);
-	const exceptionAddress =
-		dump.exceptionStream?.exceptionRecord.exceptionAddress ?? null;
-	const rip = resolved.registers?.rip ?? null;
-	const instructionPointer =
-		exceptionAddress && dump.findMemoryRange(exceptionAddress)
-			? exceptionAddress
-			: (rip ?? exceptionAddress);
-
-	if (!instructionPointer) {
-		return {
-			...baseContext(dump, resolved.threadId, resolved.registers, null),
-			status: "missing_context",
-			message:
-				"No x64 thread context or instruction pointer was found in the dump.",
-		};
-	}
-
-	return {
-		...baseContext(
-			dump,
-			resolved.threadId,
-			resolved.registers,
-			instructionPointer,
-		),
-		status: "ok",
-		message: "Disassembly context resolved.",
-	};
+	return emptyNextLoad(lines, cursor < rangeEnd);
 };
 
 export const buildDisassemblyListing = (
 	source: DisassemblyMemorySource,
-	context: DebugDisassemblyContext,
 	anchorAddress: bigint,
 ): DebugDisassemblyListing => {
-	if (context.status === "unsupported_arch") {
-		return toListing(context.status, context.message, anchorAddress);
-	}
-
 	const anchorMatch = source.findMemoryRangeAt(anchorAddress);
 	if (!anchorMatch) {
-		return toListing(
+		return makeListing(
 			"missing_memory",
 			`Address ${fmtAddress(anchorAddress)} is not present in dump memory.`,
 			anchorAddress,
@@ -574,22 +357,20 @@ export const buildDisassemblyListing = (
 	);
 	const nextLoad = loadForwardWindow(source, anchorAddress, true);
 	const lines = [...previousLoad.lines, ...nextLoad.lines];
-	const anchorLineIndex = previousLoad.lines.length;
-
 	if (lines.length <= previousLoad.lines.length) {
-		return toListing(
+		return makeListing(
 			"decode_error",
 			`Failed to decode bytes at ${fmtAddress(anchorAddress)}.`,
 			anchorAddress,
 		);
 	}
 
-	return toListing(
+	return makeListing(
 		"ok",
 		`Showing guessed disassembly around ${fmtAddress(anchorAddress)}.`,
 		anchorAddress,
 		lines,
-		anchorLineIndex,
+		previousLoad.lines.length,
 		previousLoad.hasMoreBefore,
 		nextLoad.hasMoreAfter,
 	);
@@ -600,14 +381,9 @@ export const loadPreviousDisassemblyLines = (
 	beforeAddress: bigint,
 ): PreviousDisassemblyLoadResult => {
 	const match = source.findMemoryRangeAt(beforeAddress);
-	if (!match) {
-		return {
-			lines: [],
-			hasMoreBefore: false,
-		};
-	}
-
-	return loadPreviousWindow(source, beforeAddress, match.range.address);
+	return match
+		? loadPreviousWindow(source, beforeAddress, match.range.address)
+		: emptyPreviousLoad();
 };
 
 export const loadNextDisassemblyLines = (

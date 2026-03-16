@@ -1,10 +1,7 @@
 import { createResource, createSignal, Show } from "solid-js";
 import DockviewDumpLayout from "./components/DockviewDumpLayout";
 import type { ParsedDumpInfo } from "./components/DumpSummary";
-import {
-	type DebugDisassemblyContext,
-	resolveDisassemblyContext,
-} from "./lib/debugDisassembly";
+import { type ResolvedDumpContext, resolveDumpContext } from "./lib/context";
 import { MiniDump } from "./lib/minidump";
 import { WASM_PROMISE } from "./lib/wasm";
 
@@ -59,39 +56,8 @@ export default function WasmDumpDebugger() {
 			const data = await file.arrayBuffer();
 			const parsed = new MiniDump(data);
 			const streamTypes = [...parsed.streams.keys()].sort((a, b) => a - b);
-			const contextErrorView = (message: string): DebugDisassemblyContext => ({
-				status: "missing_context",
-				message,
-				threadId: parsed.exceptionStream?.threadId ?? null,
-				instructionPointer:
-					parsed.exceptionStream?.exceptionRecord.exceptionAddress ?? null,
-				exceptionAddress:
-					parsed.exceptionStream?.exceptionRecord.exceptionAddress ?? null,
-				exceptionCode:
-					parsed.exceptionStream?.exceptionRecord.exceptionCode ?? null,
-				registers: null,
-			});
 
-			let debugContextPromise: Promise<DebugDisassemblyContext> | null = null;
-			const loadDebugContext = async (): Promise<DebugDisassemblyContext> => {
-				if (debugContextPromise) {
-					return debugContextPromise;
-				}
-
-				debugContextPromise = Promise.resolve().then(() => {
-					try {
-						return resolveDisassemblyContext(parsed);
-					} catch (error) {
-						const message =
-							error instanceof Error ? error.message : String(error);
-						return contextErrorView(
-							`Failed to resolve disassembly context: ${message}`,
-						);
-					}
-				});
-
-				return debugContextPromise;
-			};
+			const resolvedContext: ResolvedDumpContext = resolveDumpContext(parsed);
 
 			setDumpInfo({
 				checksum: parsed.checksum,
@@ -109,8 +75,7 @@ export default function WasmDumpDebugger() {
 				readMemoryAt: parsed.readMemoryAt.bind(parsed),
 				readMemoryViewAt: parsed.readMemoryViewAt.bind(parsed),
 				findMemoryRangeAt: parsed.findMemoryRangeAt.bind(parsed),
-				debugContext: null,
-				loadDebugContext,
+				resolvedContext,
 			});
 		} catch (error) {
 			setDumpInfo(null);
