@@ -8,6 +8,7 @@ import {
 } from "dockview-core";
 import { createSignal, For, onCleanup, onMount } from "solid-js";
 import { render } from "solid-js/web";
+import DisassemblyGraphViewPanel from "./DisassemblyGraphViewPanel";
 import DisassemblyViewPanel from "./DisassemblyViewPanel";
 import DumpSummary, {
 	type DumpSection,
@@ -18,6 +19,7 @@ import MemoryViewPanel from "./MemoryViewPanel";
 const LAYOUT_STORAGE_KEY = "wasm-dump-debugger:dockview:v1";
 const MEMORY_COMPONENT = "memory-view";
 const DISASSEMBLY_COMPONENT = "disassembly";
+const DISASSEMBLY_GRAPH_COMPONENT = "disassembly-graph";
 const MEMORY_BASE_ID = "memory";
 
 const PANEL_SPECS = [
@@ -38,6 +40,12 @@ const PANEL_SPECS = [
 		component: "disassembly",
 		section: "disassembly",
 		title: "Disassembly",
+	},
+	{
+		id: "disassembly-graph",
+		component: DISASSEMBLY_GRAPH_COMPONENT,
+		section: "disassembly",
+		title: "Disassembly Graph",
 	},
 	{
 		id: "modules",
@@ -133,6 +141,27 @@ const createDisassemblyRenderer = (
 	};
 };
 
+const createDisassemblyGraphRenderer = (
+	dumpInfo: ParsedDumpInfo,
+	panelId: string,
+): IContentRenderer => {
+	const element = document.createElement("div");
+	element.className = "dump-dockview-panel size-full";
+
+	const dispose = render(
+		() => <DisassemblyGraphViewPanel dumpInfo={dumpInfo} panelId={panelId} />,
+		element,
+	);
+
+	return {
+		element,
+		init: () => {
+			// Solid content is mounted eagerly into `element`.
+		},
+		dispose,
+	};
+};
+
 const parseMemoryPanelNumber = (panelId: string): number | null => {
 	if (panelId === MEMORY_BASE_ID) {
 		return 1;
@@ -215,13 +244,17 @@ const applyDefaultLayout = (dockview: DockviewApi) => {
 		direction: "right",
 		referencePanel: "summary",
 	});
+	addPanelIfMissing(dockview, "disassembly-graph", {
+		direction: "right",
+		referencePanel: "disassembly",
+	});
 	addPanelIfMissing(dockview, "exception", {
 		direction: "below",
 		referencePanel: "summary",
 	});
 	addPanelIfMissing(dockview, "modules", {
 		direction: "below",
-		referencePanel: "disassembly",
+		referencePanel: "disassembly-graph",
 	});
 	addPanelIfMissing(dockview, "threads", {
 		direction: "right",
@@ -267,7 +300,7 @@ export default function DockviewDumpLayout(props: DockviewDumpLayoutProps) {
 				? {
 						direction: "within",
 						referencePanel: activePanelId,
-					}
+				  }
 				: undefined,
 		);
 		saveLayout(api);
@@ -291,7 +324,7 @@ export default function DockviewDumpLayout(props: DockviewDumpLayoutProps) {
 				? {
 						direction: "within",
 						referencePanel: activePanelId,
-					}
+				  }
 				: undefined,
 		});
 		saveLayout(api);
@@ -325,6 +358,9 @@ export default function DockviewDumpLayout(props: DockviewDumpLayoutProps) {
 				}
 				if (options.name === DISASSEMBLY_COMPONENT) {
 					return createDisassemblyRenderer(props.dumpInfo, options.id);
+				}
+				if (options.name === DISASSEMBLY_GRAPH_COMPONENT) {
+					return createDisassemblyGraphRenderer(props.dumpInfo, options.id);
 				}
 
 				return createSummaryRenderer(
