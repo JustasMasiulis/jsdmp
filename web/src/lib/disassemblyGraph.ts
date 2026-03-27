@@ -14,13 +14,9 @@ export type CfgBuildStatus =
 	| "missing_memory"
 	| "decode_error"
 	| "truncated";
-export type CfgNodeKind =
-	| "block"
-	| "unknown_exit"
-	| "missing_memory"
-	| "decode_error"
-	| "truncated";
-export type CfgEdgeKind = "branch" | "fallthrough" | "unknown";
+
+export type CfgNodeKind = "block" | "missing_memory" | "decode_error";
+export type CfgEdgeKind = "true" | "false" | "unconditional";
 
 export type CfgInstruction = {
 	address: bigint;
@@ -49,7 +45,6 @@ export type CfgEdge = {
 	from: string;
 	to: string;
 	kind: CfgEdgeKind;
-	isBackedge: boolean;
 };
 
 export type CfgBuildOptions = {
@@ -75,29 +70,6 @@ export type CfgBuildResult = {
 	stats: CfgBuildStats;
 };
 
-export type PositionedCfgNode = CfgNode & {
-	x: number;
-	y: number;
-	size: number;
-	color: string;
-	depth: number;
-	width: number;
-	height: number;
-	compactLabel: string;
-	fullLabel: string;
-};
-
-export type PositionedCfgEdge = CfgEdge & {
-	color: string;
-	size: number;
-	label: string | null;
-};
-
-export type PositionedCfgGraph = {
-	nodes: PositionedCfgNode[];
-	edges: PositionedCfgEdge[];
-};
-
 export type CfgInstructionDecoder = (
 	source: DisassemblyMemorySource,
 	address: bigint,
@@ -119,17 +91,15 @@ const DEFAULT_CFG_BUILD_OPTIONS: CfgBuildOptions = {
 	maxInstructions: 1_000_000,
 };
 
-const ESTIMATED_CHAR_WIDTH = 7.2;
-const ESTIMATED_LINE_HEIGHT = 15;
-const CARD_PADDING_X = 16;
-const CARD_PADDING_Y = 12;
-const MIN_CARD_WIDTH = 156;
-const MIN_CARD_HEIGHT = 38;
-const COLUMN_GAP = 72;
-const ROW_GAP = 28;
+export const ESTIMATED_CHAR_WIDTH = 7;
+export const ESTIMATED_LINE_HEIGHT = 15;
+export const CARD_PADDING_X = 16 + 2;
+export const CARD_PADDING_Y = 12 + 2;
+export const MIN_CARD_WIDTH = 156;
+export const MIN_CARD_HEIGHT = 38;
 
 const fmtAddress = (value: bigint) =>
-	`0x${value.toString(16).toUpperCase().padStart(16, "0")}`;
+	`${value.toString(16).toUpperCase().padStart(16, "0")}`;
 
 const formatBytes = (bytes: Uint8Array) =>
 	[...bytes]
@@ -196,21 +166,14 @@ const isBlockTerminator = (instruction: CfgInstruction) => {
 		case "conditional_branch":
 		case "unconditional_branch":
 		case "return":
-		case "interrupt":
-		case "syscall":
-		case "system":
 			return true;
 		default:
 			return false;
 	}
 };
 
-const buildBlockLabel = (
-	startAddress: bigint,
-	instructions: CfgInstruction[],
-) =>
+const buildBlockLabel = (instructions: CfgInstruction[]) =>
 	[
-		fmtAddress(startAddress),
 		...instructions.map(
 			(instruction) =>
 				`${fmtAddress(instruction.address)}  ${instruction.text}`,
@@ -218,13 +181,14 @@ const buildBlockLabel = (
 	].join("\n");
 
 const makeSyntheticSuccessor = (
+	edgeKind: CfgEdgeKind,
 	kind: CfgNodeKind,
 	key: string,
 	title: string,
 	label: string,
 	address: bigint | null,
 ): PendingSuccessor => ({
-	kind: "unknown",
+	kind: edgeKind,
 	targetAddress: null,
 	syntheticKind: kind,
 	syntheticKey: key,
@@ -273,21 +237,12 @@ const buildBlock = (
 	while (true) {
 		if (instructionCounter.value >= options.maxInstructions) {
 			markTruncated();
-			successors.push(
-				makeSyntheticSuccessor(
-					"truncated",
-					"budget",
-					"truncated",
-					"truncated\ninstruction budget reached",
-					null,
-				),
-			);
 			break;
 		}
 
 		if (instructions.length > 0 && knownBlockStarts.has(cursor)) {
 			successors.push({
-				kind: "fallthrough",
+				kind: "unconditional",
 				targetAddress: cursor,
 				syntheticKind: null,
 				syntheticKey: null,
@@ -306,6 +261,7 @@ const buildBlock = (
 
 			successors.push(
 				makeSyntheticSuccessor(
+					"unconditional",
 					"decode_error",
 					`${fmtAddress(startAddress)}:${fmtAddress(cursor)}`,
 					"decode error",
@@ -321,12 +277,11 @@ const buildBlock = (
 		const nextAddress = cursor + BigInt(decoded.byteLength);
 
 		if (isBlockTerminator(decoded)) {
-			if (
-				decoded.controlFlow.hasDirectTarget &&
-				decoded.controlFlow.directTargetAddress !== null
-			) {
+			const isConditional = decoded.controlFlow.kind === "conditional_branch";
+
+			if (decoded.controlFlow.directTargetAddress !== null) {
 				successors.push({
-					kind: "branch",
+					kind: isConditional ? "true" : "unconditional",
 					targetAddress: decoded.controlFlow.directTargetAddress,
 					syntheticKind: null,
 					syntheticKey: null,
@@ -334,22 +289,12 @@ const buildBlock = (
 					syntheticLabel: null,
 					syntheticAddress: null,
 				});
-			} else if (!decoded.controlFlow.hasFallthrough) {
-				successors.push(
-					makeSyntheticSuccessor(
-						"unknown_exit",
-						`${fmtAddress(startAddress)}:${fmtAddress(decoded.address)}`,
-						"indirect exit",
-						`indirect exit\n${decoded.text}`,
-						decoded.address,
-					),
-				);
 			}
 
-			if (decoded.controlFlow.hasFallthrough) {
+			if (isConditional) {
 				if (source.findMemoryRangeAt(nextAddress)) {
 					successors.push({
-						kind: "fallthrough",
+						kind: "false",
 						targetAddress: nextAddress,
 						syntheticKind: null,
 						syntheticKey: null,
@@ -360,6 +305,7 @@ const buildBlock = (
 				} else {
 					successors.push(
 						makeSyntheticSuccessor(
+							"false",
 							"missing_memory",
 							`${fmtAddress(startAddress)}:${fmtAddress(nextAddress)}`,
 							"missing memory",
@@ -375,6 +321,7 @@ const buildBlock = (
 		if (!source.findMemoryRangeAt(nextAddress)) {
 			successors.push(
 				makeSyntheticSuccessor(
+					"unconditional",
 					"missing_memory",
 					`${fmtAddress(startAddress)}:${fmtAddress(nextAddress)}`,
 					"missing memory",
@@ -405,7 +352,7 @@ const buildBlock = (
 			endAddressExclusive,
 			instructions,
 			fmtAddress(startAddress),
-			buildBlockLabel(startAddress, instructions),
+			buildBlockLabel(instructions),
 		),
 		successors,
 	};
@@ -499,13 +446,7 @@ export const buildControlFlowGraph = (
 			return;
 		}
 
-		edgeMap.set(id, {
-			id,
-			from,
-			to,
-			kind,
-			isBackedge: false,
-		});
+		edgeMap.set(id, { id, from, to, kind });
 	};
 
 	enqueueStart(anchorAddress);
@@ -595,33 +536,16 @@ export const buildControlFlowGraph = (
 		}
 	}
 
-	if (truncated) {
-		ensureSyntheticNode(
-			"truncated",
-			"global",
-			"truncated",
-			"truncated\ngraph limits reached",
-			null,
-		);
-	}
-
 	const nodes = [...blockMap.values(), ...syntheticMap.values()].sort(
 		(a, b) => a.discoveryIndex - b.discoveryIndex,
 	);
 	const nodeIds = new Set(nodes.map((node) => node.id));
-	const truncatedNodeId = syntheticMap.get(
-		syntheticNodeId("truncated", "global"),
-	)?.id;
 	const resolvedEdges: CfgEdge[] = [];
 
 	for (const edge of edgeMap.values()) {
-		let targetId = aliasMap.get(edge.to) ?? edge.to;
+		const targetId = aliasMap.get(edge.to) ?? edge.to;
 		if (!nodeIds.has(targetId)) {
-			if (truncated && truncatedNodeId) {
-				targetId = truncatedNodeId;
-			} else {
-				continue;
-			}
+			continue;
 		}
 
 		const id = `${edge.from}->${targetId}:${edge.kind}`;
@@ -668,243 +592,21 @@ export const buildControlFlowGraph = (
 	};
 };
 
-const colorForNodeKind = (kind: CfgNodeKind) => {
-	switch (kind) {
-		case "unknown_exit":
-			return "#B45309";
-		case "missing_memory":
-			return "#C2410C";
-		case "decode_error":
-			return "#B42318";
-		case "truncated":
-			return "#475467";
-		default:
-			return "#1D4ED8";
-	}
-};
-
-const colorForEdge = (kind: CfgEdgeKind, isBackedge: boolean) => {
-	if (isBackedge) {
-		return "#BE123C";
-	}
-
-	switch (kind) {
-		case "fallthrough":
-			return "#0F766E";
-		case "unknown":
-			return "#B45309";
-		default:
-			return "#2563EB";
-	}
-};
-
-const maxFiniteDepth = (depthMap: Map<string, number>) => {
-	let maxDepth = 0;
-	for (const depth of depthMap.values()) {
-		if (Number.isFinite(depth) && depth > maxDepth) {
-			maxDepth = depth;
-		}
-	}
-	return maxDepth;
-};
-
 const sanitizeLineCount = (value: number) =>
 	Number.isFinite(value) && value > 0 ? value : 2;
 
-const sanitizeCoordinate = (value: number, fallback: number) =>
-	Number.isFinite(value) ? value : fallback;
-
-const estimateNodeDimensions = (node: CfgNode) => {
+export const estimateNodeDimensions = (node: CfgNode) => {
 	const lines = node.label.split("\n");
 	const maxLineLength = lines.reduce((maxLength, line) => {
 		return Math.max(maxLength, line.length);
 	}, 0);
 	const height = Math.max(
 		MIN_CARD_HEIGHT,
-		CARD_PADDING_Y * 2 +
-			sanitizeLineCount(node.lineCount) * ESTIMATED_LINE_HEIGHT,
+		CARD_PADDING_Y + sanitizeLineCount(node.lineCount) * ESTIMATED_LINE_HEIGHT,
 	);
 	const width = Math.max(
 		MIN_CARD_WIDTH,
-		CARD_PADDING_X * 2 + maxLineLength * ESTIMATED_CHAR_WIDTH,
+		CARD_PADDING_X + maxLineLength * ESTIMATED_CHAR_WIDTH,
 	);
-	return {
-		width,
-		height,
-		compactLabel: node.title,
-		fullLabel: node.label,
-	};
-};
-
-export const layoutControlFlowGraph = (
-	result: CfgBuildResult,
-): PositionedCfgGraph => {
-	const nodesById = new Map(
-		result.blocks.map((node) => [node.id, node] as const),
-	);
-	const adjacency = new Map<string, string[]>();
-	for (const node of result.blocks) {
-		adjacency.set(node.id, []);
-	}
-	for (const edge of result.edges) {
-		const next = adjacency.get(edge.from);
-		if (next) {
-			next.push(edge.to);
-		}
-	}
-
-	const depthMap = new Map<string, number>();
-	const queue: string[] = [];
-	if (result.anchorNodeId && nodesById.has(result.anchorNodeId)) {
-		depthMap.set(result.anchorNodeId, 0);
-		queue.push(result.anchorNodeId);
-	}
-
-	while (queue.length > 0) {
-		const current = queue.shift();
-		if (!current) {
-			continue;
-		}
-		const currentDepth = depthMap.get(current) ?? 0;
-		const safeCurrentDepth = Number.isFinite(currentDepth) ? currentDepth : 0;
-		for (const neighbor of adjacency.get(current) ?? []) {
-			if (depthMap.has(neighbor)) {
-				continue;
-			}
-			depthMap.set(neighbor, safeCurrentDepth + 1);
-			queue.push(neighbor);
-		}
-	}
-
-	let fallbackDepth = maxFiniteDepth(depthMap) + 1;
-	for (const node of result.blocks) {
-		if (!depthMap.has(node.id)) {
-			depthMap.set(node.id, fallbackDepth);
-			fallbackDepth += 1;
-		}
-	}
-
-	const columns = new Map<number, CfgNode[]>();
-	for (const node of result.blocks) {
-		const depthValue = depthMap.get(node.id);
-		const depth = Number.isFinite(depthValue) ? (depthValue as number) : 0;
-		const bucket = columns.get(depth);
-		if (bucket) {
-			bucket.push(node);
-		} else {
-			columns.set(depth, [node]);
-		}
-	}
-
-	const positionedNodes: PositionedCfgNode[] = [];
-	const sortedColumns = [...columns.entries()].sort((a, b) => a[0] - b[0]);
-	const columnMetrics = sortedColumns.map(([depth, columnNodes]) => {
-		const nodeDimensions = new Map<
-			string,
-			ReturnType<typeof estimateNodeDimensions>
-		>();
-		let maxWidth = MIN_CARD_WIDTH;
-		for (const node of columnNodes) {
-			const dimensions = estimateNodeDimensions(node);
-			nodeDimensions.set(node.id, dimensions);
-			if (dimensions.width > maxWidth) {
-				maxWidth = dimensions.width;
-			}
-		}
-		return {
-			depth,
-			columnNodes,
-			maxWidth,
-			nodeDimensions,
-		};
-	});
-
-	const totalWidth = columnMetrics.reduce((total, column, index) => {
-		return total + column.maxWidth + (index === 0 ? 0 : COLUMN_GAP);
-	}, 0);
-
-	let cursorX = sanitizeCoordinate(-totalWidth / 2, 0);
-	let fallbackIndex = 0;
-	for (const column of columnMetrics) {
-		const { depth, columnNodes, maxWidth, nodeDimensions } = column;
-		columnNodes.sort((a, b) => {
-			const aAddress = a.startAddress ?? BigInt(Number.MAX_SAFE_INTEGER);
-			const bAddress = b.startAddress ?? BigInt(Number.MAX_SAFE_INTEGER);
-			if (aAddress < bAddress) {
-				return -1;
-			}
-			if (aAddress > bAddress) {
-				return 1;
-			}
-			return a.discoveryIndex - b.discoveryIndex;
-		});
-
-		const totalHeight = columnNodes.reduce((total, node) => {
-			const dimensions =
-				nodeDimensions.get(node.id) ?? estimateNodeDimensions(node);
-			return total + dimensions.height;
-		}, 0);
-		const totalHeightWithGaps =
-			totalHeight + Math.max(0, columnNodes.length - 1) * ROW_GAP;
-		let cursorY = sanitizeCoordinate(-totalHeightWithGaps / 2, 0);
-		const safeDepth = Number.isFinite(depth) ? depth : fallbackIndex;
-		const columnCenterX = sanitizeCoordinate(
-			cursorX + maxWidth / 2,
-			fallbackIndex * (MIN_CARD_WIDTH + COLUMN_GAP),
-		);
-		for (const node of columnNodes) {
-			const dimensions =
-				nodeDimensions.get(node.id) ?? estimateNodeDimensions(node);
-			const fallbackY = fallbackIndex * (MIN_CARD_HEIGHT + ROW_GAP);
-			positionedNodes.push({
-				...node,
-				depth: safeDepth,
-				x: columnCenterX,
-				y: sanitizeCoordinate(cursorY + dimensions.height / 2, fallbackY),
-				size: node.kind === "block" ? 12 : 10,
-				color: colorForNodeKind(node.kind),
-				width: dimensions.width,
-				height: dimensions.height,
-				compactLabel: dimensions.compactLabel,
-				fullLabel: dimensions.fullLabel,
-			});
-			cursorY = sanitizeCoordinate(
-				cursorY + dimensions.height + ROW_GAP,
-				fallbackY + dimensions.height + ROW_GAP,
-			);
-			fallbackIndex += 1;
-		}
-		cursorX = sanitizeCoordinate(
-			cursorX + maxWidth + COLUMN_GAP,
-			columnCenterX + maxWidth / 2 + COLUMN_GAP,
-		);
-	}
-
-	const nodeDepths = new Map(
-		positionedNodes.map((node) => [node.id, node.depth] as const),
-	);
-	const positionedEdges: PositionedCfgEdge[] = result.edges.map((edge) => {
-		const fromDepth = nodeDepths.get(edge.from) ?? 0;
-		const toDepth = nodeDepths.get(edge.to) ?? fromDepth;
-		const safeFromDepth = Number.isFinite(fromDepth) ? fromDepth : 0;
-		const safeToDepth = Number.isFinite(toDepth) ? toDepth : safeFromDepth;
-		const isBackedge = safeToDepth <= safeFromDepth && edge.kind !== "unknown";
-		return {
-			...edge,
-			isBackedge,
-			color: colorForEdge(edge.kind, isBackedge),
-			size: edge.kind === "fallthrough" ? 1.5 : 2,
-			label:
-				edge.kind === "fallthrough"
-					? null
-					: edge.kind === "branch"
-						? "branch"
-						: "unknown",
-		};
-	});
-
-	return {
-		nodes: positionedNodes,
-		edges: positionedEdges,
-	};
+	return { width, height };
 };

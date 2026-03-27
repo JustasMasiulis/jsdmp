@@ -15,8 +15,6 @@ export type DisassembledControlFlowKind =
 
 export type DisassembledControlFlow = {
 	kind: DisassembledControlFlowKind;
-	hasFallthrough: boolean;
-	hasDirectTarget: boolean;
 	directTargetAddress: bigint | null;
 };
 
@@ -130,8 +128,6 @@ export const disassembleInstruction = (
 		operands: parsed.operands,
 		controlFlow: {
 			kind: toControlFlowKind(wasm.wasm_get_disassembled_control_flow_kind()),
-			hasFallthrough: wasm.wasm_get_disassembled_has_fallthrough() !== 0,
-			hasDirectTarget,
 			directTargetAddress: hasDirectTarget
 				? wasm.wasm_get_disassembled_direct_target()
 				: null,

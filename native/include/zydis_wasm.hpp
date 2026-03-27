@@ -37,9 +37,6 @@ uint32_t wasm_get_disassembled_mnemonic();
 extern "C" [[clang::export_name("wasm_get_disassembled_control_flow_kind")]]
 uint32_t wasm_get_disassembled_control_flow_kind();
 
-extern "C" [[clang::export_name("wasm_get_disassembled_has_fallthrough")]]
-uint32_t wasm_get_disassembled_has_fallthrough();
-
 extern "C" [[clang::export_name("wasm_get_disassembled_has_direct_target")]]
 uint32_t wasm_get_disassembled_has_direct_target();
 

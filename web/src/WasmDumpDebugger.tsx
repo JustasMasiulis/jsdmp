@@ -1,9 +1,8 @@
-import { createResource, createSignal } from "solid-js";
+import { createEffect, createResource, createSignal, Show } from "solid-js";
 import DockviewDumpLayout from "./components/DockviewDumpLayout";
 import type { ParsedDumpInfo } from "./lib/dumpInfo";
 import {
 	ALLOWED_DUMP_EXTENSIONS,
-	formatDumpFileSize,
 	isSupportedDumpFile,
 	parseDumpFile,
 } from "./lib/dumpInfo";
@@ -53,11 +52,6 @@ const selectDumpFile = async (
 		actions.setIsParsing(false);
 	}
 };
-
-const formatSelectedDumpFileLabel = (file: File | null) =>
-	file
-		? `Selected: ${file.name} (${formatDumpFileSize(file.size)})`
-		: "No dump file selected.";
 
 const createDumpDropTarget = (onSelectFile: (file?: File) => void) => {
 	const [isDragging, setIsDragging] = createSignal(false);
@@ -123,18 +117,16 @@ export default function WasmDumpDebugger() {
 		});
 	};
 
-	const dropTarget = createDumpDropTarget(handleDumpFileSelect);
-	const renderDumpLayout = () => {
-		const info = dumpInfo();
-		return info ? <DockviewDumpLayout dumpInfo={info} /> : null;
-	};
+	createEffect(() => {
+		const file = dumpFile();
+		document.title = file ? file.name : "WASM Dump Debugger";
+	});
 
+	const dropTarget = createDumpDropTarget(handleDumpFileSelect);
 	return (
 		<section
 			class={`wasm-debugger-shell${dropTarget.isDragging() ? " is-dragging" : ""}`}
 		>
-			<h1 class="m0">WASM Dump Debugger</h1>
-
 			<input
 				ref={dumpInputRef}
 				type="file"
@@ -143,7 +135,7 @@ export default function WasmDumpDebugger() {
 				style={{ display: "none" }}
 			/>
 
-			{!dumpInfo() ? (
+			<Show when={!dumpInfo()}>
 				<button
 					type="button"
 					class={`dump-dropzone${dropTarget.isDragging() ? " is-dragging" : ""}`}
@@ -159,22 +151,20 @@ export default function WasmDumpDebugger() {
 						or click to browse ({ALLOWED_DUMP_EXTENSIONS.join(", ")})
 					</span>
 				</button>
-			) : null}
+			</Show>
 
-			<p class="dump-dropzone__file">
-				{formatSelectedDumpFileLabel(dumpFile())}
-			</p>
-
-			{isParsing() ? (
+			<Show when={isParsing()}>
 				<p class="dump-dropzone__file">Parsing dump file...</p>
-			) : null}
-			{uploadError() ? (
+			</Show>
+			<Show when={uploadError()}>
 				<p class="dump-dropzone__error">{uploadError()}</p>
-			) : null}
-			{dumpInfo()?.contextWarning ? (
+			</Show>
+			<Show when={dumpInfo()?.contextWarning}>
 				<p class="dump-dropzone__error">{dumpInfo()?.contextWarning}</p>
-			) : null}
-			{renderDumpLayout()}
+			</Show>
+			<Show when={dumpInfo()}>
+				{(info) => <DockviewDumpLayout dumpInfo={info()} />}
+			</Show>
 		</section>
 	);
 }

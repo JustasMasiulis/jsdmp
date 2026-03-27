@@ -28,24 +28,13 @@ static WasmControlFlowKind get_control_flow_kind()
     case ZYDIS_CATEGORY_INTERRUPT:
       return WASM_CONTROL_FLOW_INTERRUPT;
     case ZYDIS_CATEGORY_SYSCALL:
-    case ZYDIS_CATEGORY_SYSRET:
       return WASM_CONTROL_FLOW_SYSCALL;
+    case ZYDIS_CATEGORY_SYSRET:
+      return WASM_CONTROL_FLOW_RETURN;
     case ZYDIS_CATEGORY_SYSTEM:
       return WASM_CONTROL_FLOW_SYSTEM;
     default:
       return WASM_CONTROL_FLOW_NONE;
-  }
-}
-
-static bool has_fallthrough(WasmControlFlowKind kind)
-{
-  switch (kind) {
-    case WASM_CONTROL_FLOW_NONE:
-    case WASM_CONTROL_FLOW_CALL:
-    case WASM_CONTROL_FLOW_CONDITIONAL_BRANCH:
-      return true;
-    default:
-      return false;
   }
 }
 
@@ -119,12 +108,6 @@ extern "C" [[clang::export_name("wasm_get_disassembled_control_flow_kind")]]
 uint32_t wasm_get_disassembled_control_flow_kind()
 {
   return static_cast<uint32_t>(get_control_flow_kind());
-}
-
-extern "C" [[clang::export_name("wasm_get_disassembled_has_fallthrough")]]
-uint32_t wasm_get_disassembled_has_fallthrough()
-{
-  return has_fallthrough(get_control_flow_kind()) ? 1u : 0u;
 }
 
 extern "C" [[clang::export_name("wasm_get_disassembled_has_direct_target")]]

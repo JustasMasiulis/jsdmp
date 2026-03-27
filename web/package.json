@@ -20,9 +20,7 @@
 	"dependencies": {
 		"@flatten-js/interval-tree": "^2.0.3",
 		"dockview-core": "^5.1.0",
-		"graphology": "^0.26.0",
 		"nanoclone": "1.0.2",
-		"sigma": "^3.0.2",
 		"solid-js": "^1.9.10"
 	}
 }

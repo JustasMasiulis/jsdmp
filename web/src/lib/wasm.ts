@@ -4,7 +4,6 @@ export type WasmExports = {
 	wasm_get_disassembled_length: () => number;
 	wasm_get_disassembled_mnemonic: () => number;
 	wasm_get_disassembled_control_flow_kind: () => number;
-	wasm_get_disassembled_has_fallthrough: () => number;
 	wasm_get_disassembled_has_direct_target: () => number;
 	wasm_get_disassembled_direct_target: () => bigint;
 	wasm_disassemble: (length: number, runtimeAddress: bigint) => number;

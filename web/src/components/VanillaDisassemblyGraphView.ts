@@ -1,6 +1,3 @@
-import Graph from "graphology";
-import Sigma from "sigma";
-import type { Settings } from "sigma/settings";
 import {
 	formatHexAddress,
 	loadAddressPanelState,
@@ -11,15 +8,28 @@ import type { ResolvedDumpContext } from "../lib/context";
 import {
 	buildControlFlowGraph,
 	type CfgBuildResult,
+	type CfgEdgeKind,
 	type CfgNode,
-	layoutControlFlowGraph,
-	type PositionedCfgGraph,
-	type PositionedCfgNode,
+	estimateNodeDimensions,
 } from "../lib/disassemblyGraph";
 import type { ParsedDumpInfo } from "../lib/dumpInfo";
+import {
+	type AnnotatedCfgDescriptor,
+	type AnnotatedNodeDescriptor,
+	type EdgeColor,
+	type EdgeDescriptor,
+	GraphLayoutCore,
+} from "../lib/graph-layout-core";
 
 const DISASSEMBLY_GRAPH_PANEL_STATE_KEY =
 	"wasm-dump-debugger:disassembly-graph-panel-state:v1";
+
+const SVG_NS = "http://www.w3.org/2000/svg";
+
+const MIN_ZOOM = 0.1;
+const MAX_ZOOM = 3.0;
+const ZOOM_FACTOR = 0.1;
+const FIT_PADDING = 64;
 
 type DisassemblyGraphViewPanelOptions = {
 	container: HTMLElement;
@@ -27,162 +37,48 @@ type DisassemblyGraphViewPanelOptions = {
 	panelId: string;
 };
 
-type SigmaNodeAttributes = {
-	x: number;
-	y: number;
-	size: number;
-	color: string;
-	label: string;
-	compactLabel: string;
-	fullLabel: string;
-	estimatedWidth: number;
-	estimatedHeight: number;
-	kind: string;
-	selected: boolean;
-	anchor: boolean;
-	hidden: boolean;
-};
-
-type SigmaEdgeAttributes = {
-	color: string;
-	size: number;
-	label: string | null;
-	kind: string;
-	source: string;
-	target: string;
-	backedge: boolean;
-	type: string;
-};
-
 const getPanelStorageKey = (panelId: string) =>
 	`${DISASSEMBLY_GRAPH_PANEL_STATE_KEY}:${panelId}`;
 
-const FULL_LABEL_PADDING_X = 8;
-const FULL_LABEL_PADDING_Y = 6;
-const CARD_FONT =
-	'ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", Menlo, monospace';
-const CARD_FONT_SIZE = 12;
-const CARD_LINE_HEIGHT = CARD_FONT_SIZE + 3;
-const EDGE_ARROW_LENGTH = 8;
-const EDGE_ARROW_WIDTH = 5;
-
-type ViewportCard = {
-	id: string;
-	node: PositionedCfgNode;
-	centerX: number;
-	centerY: number;
-	x: number;
-	y: number;
-	width: number;
-	height: number;
-	lines: string[];
-	selected: boolean;
-	anchor: boolean;
-	dimmed: boolean;
+const EDGE_COLOR_CSS: Record<EdgeColor, string> = {
+	red: "#BE123C",
+	green: "#0F766E",
+	blue: "#2563EB",
+	grey: "#B45309",
 };
 
-const drawRoundedRect = (
-	context: CanvasRenderingContext2D,
-	x: number,
-	y: number,
-	width: number,
-	height: number,
-	radius: number,
-) => {
-	const capped = Math.min(radius, width / 2, height / 2);
-	context.beginPath();
-	context.moveTo(x + capped, y);
-	context.lineTo(x + width - capped, y);
-	context.quadraticCurveTo(x + width, y, x + width, y + capped);
-	context.lineTo(x + width, y + height - capped);
-	context.quadraticCurveTo(
-		x + width,
-		y + height,
-		x + width - capped,
-		y + height,
-	);
-	context.lineTo(x + capped, y + height);
-	context.quadraticCurveTo(x, y + height, x, y + height - capped);
-	context.lineTo(x, y + capped);
-	context.quadraticCurveTo(x, y, x + capped, y);
-	context.closePath();
+const cfgEdgeKindToColor = (kind: CfgEdgeKind): EdgeColor => {
+	switch (kind) {
+		case "true":
+			return "green";
+		case "false":
+			return "red";
+		case "unconditional":
+			return "blue";
+	}
 };
 
-const clipLineToWidth = (
-	context: CanvasRenderingContext2D,
-	text: string,
-	maxWidth: number,
-) => {
-	if (maxWidth <= 0) {
-		return "";
-	}
-	if (context.measureText(text).width <= maxWidth) {
-		return text;
-	}
-	const ellipsis = "...";
-	let clipped = text;
-	while (clipped.length > 0) {
-		clipped = clipped.slice(0, -1);
-		const next = `${clipped}${ellipsis}`;
-		if (context.measureText(next).width <= maxWidth) {
-			return next;
-		}
-	}
-	return ellipsis;
-};
+const cfgResultToAnnotatedDescriptor = (
+	result: CfgBuildResult,
+): AnnotatedCfgDescriptor => {
+	const nodes: AnnotatedNodeDescriptor[] = result.blocks.map((block) => {
+		const dims = estimateNodeDimensions(block);
+		return {
+			id: block.id,
+			label: block.label,
+			width: dims.width,
+			height: dims.height,
+		};
+	});
 
-const rectAnchorPoint = (
-	centerX: number,
-	centerY: number,
-	halfWidth: number,
-	halfHeight: number,
-	dx: number,
-	dy: number,
-) => {
-	if (dx === 0 && dy === 0) {
-		return { x: centerX, y: centerY };
-	}
+	const edges: EdgeDescriptor[] = result.edges.map((edge) => ({
+		from: edge.from,
+		to: edge.to,
+		arrows: "to",
+		color: cfgEdgeKindToColor(edge.kind),
+	}));
 
-	const safeHalfWidth = Math.max(halfWidth, 1);
-	const safeHalfHeight = Math.max(halfHeight, 1);
-	const scale =
-		1 / Math.max(Math.abs(dx) / safeHalfWidth, Math.abs(dy) / safeHalfHeight);
-
-	return {
-		x: centerX + dx * scale,
-		y: centerY + dy * scale,
-	};
-};
-
-const drawArrowHead = (
-	context: CanvasRenderingContext2D,
-	fromX: number,
-	fromY: number,
-	toX: number,
-	toY: number,
-	color: string,
-) => {
-	const dx = toX - fromX;
-	const dy = toY - fromY;
-	const length = Math.hypot(dx, dy);
-	if (length === 0) {
-		return;
-	}
-
-	const unitX = dx / length;
-	const unitY = dy / length;
-	const baseX = toX - unitX * EDGE_ARROW_LENGTH;
-	const baseY = toY - unitY * EDGE_ARROW_LENGTH;
-	const normalX = -unitY * EDGE_ARROW_WIDTH;
-	const normalY = unitX * EDGE_ARROW_WIDTH;
-
-	context.beginPath();
-	context.moveTo(toX, toY);
-	context.lineTo(baseX + normalX, baseY + normalY);
-	context.lineTo(baseX - normalX, baseY - normalY);
-	context.closePath();
-	context.fillStyle = color;
-	context.fill();
+	return { nodes, edges };
 };
 
 export class VanillaDisassemblyGraphView {
@@ -203,17 +99,23 @@ export class VanillaDisassemblyGraphView {
 	private readonly statusNode: HTMLParagraphElement;
 	private readonly errorNode: HTMLParagraphElement;
 	private readonly emptyNode: HTMLParagraphElement;
-	private readonly selectionNode: HTMLParagraphElement;
 	private readonly graphHost: HTMLDivElement;
-	private readonly graphOverlay: HTMLCanvasElement;
 
-	private sigmaRenderer: Sigma<
-		SigmaNodeAttributes,
-		SigmaEdgeAttributes
-	> | null = null;
-	private positionedGraph: PositionedCfgGraph | null = null;
-	private projectedCards: ViewportCard[] = [];
+	private layoutCore: GraphLayoutCore | null = null;
+	private viewportElement: HTMLDivElement | null = null;
+	private blockElements = new Map<string, HTMLDivElement>();
+	private edgeElements: SVGPolylineElement[] = [];
+	private edgeOwnership: Array<{ from: string; to: string }> = [];
 	private resizeObserver: ResizeObserver | null = null;
+
+	private panX = 0;
+	private panY = 0;
+	private zoom = 1;
+	private isDragging = false;
+	private dragStartX = 0;
+	private dragStartY = 0;
+	private dragStartPanX = 0;
+	private dragStartPanY = 0;
 
 	private readonly onFollowChange = () => {
 		const next = this.followCheckbox.checked;
@@ -256,203 +158,83 @@ export class VanillaDisassemblyGraphView {
 	};
 
 	private readonly onGraphHostClick = (event: MouseEvent) => {
-		if (this.projectedCards.length === 0) {
-			if (this.selectedNodeId !== null) {
-				this.selectedNodeId = null;
-				this.syncStatus();
-				this.syncSelectionSummary();
-				this.redrawGraphOverlay();
-			}
-			return;
+		if (this.isDragging) return;
+
+		const target = event.target as HTMLElement;
+		const blockDiv = target.closest<HTMLDivElement>("[data-block-id]");
+		const blockId = blockDiv?.dataset.blockId ?? null;
+
+		const needsUpdate = this.selectedNodeId !== blockId;
+		this.selectedNodeId = blockId;
+
+		if (needsUpdate) {
+			this.syncStatus();
+			this.updateSelectionStyles();
 		}
-
-		const bounds = this.graphHost.getBoundingClientRect();
-		const clickX = event.clientX - bounds.left;
-		const clickY = event.clientY - bounds.top;
-		const hit = [...this.projectedCards]
-			.reverse()
-			.find(
-				(card) =>
-					clickX >= card.x &&
-					clickX <= card.x + card.width &&
-					clickY >= card.y &&
-					clickY <= card.y + card.height,
-			);
-
-		this.selectedNodeId = hit?.id ?? null;
-		this.syncStatus();
-		this.syncSelectionSummary();
-		this.redrawGraphOverlay();
 	};
 
-	private readonly redrawGraphOverlay = () => {
-		const renderer = this.sigmaRenderer;
-		const layout = this.positionedGraph;
-		const canvas = this.graphOverlay;
-		if (!renderer || !layout || layout.nodes.length === 0) {
-			this.projectedCards = [];
-			const context = canvas.getContext("2d");
-			if (context) {
-				context.setTransform(1, 0, 0, 1, 0, 0);
-				context.clearRect(0, 0, canvas.width, canvas.height);
-			}
-			canvas.hidden = true;
-			return;
-		}
+	private readonly onPointerDown = (event: PointerEvent) => {
+		if (event.button !== 0) return;
+		const target = event.target as HTMLElement;
+		if (target.closest("[data-block-id]")) return;
 
-		const width = this.graphHost.clientWidth;
-		const height = this.graphHost.clientHeight;
-		if (width <= 0 || height <= 0) {
-			return;
-		}
+		this.isDragging = false;
+		this.dragStartX = event.clientX;
+		this.dragStartY = event.clientY;
+		this.dragStartPanX = this.panX;
+		this.dragStartPanY = this.panY;
+		this.graphHost.setPointerCapture(event.pointerId);
+		this.graphHost.addEventListener("pointermove", this.onPointerMove);
+		this.graphHost.addEventListener("pointerup", this.onPointerUp);
+	};
 
-		const pixelRatio = window.devicePixelRatio || 1;
-		const nextCanvasWidth = Math.max(1, Math.round(width * pixelRatio));
-		const nextCanvasHeight = Math.max(1, Math.round(height * pixelRatio));
-		if (canvas.width !== nextCanvasWidth) {
-			canvas.width = nextCanvasWidth;
+	private readonly onPointerMove = (event: PointerEvent) => {
+		const dx = event.clientX - this.dragStartX;
+		const dy = event.clientY - this.dragStartY;
+		if (!this.isDragging && Math.hypot(dx, dy) > 3) {
+			this.isDragging = true;
+			this.graphHost.classList.add(
+				"disassembly-graph-view-panel__graph--panning",
+			);
 		}
-		if (canvas.height !== nextCanvasHeight) {
-			canvas.height = nextCanvasHeight;
+		if (this.isDragging) {
+			this.panX = this.dragStartPanX + dx;
+			this.panY = this.dragStartPanY + dy;
+			this.applyViewportTransform();
 		}
-		canvas.style.width = `${width}px`;
-		canvas.style.height = `${height}px`;
-		canvas.hidden = false;
+	};
 
-		const context = canvas.getContext("2d");
-		if (!context) {
-			return;
-		}
-
-		context.setTransform(1, 0, 0, 1, 0, 0);
-		context.clearRect(0, 0, canvas.width, canvas.height);
-		context.setTransform(pixelRatio, 0, 0, pixelRatio, 0, 0);
-		context.font = `400 ${CARD_FONT_SIZE}px ${CARD_FONT}`;
-		context.textBaseline = "top";
-
-		this.projectedCards = layout.nodes.map((node) => {
-			const center = renderer.graphToViewport({ x: node.x, y: node.y });
-			const projectedWidth = node.width;
-			const projectedHeight = node.height;
-			const selected = node.id === this.selectedNodeId;
-			const anchor = node.id === this.graphResult?.anchorNodeId;
-			const dimmed = this.selectedNodeId !== null && !selected && !anchor;
-			return {
-				id: node.id,
-				node,
-				centerX: center.x,
-				centerY: center.y,
-				x: center.x - projectedWidth / 2,
-				y: center.y - projectedHeight / 2,
-				width: projectedWidth,
-				height: projectedHeight,
-				lines: node.fullLabel.split("\n"),
-				selected,
-				anchor,
-				dimmed,
-			};
+	private readonly onPointerUp = (event: PointerEvent) => {
+		this.graphHost.releasePointerCapture(event.pointerId);
+		this.graphHost.removeEventListener("pointermove", this.onPointerMove);
+		this.graphHost.removeEventListener("pointerup", this.onPointerUp);
+		this.graphHost.classList.remove(
+			"disassembly-graph-view-panel__graph--panning",
+		);
+		// isDragging is cleared after the click handler fires
+		requestAnimationFrame(() => {
+			this.isDragging = false;
 		});
+	};
 
-		for (const edge of layout.edges) {
-			const source = this.projectedCards.find((card) => card.id === edge.from);
-			const target = this.projectedCards.find((card) => card.id === edge.to);
-			if (!source || !target) {
-				continue;
-			}
+	private readonly onWheel = (event: WheelEvent) => {
+		event.preventDefault();
+		const bounds = this.graphHost.getBoundingClientRect();
+		const cursorX = event.clientX - bounds.left;
+		const cursorY = event.clientY - bounds.top;
 
-			const dimmed =
-				this.selectedNodeId !== null &&
-				edge.from !== this.selectedNodeId &&
-				edge.to !== this.selectedNodeId;
-			const strokeColor = dimmed ? "#D0D5DD" : edge.color;
-			const dx = target.centerX - source.centerX;
-			const dy = target.centerY - source.centerY;
-			const start = rectAnchorPoint(
-				source.centerX,
-				source.centerY,
-				source.width / 2 + 1,
-				source.height / 2 + 1,
-				dx,
-				dy,
-			);
-			const end = rectAnchorPoint(
-				target.centerX,
-				target.centerY,
-				target.width / 2 + 1,
-				target.height / 2 + 1,
-				-dx,
-				-dy,
-			);
-
-			context.beginPath();
-			context.moveTo(start.x, start.y);
-			context.lineTo(end.x, end.y);
-			context.lineWidth = dimmed ? 1.25 : Math.max(1.5, edge.size);
-			context.strokeStyle = strokeColor;
-			context.stroke();
-			drawArrowHead(context, start.x, start.y, end.x, end.y, strokeColor);
-		}
-
-		const cardsInPaintOrder = [...this.projectedCards].sort(
-			(leftCard, rightCard) => {
-				const leftScore =
-					(leftCard.selected ? 2 : 0) + (leftCard.anchor ? 1 : 0);
-				const rightScore =
-					(rightCard.selected ? 2 : 0) + (rightCard.anchor ? 1 : 0);
-				return leftScore - rightScore;
-			},
+		const oldZoom = this.zoom;
+		const direction = event.deltaY > 0 ? -1 : 1;
+		const newZoom = Math.min(
+			MAX_ZOOM,
+			Math.max(MIN_ZOOM, oldZoom * (1 + direction * ZOOM_FACTOR)),
 		);
 
-		for (const card of cardsInPaintOrder) {
-			const strokeColor = card.dimmed
-				? "#CBD5E1"
-				: card.selected
-					? "#0F766E"
-					: card.anchor
-						? "#2563EB"
-						: card.node.color;
-			const fillColor = card.dimmed
-				? "rgba(248, 250, 252, 0.94)"
-				: card.selected
-					? "rgba(240, 253, 250, 0.98)"
-					: card.anchor
-						? "rgba(239, 246, 255, 0.98)"
-						: "rgba(255, 255, 255, 0.96)";
-			const paddingX = FULL_LABEL_PADDING_X;
-			const paddingY = FULL_LABEL_PADDING_Y;
-
-			drawRoundedRect(context, card.x, card.y, card.width, card.height, 8);
-			context.fillStyle = fillColor;
-			context.fill();
-			context.lineWidth = card.selected ? 2 : 1.25;
-			context.strokeStyle = strokeColor;
-			context.stroke();
-
-			if (
-				card.width < paddingX * 2 + 16 ||
-				card.height < paddingY * 2 + CARD_LINE_HEIGHT
-			) {
-				continue;
-			}
-
-			context.save();
-			context.beginPath();
-			drawRoundedRect(context, card.x, card.y, card.width, card.height, 8);
-			context.clip();
-			context.font = `400 ${CARD_FONT_SIZE}px ${CARD_FONT}`;
-			context.fillStyle = card.dimmed ? "#64748B" : "#0F172A";
-
-			const maxTextWidth = Math.max(0, card.width - paddingX * 2);
-			for (let index = 0; index < card.lines.length; index += 1) {
-				const line = clipLineToWidth(context, card.lines[index], maxTextWidth);
-				context.fillText(
-					line,
-					card.x + paddingX,
-					card.y + paddingY + index * CARD_LINE_HEIGHT,
-				);
-			}
-			context.restore();
-		}
+		// Zoom toward cursor: keep the point under the cursor fixed
+		this.panX = cursorX - (cursorX - this.panX) * (newZoom / oldZoom);
+		this.panY = cursorY - (cursorY - this.panY) * (newZoom / oldZoom);
+		this.zoom = newZoom;
+		this.applyViewportTransform();
 	};
 
 	constructor(options: DisassemblyGraphViewPanelOptions) {
@@ -467,18 +249,19 @@ export class VanillaDisassemblyGraphView {
 		this.statusNode = dom.statusNode;
 		this.errorNode = dom.errorNode;
 		this.emptyNode = dom.emptyNode;
-		this.selectionNode = dom.selectionNode;
 		this.graphHost = dom.graphHost;
-		this.graphOverlay = dom.graphOverlay;
 		options.container.replaceChildren(this.root);
 
 		this.root.addEventListener("submit", this.onAddressSubmit);
 		this.followCheckbox.addEventListener("change", this.onFollowChange);
 		this.graphHost.addEventListener("click", this.onGraphHostClick);
+		this.graphHost.addEventListener("pointerdown", this.onPointerDown);
+		this.graphHost.addEventListener("wheel", this.onWheel, {
+			passive: false,
+		});
 		if (typeof ResizeObserver !== "undefined") {
 			this.resizeObserver = new ResizeObserver(() => {
-				this.sigmaRenderer?.resize();
-				this.redrawGraphOverlay();
+				this.fitToView();
 			});
 			this.resizeObserver.observe(this.graphHost);
 		}
@@ -512,9 +295,11 @@ export class VanillaDisassemblyGraphView {
 		this.root.removeEventListener("submit", this.onAddressSubmit);
 		this.followCheckbox.removeEventListener("change", this.onFollowChange);
 		this.graphHost.removeEventListener("click", this.onGraphHostClick);
+		this.graphHost.removeEventListener("pointerdown", this.onPointerDown);
+		this.graphHost.removeEventListener("wheel", this.onWheel);
 		this.resizeObserver?.disconnect();
 		this.resizeObserver = null;
-		this.disposeSigma();
+		this.disposeGraph();
 		this.root.replaceChildren();
 	}
 
@@ -574,24 +359,8 @@ export class VanillaDisassemblyGraphView {
 		const graphHost = document.createElement("div");
 		graphHost.className = "disassembly-graph-view-panel__graph";
 		graphHost.hidden = true;
-		const graphOverlay = document.createElement("canvas");
-		graphOverlay.className = "disassembly-graph-view-panel__overlay";
-		graphOverlay.hidden = true;
-		graphOverlay.setAttribute("aria-hidden", "true");
-		graphHost.append(graphOverlay);
 
-		const selectionNode = document.createElement("p");
-		selectionNode.className = "disassembly-graph-view-panel__selection";
-		selectionNode.hidden = true;
-
-		this.root.append(
-			toolbar,
-			statusNode,
-			errorNode,
-			emptyNode,
-			graphHost,
-			selectionNode,
-		);
+		this.root.append(toolbar, statusNode, errorNode, emptyNode, graphHost);
 		return {
 			addressInput,
 			jumpButton,
@@ -599,9 +368,7 @@ export class VanillaDisassemblyGraphView {
 			statusNode,
 			errorNode,
 			emptyNode,
-			selectionNode,
 			graphHost,
-			graphOverlay,
 		};
 	}
 
@@ -629,37 +396,14 @@ export class VanillaDisassemblyGraphView {
 		});
 	}
 
-	private createSigmaSettings(): Partial<
-		Settings<SigmaNodeAttributes, SigmaEdgeAttributes>
-	> {
-		return {
-			renderLabels: false,
-			renderEdgeLabels: false,
-			hideLabelsOnMove: true,
-			defaultEdgeType: "line",
-			stagePadding: 64,
-			allowInvalidContainer: true,
-			zIndex: false,
-		};
-	}
+	private disposeGraph() {
+		this.layoutCore = null;
+		this.viewportElement = null;
 
-	private disposeSigma() {
-		this.sigmaRenderer?.kill();
-		this.sigmaRenderer = null;
-		this.positionedGraph = null;
-		this.projectedCards = [];
-		const context = this.graphOverlay.getContext("2d");
-		if (context) {
-			context.setTransform(1, 0, 0, 1, 0, 0);
-			context.clearRect(
-				0,
-				0,
-				this.graphOverlay.width,
-				this.graphOverlay.height,
-			);
-		}
-		this.graphOverlay.hidden = true;
-		this.graphHost.replaceChildren(this.graphOverlay);
+		this.blockElements.clear();
+		this.edgeElements = [];
+		this.edgeOwnership = [];
+		this.graphHost.replaceChildren();
 	}
 
 	private syncInputWithAddress(address: bigint | null) {
@@ -694,7 +438,7 @@ export class VanillaDisassemblyGraphView {
 		this.selectedNodeId = null;
 		if (anchorAddress === null) {
 			this.graphResult = null;
-			this.disposeSigma();
+			this.disposeGraph();
 			return;
 		}
 
@@ -719,58 +463,213 @@ export class VanillaDisassemblyGraphView {
 		}
 
 		if (!this.graphResult || this.graphResult.blocks.length === 0) {
-			this.positionedGraph = null;
-			this.disposeSigma();
+			this.disposeGraph();
 			return;
 		}
 
-		const layout = layoutControlFlowGraph(this.graphResult);
-		const graph = new Graph<SigmaNodeAttributes, SigmaEdgeAttributes>();
-		for (const node of layout.nodes) {
-			graph.addNode(node.id, {
-				x: node.x,
-				y: node.y,
-				size: 1,
-				color: node.color,
-				label: node.compactLabel,
-				compactLabel: node.compactLabel,
-				fullLabel: node.fullLabel,
-				estimatedWidth: node.width,
-				estimatedHeight: node.height,
-				kind: node.kind,
-				selected: false,
-				anchor: node.id === this.graphResult.anchorNodeId,
-				hidden: true,
-			});
+		const descriptor = cfgResultToAnnotatedDescriptor(this.graphResult);
+
+		this.disposeGraph();
+		this.layoutCore = new GraphLayoutCore(descriptor, true, true);
+		this.graphHost.hidden = false;
+		this.renderGraph();
+		this.fitToView();
+	}
+
+	private renderGraph() {
+		const core = this.layoutCore;
+		if (!core || core.blocks.length === 0) return;
+
+		const totalWidth = core.getWidth();
+		const totalHeight = core.getHeight();
+
+		// Viewport container
+		const viewport = document.createElement("div");
+		viewport.className = "cfg-viewport";
+		viewport.style.width = `${totalWidth}px`;
+		viewport.style.height = `${totalHeight}px`;
+		this.viewportElement = viewport;
+
+		// SVG edge layer
+		const svg = document.createElementNS(SVG_NS, "svg");
+		svg.classList.add("cfg-edges");
+		svg.setAttribute("width", String(totalWidth));
+		svg.setAttribute("height", String(totalHeight));
+
+		this.addSvgArrowMarkers(svg);
+		this.renderEdges(svg, core);
+
+		// Block container (sits on top of SVG)
+		const blockContainer = document.createElement("div");
+		blockContainer.style.position = "absolute";
+		blockContainer.style.top = "0";
+		blockContainer.style.left = "0";
+		blockContainer.style.width = `${totalWidth}px`;
+		blockContainer.style.height = `${totalHeight}px`;
+		this.renderBlocks(blockContainer, core);
+
+		viewport.append(svg, blockContainer);
+		this.graphHost.append(viewport);
+		this.applyViewportTransform();
+	}
+
+	private addSvgArrowMarkers(svg: SVGSVGElement) {
+		const defs = document.createElementNS(SVG_NS, "defs");
+		for (const [name, color] of Object.entries(EDGE_COLOR_CSS)) {
+			const marker = document.createElementNS(SVG_NS, "marker");
+			marker.setAttribute("id", `arrow-${name}`);
+			marker.setAttribute("markerWidth", "8");
+			marker.setAttribute("markerHeight", "6");
+			marker.setAttribute("refX", "8");
+			marker.setAttribute("refY", "3");
+			marker.setAttribute("orient", "auto");
+			marker.setAttribute("markerUnits", "userSpaceOnUse");
+			const path = document.createElementNS(SVG_NS, "path");
+			path.setAttribute("d", "M0,0 L8,3 L0,6 Z");
+			path.setAttribute("fill", color);
+			marker.append(path);
+			defs.append(marker);
+		}
+		// Dimmed arrow marker
+		const dimMarker = document.createElementNS(SVG_NS, "marker");
+		dimMarker.setAttribute("id", "arrow-dimmed");
+		dimMarker.setAttribute("markerWidth", "8");
+		dimMarker.setAttribute("markerHeight", "6");
+		dimMarker.setAttribute("refX", "8");
+		dimMarker.setAttribute("refY", "3");
+		dimMarker.setAttribute("orient", "auto");
+		dimMarker.setAttribute("markerUnits", "userSpaceOnUse");
+		const dimPath = document.createElementNS(SVG_NS, "path");
+		dimPath.setAttribute("d", "M0,0 L8,3 L0,6 Z");
+		dimPath.setAttribute("fill", "#D0D5DD");
+		dimMarker.append(dimPath);
+		defs.append(dimMarker);
+
+		svg.append(defs);
+	}
+
+	private renderEdges(svg: SVGSVGElement, core: GraphLayoutCore) {
+		this.edgeElements = [];
+		this.edgeOwnership = [];
+
+		const blockIdByIndex = new Map<number, string>();
+		for (const [i, block] of core.blocks.entries()) {
+			blockIdByIndex.set(i, block.data.id);
 		}
 
-		this.disposeSigma();
-		this.positionedGraph = layout;
-		this.graphHost.hidden = false;
-		this.graphOverlay.hidden = false;
-		this.sigmaRenderer = new Sigma(
-			graph,
-			this.graphHost,
-			this.createSigmaSettings(),
-		);
-		this.sigmaRenderer.on("afterRender", this.redrawGraphOverlay);
-		this.sigmaRenderer.on("resize", this.redrawGraphOverlay);
-		const xValues = layout.nodes.flatMap((node) => [
-			node.x - node.width / 2,
-			node.x + node.width / 2,
-		]);
-		const yValues = layout.nodes.flatMap((node) => [
-			node.y - node.height / 2,
-			node.y + node.height / 2,
-		]);
-		this.sigmaRenderer.setCustomBBox({
-			x: [Math.min(...xValues), Math.max(...xValues)],
-			y: [Math.min(...yValues), Math.max(...yValues)],
-		});
-		void this.sigmaRenderer.getCamera().animatedReset({ duration: 150 });
-		this.syncSelectionSummary();
-		this.sigmaRenderer.resize();
-		this.redrawGraphOverlay();
+		for (const block of core.blocks) {
+			const fromId = block.data.id;
+			for (const edge of block.edges) {
+				const toId = blockIdByIndex.get(edge.dest);
+				if (!toId) continue;
+
+				const points: string[] = [];
+				for (const segment of edge.path) {
+					if (points.length === 0) {
+						points.push(`${segment.start.x},${segment.start.y}`);
+					}
+					points.push(`${segment.end.x},${segment.end.y}`);
+				}
+
+				const polyline = document.createElementNS(SVG_NS, "polyline");
+				polyline.classList.add("cfg-edge");
+				polyline.setAttribute("points", points.join(" "));
+				const cssColor = EDGE_COLOR_CSS[edge.color];
+				polyline.setAttribute("stroke", cssColor);
+				polyline.setAttribute("marker-end", `url(#arrow-${edge.color})`);
+				svg.append(polyline);
+				this.edgeElements.push(polyline);
+				this.edgeOwnership.push({ from: fromId, to: toId });
+			}
+		}
+	}
+
+	private renderBlocks(container: HTMLElement, core: GraphLayoutCore) {
+		this.blockElements.clear();
+		const anchorNodeId = this.graphResult?.anchorNodeId ?? null;
+
+		for (const block of core.blocks) {
+			const div = document.createElement("div");
+			div.className = "cfg-block";
+			div.dataset.blockId = block.data.id;
+			div.style.left = `${block.coordinates.x}px`;
+			div.style.top = `${block.coordinates.y}px`;
+			div.style.width = `${block.data.width}px`;
+			div.style.height = `${block.data.height}px`;
+
+			// Find the CfgNode to get the kind
+			const cfgNode = this.graphResult?.blocks.find(
+				(b) => b.id === block.data.id,
+			);
+			if (cfgNode && cfgNode.kind !== "block") {
+				div.classList.add(`cfg-block--kind-${cfgNode.kind}`);
+			}
+			if (block.data.id === anchorNodeId) {
+				div.classList.add("cfg-block--anchor");
+			}
+
+			div.textContent = block.data.label;
+			container.append(div);
+			this.blockElements.set(block.data.id, div);
+		}
+	}
+
+	private applyViewportTransform() {
+		if (!this.viewportElement) return;
+		this.viewportElement.style.transform = `translate(${this.panX}px, ${this.panY}px) scale(${this.zoom})`;
+	}
+
+	private fitToView() {
+		const core = this.layoutCore;
+		if (!core || core.blocks.length === 0) return;
+
+		const hostWidth = this.graphHost.clientWidth;
+		const hostHeight = this.graphHost.clientHeight;
+		if (hostWidth <= 0 || hostHeight <= 0) return;
+
+		const layoutWidth = core.getWidth();
+		const layoutHeight = core.getHeight();
+
+		const scaleX = (hostWidth - FIT_PADDING * 2) / layoutWidth;
+		const scaleY = (hostHeight - FIT_PADDING * 2) / layoutHeight;
+		this.zoom = Math.min(scaleX, scaleY, 1.0);
+		this.panX = (hostWidth - layoutWidth * this.zoom) / 2;
+		this.panY = (hostHeight - layoutHeight * this.zoom) / 2;
+		this.applyViewportTransform();
+	}
+
+	private updateSelectionStyles() {
+		const selected = this.selectedNodeId;
+		const anchorId = this.graphResult?.anchorNodeId ?? null;
+
+		for (const [id, div] of this.blockElements) {
+			const isSelected = id === selected;
+			const isAnchor = id === anchorId;
+			const isDimmed = selected !== null && !isSelected && !isAnchor;
+			div.classList.toggle("cfg-block--selected", isSelected);
+			div.classList.toggle("cfg-block--dimmed", isDimmed);
+		}
+
+		for (let i = 0; i < this.edgeElements.length; i++) {
+			const polyline = this.edgeElements[i];
+			const ownership = this.edgeOwnership[i];
+			const isDimmed =
+				selected !== null &&
+				ownership.from !== selected &&
+				ownership.to !== selected;
+			polyline.classList.toggle("cfg-edge--dimmed", isDimmed);
+			if (isDimmed) {
+				polyline.setAttribute("marker-end", "url(#arrow-dimmed)");
+			} else {
+				// Restore original marker from stroke color
+				const stroke = polyline.getAttribute("stroke") ?? "";
+				const colorName =
+					Object.entries(EDGE_COLOR_CSS).find(
+						([, css]) => css === stroke,
+					)?.[0] ?? "blue";
+				polyline.setAttribute("marker-end", `url(#arrow-${colorName})`);
+			}
+		}
 	}
 
 	private syncDisplayedAddress() {
@@ -792,7 +691,7 @@ export class VanillaDisassemblyGraphView {
 		const result = this.graphResult;
 		if (!result) {
 			this.statusNode.textContent = "Graph view is idle.";
-			this.syncSelectionSummary();
+
 			return;
 		}
 
@@ -802,7 +701,6 @@ export class VanillaDisassemblyGraphView {
 			? ` Selected ${selected.title} (${selected.instructions.length} instructions).`
 			: "";
 		this.statusNode.textContent = `${result.message} ${summary}.${selectedText}`;
-		this.syncSelectionSummary();
 	}
 
 	private selectedBlock(): CfgNode | null {
@@ -815,21 +713,6 @@ export class VanillaDisassemblyGraphView {
 				(block) => block.id === this.selectedNodeId,
 			) ?? null
 		);
-	}
-
-	private syncSelectionSummary() {
-		const selected = this.selectedBlock();
-		if (!selected) {
-			this.selectionNode.hidden = true;
-			this.selectionNode.textContent = "";
-			return;
-		}
-
-		this.selectionNode.hidden = false;
-		this.selectionNode.textContent =
-			selected.kind === "block"
-				? `Selected ${selected.title} with ${selected.instructions.length} instruction${selected.instructions.length === 1 ? "" : "s"}.`
-				: `Selected ${selected.title}.`;
 	}
 
 	private syncControlState() {

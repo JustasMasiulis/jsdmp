@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "WebFetch(domain:raw.githubusercontent.com)",
+      "WebSearch",
+      "Bash(find /d/web-dmp -name *.test.ts -o -name *.spec.ts -o -name README*)"
+    ]
+  }
+}
