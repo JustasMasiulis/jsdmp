@@ -626,18 +626,13 @@ Design language notes for future re-additions:
 
 .cfg-edge {
 	fill: none;
-	stroke-width: 1.5;
+	stroke-width: 1px;
 	transition: opacity 0.1s ease;
-}
-
-.cfg-edge--dimmed {
-	stroke: #d0d5dd !important;
-	opacity: 0.4;
 }
 
 .cfg-block {
 	position: absolute;
-	border: 1px solid pink;
+	border: 1px solid var(--color-border);
 	background: var(--color-bg);
 	color: var(--color-fg);
 	padding: 6px 8px;
@@ -650,17 +645,8 @@ Design language notes for future re-additions:
 	box-sizing: border-box;
 }
 
-.cfg-block--anchor {
-	border-color: #2563eb;
-}
-
 .cfg-block--selected {
-	border-color: #0f766e;
-}
-
-.cfg-block--dimmed {
-	border-color: #cbd5e1;
-	color: #64748b;
+	border-color: var(--color-sidebar-indicator);
 }
 
 .cfg-block--kind-missing_memory {

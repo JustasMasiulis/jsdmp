@@ -64,7 +64,6 @@ export type CfgBuildResult = {
 	status: CfgBuildStatus;
 	message: string;
 	anchorAddress: bigint;
-	anchorNodeId: string | null;
 	blocks: CfgNode[];
 	edges: CfgEdge[];
 	stats: CfgBuildStats;
@@ -371,7 +370,6 @@ export const buildControlFlowGraph = (
 			status: "missing_memory",
 			message: `Address ${fmtAddress(anchorAddress)} is not present in dump memory.`,
 			anchorAddress,
-			anchorNodeId: null,
 			blocks: [],
 			edges: [],
 			stats: {
@@ -392,7 +390,7 @@ export const buildControlFlowGraph = (
 	const instructionCounter = { value: 0 };
 	let discoveryIndex = 0;
 	let truncated = false;
-	let anchorNodeId: string | null = blockIdForAddress(anchorAddress);
+	let anchorDecodeFailed = false;
 
 	const markTruncated = () => {
 		truncated = true;
@@ -487,7 +485,7 @@ export const buildControlFlowGraph = (
 			);
 			aliasMap.set(blockId, errorNode.id);
 			if (startAddress === anchorAddress) {
-				anchorNodeId = errorNode.id;
+				anchorDecodeFailed = true;
 			}
 			continue;
 		}
@@ -560,14 +558,11 @@ export const buildControlFlowGraph = (
 		});
 	}
 
-	const status: CfgBuildStatus =
-		blockMap.size === 0 &&
-		anchorNodeId &&
-		anchorNodeId.startsWith("synthetic:decode_error")
-			? "decode_error"
-			: truncated
-				? "truncated"
-				: "ok";
+	const status: CfgBuildStatus = anchorDecodeFailed
+		? "decode_error"
+		: truncated
+			? "truncated"
+			: "ok";
 
 	const message =
 		status === "decode_error"
@@ -580,7 +575,6 @@ export const buildControlFlowGraph = (
 		status,
 		message,
 		anchorAddress,
-		anchorNodeId,
 		blocks: nodes,
 		edges: resolvedEdges,
 		stats: {

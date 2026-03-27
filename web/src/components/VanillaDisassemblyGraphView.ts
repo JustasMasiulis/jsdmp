@@ -30,6 +30,11 @@ const MIN_ZOOM = 0.1;
 const MAX_ZOOM = 3.0;
 const ZOOM_FACTOR = 0.1;
 const FIT_PADDING = 64;
+const EDGE_ARROW_MARKER_WIDTH = 8;
+const EDGE_ARROW_MARKER_HEIGHT = 6;
+const EDGE_ARROW_REF_X = 0;
+const EDGE_ARROW_REF_Y = 3;
+const EDGE_ARROW_LINE_TRIM = EDGE_ARROW_MARKER_WIDTH - EDGE_ARROW_REF_X;
 
 type DisassemblyGraphViewPanelOptions = {
 	container: HTMLElement;
@@ -41,9 +46,9 @@ const getPanelStorageKey = (panelId: string) =>
 	`${DISASSEMBLY_GRAPH_PANEL_STATE_KEY}:${panelId}`;
 
 const EDGE_COLOR_CSS: Record<EdgeColor, string> = {
-	red: "#BE123C",
-	green: "#0F766E",
-	blue: "#2563EB",
+	red: "#f30c00",
+	green: "#009b5e",
+	blue: "#3575fe",
 	grey: "#B45309",
 };
 
@@ -450,7 +455,6 @@ export class VanillaDisassemblyGraphView {
 				status: "decode_error",
 				message: `Graph loading failed: ${message}`,
 				anchorAddress,
-				anchorNodeId: null,
 				blocks: [],
 				edges: [],
 				stats: {
@@ -518,34 +522,77 @@ export class VanillaDisassemblyGraphView {
 		for (const [name, color] of Object.entries(EDGE_COLOR_CSS)) {
 			const marker = document.createElementNS(SVG_NS, "marker");
 			marker.setAttribute("id", `arrow-${name}`);
-			marker.setAttribute("markerWidth", "8");
-			marker.setAttribute("markerHeight", "6");
-			marker.setAttribute("refX", "8");
-			marker.setAttribute("refY", "3");
+			marker.setAttribute("markerWidth", String(EDGE_ARROW_MARKER_WIDTH));
+			marker.setAttribute("markerHeight", String(EDGE_ARROW_MARKER_HEIGHT));
+			marker.setAttribute("refX", String(EDGE_ARROW_REF_X));
+			marker.setAttribute("refY", String(EDGE_ARROW_REF_Y));
 			marker.setAttribute("orient", "auto");
 			marker.setAttribute("markerUnits", "userSpaceOnUse");
 			const path = document.createElementNS(SVG_NS, "path");
-			path.setAttribute("d", "M0,0 L8,3 L0,6 Z");
+			path.setAttribute(
+				"d",
+				`M0,0 L${EDGE_ARROW_MARKER_WIDTH},${EDGE_ARROW_REF_Y} L0,${EDGE_ARROW_MARKER_HEIGHT} Z`,
+			);
 			path.setAttribute("fill", color);
 			marker.append(path);
 			defs.append(marker);
 		}
-		// Dimmed arrow marker
-		const dimMarker = document.createElementNS(SVG_NS, "marker");
-		dimMarker.setAttribute("id", "arrow-dimmed");
-		dimMarker.setAttribute("markerWidth", "8");
-		dimMarker.setAttribute("markerHeight", "6");
-		dimMarker.setAttribute("refX", "8");
-		dimMarker.setAttribute("refY", "3");
-		dimMarker.setAttribute("orient", "auto");
-		dimMarker.setAttribute("markerUnits", "userSpaceOnUse");
-		const dimPath = document.createElementNS(SVG_NS, "path");
-		dimPath.setAttribute("d", "M0,0 L8,3 L0,6 Z");
-		dimPath.setAttribute("fill", "#D0D5DD");
-		dimMarker.append(dimPath);
-		defs.append(dimMarker);
 
 		svg.append(defs);
+	}
+
+	private trimPolylineEnd(
+		points: Array<{ x: number; y: number }>,
+		trimDistance: number,
+	) {
+		if (points.length < 2 || trimDistance <= 0) {
+			return points;
+		}
+
+		let totalLength = 0;
+		for (let i = 1; i < points.length; i += 1) {
+			const start = points[i - 1];
+			const end = points[i];
+			totalLength += Math.hypot(end.x - start.x, end.y - start.y);
+		}
+
+		if (totalLength <= trimDistance) {
+			return points;
+		}
+
+		const trimmed = points.map((point) => ({ ...point }));
+		let remaining = trimDistance;
+
+		for (let i = trimmed.length - 1; i > 0; i -= 1) {
+			const start = trimmed[i - 1];
+			const end = trimmed[i];
+			const dx = end.x - start.x;
+			const dy = end.y - start.y;
+			const length = Math.hypot(dx, dy);
+
+			if (length === 0) {
+				trimmed.splice(i, 1);
+				continue;
+			}
+
+			if (length <= remaining) {
+				trimmed.splice(i, 1);
+				remaining -= length;
+				if (remaining === 0) {
+					return trimmed;
+				}
+				continue;
+			}
+
+			const ratio = (length - remaining) / length;
+			trimmed[i] = {
+				x: start.x + dx * ratio,
+				y: start.y + dy * ratio,
+			};
+			return trimmed;
+		}
+
+		return points;
 	}
 
 	private renderEdges(svg: SVGSVGElement, core: GraphLayoutCore) {
@@ -563,17 +610,24 @@ export class VanillaDisassemblyGraphView {
 				const toId = blockIdByIndex.get(edge.dest);
 				if (!toId) continue;
 
-				const points: string[] = [];
+				const rawPoints: Array<{ x: number; y: number }> = [];
 				for (const segment of edge.path) {
-					if (points.length === 0) {
-						points.push(`${segment.start.x},${segment.start.y}`);
+					if (rawPoints.length === 0) {
+						rawPoints.push({ x: segment.start.x, y: segment.start.y });
 					}
-					points.push(`${segment.end.x},${segment.end.y}`);
+					const lastPoint = rawPoints[rawPoints.length - 1];
+					if (lastPoint.x !== segment.end.x || lastPoint.y !== segment.end.y) {
+						rawPoints.push({ x: segment.end.x, y: segment.end.y });
+					}
 				}
+				const points = this.trimPolylineEnd(rawPoints, EDGE_ARROW_LINE_TRIM);
 
 				const polyline = document.createElementNS(SVG_NS, "polyline");
 				polyline.classList.add("cfg-edge");
-				polyline.setAttribute("points", points.join(" "));
+				polyline.setAttribute(
+					"points",
+					points.map((point) => `${point.x},${point.y}`).join(" "),
+				);
 				const cssColor = EDGE_COLOR_CSS[edge.color];
 				polyline.setAttribute("stroke", cssColor);
 				polyline.setAttribute("marker-end", `url(#arrow-${edge.color})`);
@@ -586,7 +640,6 @@ export class VanillaDisassemblyGraphView {
 
 	private renderBlocks(container: HTMLElement, core: GraphLayoutCore) {
 		this.blockElements.clear();
-		const anchorNodeId = this.graphResult?.anchorNodeId ?? null;
 
 		for (const block of core.blocks) {
 			const div = document.createElement("div");
@@ -603,9 +656,6 @@ export class VanillaDisassemblyGraphView {
 			);
 			if (cfgNode && cfgNode.kind !== "block") {
 				div.classList.add(`cfg-block--kind-${cfgNode.kind}`);
-			}
-			if (block.data.id === anchorNodeId) {
-				div.classList.add("cfg-block--anchor");
 			}
 
 			div.textContent = block.data.label;
@@ -640,35 +690,10 @@ export class VanillaDisassemblyGraphView {
 
 	private updateSelectionStyles() {
 		const selected = this.selectedNodeId;
-		const anchorId = this.graphResult?.anchorNodeId ?? null;
 
 		for (const [id, div] of this.blockElements) {
 			const isSelected = id === selected;
-			const isAnchor = id === anchorId;
-			const isDimmed = selected !== null && !isSelected && !isAnchor;
 			div.classList.toggle("cfg-block--selected", isSelected);
-			div.classList.toggle("cfg-block--dimmed", isDimmed);
-		}
-
-		for (let i = 0; i < this.edgeElements.length; i++) {
-			const polyline = this.edgeElements[i];
-			const ownership = this.edgeOwnership[i];
-			const isDimmed =
-				selected !== null &&
-				ownership.from !== selected &&
-				ownership.to !== selected;
-			polyline.classList.toggle("cfg-edge--dimmed", isDimmed);
-			if (isDimmed) {
-				polyline.setAttribute("marker-end", "url(#arrow-dimmed)");
-			} else {
-				// Restore original marker from stroke color
-				const stroke = polyline.getAttribute("stroke") ?? "";
-				const colorName =
-					Object.entries(EDGE_COLOR_CSS).find(
-						([, css]) => css === stroke,
-					)?.[0] ?? "blue";
-				polyline.setAttribute("marker-end", `url(#arrow-${colorName})`);
-			}
 		}
 	}
 

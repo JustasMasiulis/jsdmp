@@ -64,6 +64,7 @@ export type AnnotatedCFGResult = Record<string, AnnotatedCfgDescriptor>;
 function assert(
 	condition: boolean,
 	message?: string,
+	// biome-ignore lint/suspicious/noExplicitAny: code from godbolt
 	...args: any[]
 ): asserts condition {
 	if (!condition) {
@@ -179,8 +180,6 @@ enum EdgeKind {
 	VERTICAL = 0,
 	RIGHTCORNER = 1,
 	RIGHTU = 2,
-	// biome-ignore lint/style/useLiteralEnumMembers: ported from cutter
-	NULL = Number.NaN,
 }
 
 type SegmentInfo = {
@@ -328,7 +327,7 @@ export class GraphLayoutCore {
 			callback(node);
 		} else {
 			// If we reach a node in the stack then this is a loop edge; we do nothing
-			assert(visited[node] == DfsState.Pending);
+			assert(visited[node] === DfsState.Pending);
 		}
 	}
 
@@ -740,7 +739,7 @@ export class GraphLayoutCore {
 		// Simplify segments
 		// Simplifications performed are eliminating (non-sentinel) edges which don't move anywhere and folding
 		// VV -> V and HH -> H.
-		let movement;
+		let movement: boolean;
 		do {
 			movement = false;
 			// i needs to start one into the range since we compare with i - 1
@@ -859,7 +858,7 @@ export class GraphLayoutCore {
 
 	classifyEdgeSegment(i: number, path: EdgeSegment[]) {
 		const segment = path[i];
-		let kind = EdgeKind.NULL;
+		let kind: EdgeKind;
 		if (i === 0) {
 			if (path.length === 1) {
 				// Segment will be vertical
@@ -938,7 +937,6 @@ export class GraphLayoutCore {
 				const target = this.blocks[edge.dest];
 				for (const [i, segment] of edge.path.entries()) {
 					const kind = this.classifyEdgeSegment(i, edge.path);
-					assert((kind as any) !== EdgeKind.NULL);
 					segments.push({
 						segment,
 						kind,
