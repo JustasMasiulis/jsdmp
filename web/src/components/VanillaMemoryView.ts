@@ -1,4 +1,11 @@
-import type { ParsedDumpInfo } from "./DumpSummary";
+import {
+	formatHexAddress,
+	formatHexAddressValue,
+	loadAddressPanelState,
+	parseHexAddress,
+	saveAddressPanelState,
+} from "../lib/addressPanelState";
+import type { ParsedDumpInfo } from "../lib/dumpInfo";
 import {
 	FixedRowVirtualTable,
 	type VirtualListingAdapter,
@@ -22,11 +29,6 @@ type MemorySpan = {
 	endExclusive: bigint;
 };
 
-type MemoryPanelSavedState = {
-	manualAddressHex?: string;
-	followInstructionPointer?: boolean;
-};
-
 type MemoryRowState = {
 	addressCode: HTMLElement;
 	hexCode: HTMLElement;
@@ -35,35 +37,11 @@ type MemoryRowState = {
 	asciiParts: string[];
 };
 
-const fmtAddress = (value: bigint) =>
-	value.toString(16).toUpperCase().padStart(16, "0");
-
 const fmtByte = (value: number) =>
 	value.toString(16).toUpperCase().padStart(2, "0");
 
 const toAscii = (value: number) =>
 	value >= 0x20 && value <= 0x7e ? String.fromCharCode(value) : ".";
-
-const parseHexAddress = (value: string): bigint | null => {
-	const trimmed = value.trim();
-	if (!trimmed) {
-		return null;
-	}
-
-	const normalized =
-		trimmed.startsWith("0x") || trimmed.startsWith("0X")
-			? trimmed.slice(2)
-			: trimmed;
-	if (!/^[0-9a-fA-F]+$/.test(normalized)) {
-		return null;
-	}
-
-	try {
-		return BigInt(`0x${normalized}`);
-	} catch {
-		return null;
-	}
-};
 
 const parsePanelIndex = (panelId: string): number => {
 	if (panelId === "memory") {
@@ -376,43 +354,26 @@ export class VanillaMemoryView {
 
 	private restoreState() {
 		const storageKey = getPanelStorageKey(this.panelId);
-		try {
-			const raw = window.localStorage.getItem(storageKey);
-			if (!raw) {
-				return;
-			}
+		const saved = loadAddressPanelState(storageKey);
+		if (typeof saved.followInstructionPointer === "boolean") {
+			this.followInstructionPointer = saved.followInstructionPointer;
+		}
 
-			const saved = JSON.parse(raw) as MemoryPanelSavedState;
-			if (typeof saved.followInstructionPointer === "boolean") {
-				this.followInstructionPointer = saved.followInstructionPointer;
+		if (saved.manualAddressHex) {
+			const parsed = parseHexAddress(saved.manualAddressHex);
+			if (parsed !== null) {
+				this.manualAddress = parsed;
 			}
-
-			if (saved.manualAddressHex) {
-				const parsed = parseHexAddress(saved.manualAddressHex);
-				if (parsed !== null) {
-					this.manualAddress = parsed;
-				}
-			}
-		} catch {
-			// Ignore persisted-state errors to keep interactions responsive.
 		}
 	}
 
 	private saveState() {
 		const storageKey = getPanelStorageKey(this.panelId);
-		const state: MemoryPanelSavedState = {
+		saveAddressPanelState(storageKey, {
 			manualAddressHex:
-				this.manualAddress !== null
-					? `0x${this.manualAddress.toString(16)}`
-					: "",
+				this.manualAddress !== null ? formatHexAddress(this.manualAddress) : "",
 			followInstructionPointer: this.followInstructionPointer,
-		};
-
-		try {
-			window.localStorage.setItem(storageKey, JSON.stringify(state));
-		} catch {
-			// Ignore storage errors to keep panel usable.
-		}
+		});
 	}
 
 	private syncInputWithAddress(address: bigint | null) {
@@ -421,7 +382,7 @@ export class VanillaMemoryView {
 			return;
 		}
 
-		this.addressInput.value = `0x${fmtAddress(address)}`;
+		this.addressInput.value = formatHexAddress(address);
 	}
 
 	private syncControlState() {
@@ -571,7 +532,7 @@ export class VanillaMemoryView {
 			}
 		}
 
-		row.addressCode.textContent = fmtAddress(rowAddress);
+		row.addressCode.textContent = formatHexAddressValue(rowAddress);
 		row.hexCode.textContent = row.hexParts.join(" ");
 		row.asciiCode.textContent = row.asciiParts.join("");
 		this.rangeHint = rangeHint;

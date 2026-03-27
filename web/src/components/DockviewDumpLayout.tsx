@@ -1,94 +1,39 @@
 import {
-	type AddPanelPositionOptions,
 	createDockview,
 	type DockviewApi,
 	type IContentRenderer,
-	type SerializedDockview,
 	themeLight,
 } from "dockview-core";
 import { createSignal, For, onCleanup, onMount } from "solid-js";
 import { render } from "solid-js/web";
+import {
+	addMemoryPanel,
+	applyDefaultLayout,
+	DISASSEMBLY_COMPONENT,
+	DISASSEMBLY_GRAPH_COMPONENT,
+	getPanelSection,
+	MEMORY_COMPONENT,
+	openPanel,
+	PANEL_SPECS,
+	type PanelId,
+	restoreLayout,
+	saveLayout,
+} from "../lib/dockviewLayout";
+import type { ParsedDumpInfo } from "../lib/dumpInfo";
 import DisassemblyGraphViewPanel from "./DisassemblyGraphViewPanel";
 import DisassemblyViewPanel from "./DisassemblyViewPanel";
-import DumpSummary, {
-	type DumpSection,
-	type ParsedDumpInfo,
-} from "./DumpSummary";
+import DumpSummary from "./DumpSummary";
 import MemoryViewPanel from "./MemoryViewPanel";
-
-const LAYOUT_STORAGE_KEY = "wasm-dump-debugger:dockview:v1";
-const MEMORY_COMPONENT = "memory-view";
-const DISASSEMBLY_COMPONENT = "disassembly";
-const DISASSEMBLY_GRAPH_COMPONENT = "disassembly-graph";
-const MEMORY_BASE_ID = "memory";
-
-const PANEL_SPECS = [
-	{
-		id: "summary",
-		component: "summary",
-		section: "summary",
-		title: "Summary",
-	},
-	{
-		id: "exception",
-		component: "exception",
-		section: "exception",
-		title: "Exception",
-	},
-	{
-		id: "disassembly",
-		component: "disassembly",
-		section: "disassembly",
-		title: "Disassembly",
-	},
-	{
-		id: "disassembly-graph",
-		component: DISASSEMBLY_GRAPH_COMPONENT,
-		section: "disassembly",
-		title: "Disassembly Graph",
-	},
-	{
-		id: "modules",
-		component: "modules",
-		section: "modules",
-		title: "Modules",
-	},
-	{
-		id: "threads",
-		component: "threads",
-		section: "threads",
-		title: "Threads",
-	},
-	{
-		id: MEMORY_BASE_ID,
-		component: MEMORY_COMPONENT,
-		section: "memory",
-		title: "Memory",
-	},
-] as const satisfies ReadonlyArray<{
-	id: string;
-	component: string;
-	section: DumpSection;
-	title: string;
-}>;
-
-type PanelId = (typeof PANEL_SPECS)[number]["id"];
 
 type DockviewDumpLayoutProps = {
 	dumpInfo: ParsedDumpInfo;
 };
 
-const createSummaryRenderer = (
-	dumpInfo: ParsedDumpInfo,
-	section: DumpSection,
-): IContentRenderer => {
+const createRenderedPanel = (content: () => JSX.Element): IContentRenderer => {
 	const element = document.createElement("div");
 	element.className = "dump-dockview-panel size-full";
 
-	const dispose = render(
-		() => <DumpSummary dumpInfo={dumpInfo} sections={[section]} />,
-		element,
-	);
+	const dispose = render(content, element);
 
 	return {
 		element,
@@ -99,239 +44,149 @@ const createSummaryRenderer = (
 	};
 };
 
-const createMemoryRenderer = (
-	dumpInfo: ParsedDumpInfo,
-	panelId: string,
-): IContentRenderer => {
-	const element = document.createElement("div");
-	element.className = "dump-dockview-panel size-full";
-
-	const dispose = render(
-		() => <MemoryViewPanel dumpInfo={dumpInfo} panelId={panelId} />,
-		element,
-	);
-
-	return {
-		element,
-		init: () => {
-			// Solid content is mounted eagerly into `element`.
-		},
-		dispose,
-	};
-};
-
-const createDisassemblyRenderer = (
-	dumpInfo: ParsedDumpInfo,
-	panelId: string,
-): IContentRenderer => {
-	const element = document.createElement("div");
-	element.className = "dump-dockview-panel size-full";
-
-	const dispose = render(
-		() => <DisassemblyViewPanel dumpInfo={dumpInfo} panelId={panelId} />,
-		element,
-	);
-
-	return {
-		element,
-		init: () => {
-			// Solid content is mounted eagerly into `element`.
-		},
-		dispose,
-	};
-};
-
-const createDisassemblyGraphRenderer = (
-	dumpInfo: ParsedDumpInfo,
-	panelId: string,
-): IContentRenderer => {
-	const element = document.createElement("div");
-	element.className = "dump-dockview-panel size-full";
-
-	const dispose = render(
-		() => <DisassemblyGraphViewPanel dumpInfo={dumpInfo} panelId={panelId} />,
-		element,
-	);
-
-	return {
-		element,
-		init: () => {
-			// Solid content is mounted eagerly into `element`.
-		},
-		dispose,
-	};
-};
-
-const parseMemoryPanelNumber = (panelId: string): number | null => {
-	if (panelId === MEMORY_BASE_ID) {
-		return 1;
-	}
-
-	const match = /^memory-(\d+)$/.exec(panelId);
-	if (!match) {
-		return null;
-	}
-	return Number.parseInt(match[1], 10);
-};
-
-const getNextMemoryPanelNumber = (dockview: DockviewApi): number => {
-	let maxPanelNumber = 1;
-	for (const panel of dockview.panels) {
-		const panelNumber = parseMemoryPanelNumber(panel.id);
-		if (panelNumber) {
-			maxPanelNumber = Math.max(maxPanelNumber, panelNumber);
+const createDockviewRenderer =
+	(dumpInfo: ParsedDumpInfo) =>
+	(options: { id: string; name: string }): IContentRenderer => {
+		switch (options.name) {
+			case MEMORY_COMPONENT:
+				return createRenderedPanel(() => (
+					<MemoryViewPanel dumpInfo={dumpInfo} panelId={options.id} />
+				));
+			case DISASSEMBLY_COMPONENT:
+				return createRenderedPanel(() => (
+					<DisassemblyViewPanel dumpInfo={dumpInfo} panelId={options.id} />
+				));
+			case DISASSEMBLY_GRAPH_COMPONENT:
+				return createRenderedPanel(() => (
+					<DisassemblyGraphViewPanel dumpInfo={dumpInfo} panelId={options.id} />
+				));
+			default:
+				return createRenderedPanel(() => (
+					<DumpSummary
+						dumpInfo={dumpInfo}
+						sections={[getPanelSection(options.name)]}
+					/>
+				));
 		}
-	}
-	return maxPanelNumber + 1;
-};
+	};
 
-const saveLayout = (dockview: DockviewApi) => {
-	try {
-		window.localStorage.setItem(
-			LAYOUT_STORAGE_KEY,
-			JSON.stringify(dockview.toJSON()),
-		);
-	} catch {
-		// Ignore storage failures so layout interactions continue to work.
-	}
-};
-
-const restoreLayout = (dockview: DockviewApi): boolean => {
-	const serialized = window.localStorage.getItem(LAYOUT_STORAGE_KEY);
-	if (!serialized) {
-		return false;
-	}
-
-	try {
-		const layout = JSON.parse(serialized) as SerializedDockview;
-		dockview.fromJSON(layout);
-		return true;
-	} catch {
-		window.localStorage.removeItem(LAYOUT_STORAGE_KEY);
-		return false;
-	}
-};
-
-const getPanelSpec = (panelId: PanelId) =>
-	PANEL_SPECS.find((spec) => spec.id === panelId);
-
-const addPanelIfMissing = (
+const subscribeToDockviewEvents = (
 	dockview: DockviewApi,
-	panelId: PanelId,
-	position?: AddPanelPositionOptions,
-) => {
-	if (dockview.getPanel(panelId)) {
-		return;
-	}
+	onLayoutChange: () => void,
+) => [
+	dockview.onDidAddPanel(onLayoutChange),
+	dockview.onDidRemovePanel(onLayoutChange),
+	dockview.onDidLayoutChange(onLayoutChange),
+];
 
-	const panelSpec = getPanelSpec(panelId);
-	if (!panelSpec) {
-		return;
-	}
+type ToolbarAction = "add-memory-view" | "open-panel" | "reset-layout";
 
-	dockview.addPanel({
-		component: panelSpec.component,
-		id: panelSpec.id,
-		position,
-		title: panelSpec.title,
-	});
+type DockviewToolbarProps = {
+	isOpen: (panelId: PanelId) => boolean;
+	onAddMemoryView: () => void;
+	onOpenPanel: (panelId: PanelId) => void;
+	onResetLayout: () => void;
 };
 
-const applyDefaultLayout = (dockview: DockviewApi) => {
-	dockview.clear();
-	addPanelIfMissing(dockview, "summary");
-	addPanelIfMissing(dockview, "disassembly", {
-		direction: "right",
-		referencePanel: "summary",
-	});
-	addPanelIfMissing(dockview, "disassembly-graph", {
-		direction: "right",
-		referencePanel: "disassembly",
-	});
-	addPanelIfMissing(dockview, "exception", {
-		direction: "below",
-		referencePanel: "summary",
-	});
-	addPanelIfMissing(dockview, "modules", {
-		direction: "below",
-		referencePanel: "disassembly-graph",
-	});
-	addPanelIfMissing(dockview, "threads", {
-		direction: "right",
-		referencePanel: "modules",
-	});
-	addPanelIfMissing(dockview, "memory", {
-		direction: "within",
-		referencePanel: "summary",
-	});
+const DockviewToolbar = (props: DockviewToolbarProps) => {
+	const handleClick = (
+		event: MouseEvent & { currentTarget: HTMLButtonElement },
+	) => {
+		const action = event.currentTarget.dataset.action as
+			| ToolbarAction
+			| undefined;
+
+		switch (action) {
+			case "open-panel": {
+				const panelId = event.currentTarget.dataset.panelId as
+					| PanelId
+					| undefined;
+				if (panelId) {
+					props.onOpenPanel(panelId);
+				}
+				return;
+			}
+			case "add-memory-view":
+				props.onAddMemoryView();
+				return;
+			case "reset-layout":
+				props.onResetLayout();
+				return;
+		}
+	};
+
+	return (
+		<div class="dump-dockview-toolbar">
+			<For each={PANEL_SPECS}>
+				{(panel) => (
+					<button
+						type="button"
+						class="dump-dockview-toolbar__button"
+						data-action="open-panel"
+						data-panel-id={panel.id}
+						disabled={props.isOpen(panel.id)}
+						onClick={handleClick}
+					>
+						Open {panel.title}
+					</button>
+				)}
+			</For>
+			<button
+				type="button"
+				class="dump-dockview-toolbar__button"
+				data-action="reset-layout"
+				onClick={handleClick}
+			>
+				Reset Layout
+			</button>
+			<button
+				type="button"
+				class="dump-dockview-toolbar__button"
+				data-action="add-memory-view"
+				onClick={handleClick}
+			>
+				Add Memory View
+			</button>
+		</div>
+	);
 };
 
 export default function DockviewDumpLayout(props: DockviewDumpLayoutProps) {
 	const [dockview, setDockview] = createSignal<DockviewApi>();
 	const [layoutVersion, setLayoutVersion] = createSignal(0);
-	let hostRef: HTMLDivElement | undefined;
+	let hostRef!: HTMLDivElement;
 
-	const bumpLayoutVersion = () => {
-		setLayoutVersion((value) => value + 1);
-	};
+	const bumpLayoutVersion = () => setLayoutVersion((value) => value + 1);
 
 	const isOpen = (panelId: PanelId) => {
 		layoutVersion();
 		return !!dockview()?.getPanel(panelId);
 	};
 
-	const openPanel = (panelId: PanelId) => {
+	const handleOpenPanel = (panelId: PanelId) => {
 		const api = dockview();
 		if (!api) {
 			return;
 		}
 
-		const existing = api.getPanel(panelId);
-		if (existing) {
-			existing.api.setActive();
-			return;
+		if (openPanel(api, panelId)) {
+			saveLayout(api);
+			bumpLayoutVersion();
 		}
-
-		const activePanelId = api.activePanel?.id;
-		addPanelIfMissing(
-			api,
-			panelId,
-			activePanelId
-				? {
-						direction: "within",
-						referencePanel: activePanelId,
-				  }
-				: undefined,
-		);
-		saveLayout(api);
-		bumpLayoutVersion();
 	};
 
-	const addMemoryView = () => {
+	const handleAddMemoryView = () => {
 		const api = dockview();
 		if (!api) {
 			return;
 		}
 
-		const panelNumber = getNextMemoryPanelNumber(api);
-		const panelId = `memory-${panelNumber}`;
-		const activePanelId = api.activePanel?.id;
-		api.addPanel({
-			component: MEMORY_COMPONENT,
-			id: panelId,
-			title: `Memory #${panelNumber}`,
-			position: activePanelId
-				? {
-						direction: "within",
-						referencePanel: activePanelId,
-				  }
-				: undefined,
-		});
+		addMemoryPanel(api);
 		saveLayout(api);
 		bumpLayoutVersion();
 	};
 
-	const resetLayout = () => {
+	const handleResetLayout = () => {
 		const api = dockview();
 		if (!api) {
 			return;
@@ -343,51 +198,19 @@ export default function DockviewDumpLayout(props: DockviewDumpLayoutProps) {
 	};
 
 	onMount(() => {
-		if (!hostRef) {
-			return;
-		}
-
-		const panelSections = new Map(
-			PANEL_SPECS.map((panel) => [panel.component, panel.section] as const),
-		);
-
 		const api = createDockview(hostRef, {
-			createComponent: (options) => {
-				if (options.name === MEMORY_COMPONENT) {
-					return createMemoryRenderer(props.dumpInfo, options.id);
-				}
-				if (options.name === DISASSEMBLY_COMPONENT) {
-					return createDisassemblyRenderer(props.dumpInfo, options.id);
-				}
-				if (options.name === DISASSEMBLY_GRAPH_COMPONENT) {
-					return createDisassemblyGraphRenderer(props.dumpInfo, options.id);
-				}
-
-				return createSummaryRenderer(
-					props.dumpInfo,
-					panelSections.get(options.name) ?? "summary",
-				);
-			},
+			createComponent: createDockviewRenderer(props.dumpInfo),
 			theme: themeLight,
 		});
 
 		setDockview(api);
 
-		const subscriptions = [
-			api.onDidAddPanel(() => {
-				bumpLayoutVersion();
-			}),
-			api.onDidRemovePanel(() => {
-				bumpLayoutVersion();
-			}),
-			api.onDidLayoutChange(() => {
-				saveLayout(api);
-				bumpLayoutVersion();
-			}),
-		];
+		const subscriptions = subscribeToDockviewEvents(api, () => {
+			saveLayout(api);
+			bumpLayoutVersion();
+		});
 
-		const restored = restoreLayout(api);
-		if (!restored) {
+		if (!restoreLayout(api)) {
 			applyDefaultLayout(api);
 			saveLayout(api);
 		}
@@ -404,43 +227,13 @@ export default function DockviewDumpLayout(props: DockviewDumpLayoutProps) {
 
 	return (
 		<section class="dump-dockview-shell" aria-label="Docked dump details">
-			<div class="dump-dockview-toolbar">
-				<For each={PANEL_SPECS}>
-					{(panel) => (
-						<button
-							type="button"
-							class="dump-dockview-toolbar__button"
-							disabled={isOpen(panel.id)}
-							onClick={() => {
-								openPanel(panel.id);
-							}}
-						>
-							Open {panel.title}
-						</button>
-					)}
-				</For>
-				<button
-					type="button"
-					class="dump-dockview-toolbar__button"
-					onClick={resetLayout}
-				>
-					Reset Layout
-				</button>
-				<button
-					type="button"
-					class="dump-dockview-toolbar__button"
-					onClick={addMemoryView}
-				>
-					Add Memory View
-				</button>
-			</div>
-
-			<div
-				ref={(element) => {
-					hostRef = element;
-				}}
-				class="dump-dockview-host"
+			<DockviewToolbar
+				isOpen={isOpen}
+				onAddMemoryView={handleAddMemoryView}
+				onOpenPanel={handleOpenPanel}
+				onResetLayout={handleResetLayout}
 			/>
+			<div ref={hostRef} class="dump-dockview-host" />
 		</section>
 	);
 }

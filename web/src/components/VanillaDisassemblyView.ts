@@ -1,3 +1,10 @@
+import {
+	formatHexAddress,
+	formatHexAddressValue,
+	loadAddressPanelState,
+	parseHexAddress,
+	saveAddressPanelState,
+} from "../lib/addressPanelState";
 import type { ResolvedDumpContext } from "../lib/context";
 import {
 	buildDisassemblyListing,
@@ -5,7 +12,7 @@ import {
 	loadNextDisassemblyLines,
 	loadPreviousDisassemblyLines,
 } from "../lib/debugDisassembly";
-import type { ParsedDumpInfo } from "./DumpSummary";
+import type { ParsedDumpInfo } from "../lib/dumpInfo";
 import {
 	FixedRowVirtualTable,
 	type VirtualListingAdapter,
@@ -29,43 +36,14 @@ type DisassemblyViewPanelOptions = {
 
 type DisassemblyLine = NonNullable<DebugDisassemblyListing["lines"]>[number];
 
-type DisassemblyPanelSavedState = {
-	manualAddressHex?: string;
-	followInstructionPointer?: boolean;
-};
-
 type DisassemblyRowState = {
 	addressCode: HTMLElement;
 	bytesCode: HTMLElement;
 	instructionCode: HTMLElement;
 };
 
-const fmtAddress = (value: bigint) =>
-	value.toString(16).toUpperCase().padStart(16, "0");
-
 const formatInstruction = (line: DisassemblyLine) =>
 	line.operands ? `${line.mnemonic} ${line.operands}` : line.mnemonic;
-
-const parseHexAddress = (value: string): bigint | null => {
-	const trimmed = value.trim();
-	if (!trimmed) {
-		return null;
-	}
-
-	const normalized =
-		trimmed.startsWith("0x") || trimmed.startsWith("0X")
-			? trimmed.slice(2)
-			: trimmed;
-	if (!/^[0-9a-fA-F]+$/.test(normalized)) {
-		return null;
-	}
-
-	try {
-		return BigInt(`0x${normalized}`);
-	} catch {
-		return null;
-	}
-};
 
 const getPanelStorageKey = (panelId: string) =>
 	`${DISASSEMBLY_PANEL_STATE_KEY}:${panelId}`;
@@ -310,48 +288,30 @@ export class VanillaDisassemblyView {
 
 	private restoreState() {
 		const storageKey = getPanelStorageKey(this.panelId);
-		try {
-			const raw = window.localStorage.getItem(storageKey);
-			if (!raw) {
-				return;
-			}
+		const saved = loadAddressPanelState(storageKey);
+		if (typeof saved.followInstructionPointer === "boolean") {
+			this.followInstructionPointer = saved.followInstructionPointer;
+		}
 
-			const saved = JSON.parse(raw) as DisassemblyPanelSavedState;
-			if (typeof saved.followInstructionPointer === "boolean") {
-				this.followInstructionPointer = saved.followInstructionPointer;
+		if (saved.manualAddressHex) {
+			const parsed = parseHexAddress(saved.manualAddressHex);
+			if (parsed !== null) {
+				this.manualAddress = parsed;
 			}
-
-			if (saved.manualAddressHex) {
-				const parsed = parseHexAddress(saved.manualAddressHex);
-				if (parsed !== null) {
-					this.manualAddress = parsed;
-				}
-			}
-		} catch {
-			// Ignore persisted-state errors so the panel remains usable.
 		}
 	}
 
 	private saveState() {
 		const storageKey = getPanelStorageKey(this.panelId);
-		const state: DisassemblyPanelSavedState = {
+		saveAddressPanelState(storageKey, {
 			manualAddressHex:
-				this.manualAddress !== null
-					? `0x${this.manualAddress.toString(16)}`
-					: "",
+				this.manualAddress !== null ? formatHexAddress(this.manualAddress) : "",
 			followInstructionPointer: this.followInstructionPointer,
-		};
-
-		try {
-			window.localStorage.setItem(storageKey, JSON.stringify(state));
-		} catch {
-			// Ignore storage failures so navigation continues to work.
-		}
+		});
 	}
 
 	private syncInputWithAddress(address: bigint | null) {
-		this.addressInput.value =
-			address === null ? "" : `0x${fmtAddress(address)}`;
+		this.addressInput.value = address === null ? "" : formatHexAddress(address);
 	}
 
 	private currentAnchor() {
@@ -425,7 +385,7 @@ export class VanillaDisassemblyView {
 	}
 
 	private firstLoadedAddress() {
-		return this.lines()[3]?.address ?? null;
+		return this.lines()[0]?.address ?? null;
 	}
 
 	private lastLoadedEndAddress() {
@@ -515,7 +475,6 @@ export class VanillaDisassemblyView {
 		const listing = this.listing;
 		const beforeAddress = this.firstLoadedAddress();
 		if (!listing || beforeAddress === null || !listing.hasMorePrevious) {
-			console.log("no previous lines 1", listing, beforeAddress);
 			return;
 		}
 
@@ -528,7 +487,6 @@ export class VanillaDisassemblyView {
 				currentListing.lines.length === 0 ||
 				currentListing.lines[0]?.address !== beforeAddress
 			) {
-				console.log("no previous lines 2");
 				return;
 			}
 
@@ -538,7 +496,6 @@ export class VanillaDisassemblyView {
 			);
 			currentListing.hasMorePrevious = previousLoad.hasMoreBefore;
 			if (previousLoad.lines.length === 0) {
-				console.log("no previous lines");
 				return;
 			}
 
@@ -613,7 +570,7 @@ export class VanillaDisassemblyView {
 			return;
 		}
 
-		row.addressCode.textContent = fmtAddress(line.address);
+		row.addressCode.textContent = formatHexAddressValue(line.address);
 		row.bytesCode.textContent = line.bytesHex;
 		row.instructionCode.textContent = formatInstruction(line);
 	}

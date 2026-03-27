@@ -85,6 +85,9 @@ export const disassembleInstruction = (
 	}
 
 	const wasm = WASM_EXPORTS;
+	if (!wasm) {
+		return null;
+	}
 
 	const candidateBytes =
 		bytes.byteLength > MAX_INSTRUCTION_LENGTH
@@ -126,9 +129,7 @@ export const disassembleInstruction = (
 		mnemonic: parsed.mnemonic,
 		operands: parsed.operands,
 		controlFlow: {
-			kind: toControlFlowKind(
-				wasm.wasm_get_disassembled_control_flow_kind(),
-			),
+			kind: toControlFlowKind(wasm.wasm_get_disassembled_control_flow_kind()),
 			hasFallthrough: wasm.wasm_get_disassembled_has_fallthrough() !== 0,
 			hasDirectTarget,
 			directTargetAddress: hasDirectTarget

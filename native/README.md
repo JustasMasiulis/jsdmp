@@ -19,4 +19,4 @@ Generated artifacts (Emscripten target):
 - `zydis_wasm_disassemble`
 - `zydis_wasm_mnemonic_string`
 
-See `include/zydis_wasm.h` for exact signatures.
+See `include/zydis_wasm.hpp` for exact signatures.

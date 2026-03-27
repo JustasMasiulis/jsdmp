@@ -191,7 +191,6 @@ const buildPreviousGuessLines = (
 	rangeStart: bigint,
 ): DisassemblyLine[] => {
 	if (endAddress <= rangeStart) {
-		console.log("no previous lines 7");
 		return [];
 	}
 
@@ -236,9 +235,7 @@ const buildPreviousGuessLines = (
 		return best;
 	};
 
-	const best = bestChainEndingAt(endAddress);
-	console.log("best chains at end address", fmtAddress(endAddress), best);
-	return best.map((decoded) =>
+	return bestChainEndingAt(endAddress).map((decoded) =>
 		makeLine(
 			decoded.address,
 			decoded.length,
@@ -256,7 +253,6 @@ const loadPreviousWindow = (
 	rangeStart: bigint,
 ): PreviousDisassemblyLoadResult => {
 	if (beforeAddress <= rangeStart) {
-		console.log("no previous lines 3");
 		return emptyPreviousLoad();
 	}
 
@@ -267,9 +263,6 @@ const loadPreviousWindow = (
 	while (cursor > rangeStart && loadedBytes < DISASSEMBLY_PAGE_BYTES) {
 		const batch = buildPreviousGuessLines(source, cursor, rangeStart);
 		if (batch.length === 0) {
-			console.log(
-				`no previous lines 4: ${fmtAddress(cursor)} ${fmtAddress(rangeStart)}`,
-			);
 			return emptyPreviousLoad(lines, false);
 		}
 
@@ -277,14 +270,12 @@ const loadPreviousWindow = (
 		loadedBytes += countLoadedBytes(batch);
 		const nextCursor = batch[0].address;
 		if (nextCursor >= cursor) {
-			console.log("no previous lines 5");
 			return emptyPreviousLoad(lines, false);
 		}
 		cursor = nextCursor;
 	}
 
 	if (cursor <= rangeStart) {
-		console.log("no previous lines 6");
 		return emptyPreviousLoad(lines, false);
 	}
 

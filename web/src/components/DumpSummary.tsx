@@ -1,5 +1,6 @@
 import { For, type ParentComponent } from "solid-js";
-import type { ResolvedDumpContext } from "../lib/context";
+import type { ParsedDumpInfo } from "../lib/dumpInfo";
+import type { DumpSection } from "../lib/dumpSections";
 import {
 	fmtHex,
 	fmtHex8,
@@ -14,47 +15,9 @@ import {
 	type MinidumpCodeViewInfo,
 	type MinidumpExceptionStream,
 	type MinidumpMemory64Range,
-	type MinidumpMemoryRangeMatch,
-	type MinidumpMemoryReadView,
-	type MinidumpMiscInfo,
 	type MinidumpModule,
-	type MinidumpSystemInfo,
 	type MinidumpUnloadedModule,
 } from "../lib/minidump";
-
-export type ParsedDumpInfo = {
-	checksum: number;
-	timestamp: number;
-	flags: bigint;
-	streamCount: number;
-	streamTypes: number[];
-	systemInfo: MinidumpSystemInfo | null;
-	miscInfo: MinidumpMiscInfo | null;
-	exceptionStream: MinidumpExceptionStream | null;
-	associatedThreads: MinidumpAssociatedThread[] | null;
-	moduleList: MinidumpModule[] | null;
-	unloadedModuleList: MinidumpUnloadedModule[] | null;
-	memoryRanges: MinidumpMemory64Range[];
-	readMemoryAt: (address: bigint, size: number) => Uint8Array | null;
-	readMemoryViewAt: (
-		address: bigint,
-		size: number,
-		hintRangeIndex?: number,
-	) => MinidumpMemoryReadView | null;
-	findMemoryRangeAt: (
-		address: bigint,
-		hintRangeIndex?: number,
-	) => MinidumpMemoryRangeMatch | null;
-	resolvedContext: ResolvedDumpContext | null;
-};
-
-export type DumpSection =
-	| "summary"
-	| "exception"
-	| "disassembly"
-	| "modules"
-	| "threads"
-	| "memory";
 
 type DumpSummaryProps = {
 	dumpInfo: ParsedDumpInfo;
@@ -68,14 +31,17 @@ const Row: ParentComponent<{ label: string }> = (props) => (
 	</p>
 );
 
-const RawRow: ParentComponent<{}> = (props) => (
+const RawRow: ParentComponent<Record<string, never>> = (props) => (
 	<p class="dump-info-panel__item">
 		<code>{props.children}</code>
 	</p>
 );
 
 const formatTimestamp = (timestamp: number) => {
-	if (!timestamp) return "0 (unset)";
+	if (!timestamp) {
+		return "0 (unset)";
+	}
+
 	const iso = new Date(timestamp * 1000).toISOString();
 	return `${timestamp} (${iso})`;
 };
@@ -97,12 +63,10 @@ type MemoryListSummary = {
 const summarizeMemoryList = (
 	memoryRanges: MinidumpMemory64Range[],
 ): MemoryListSummary | null => {
-	const ranges = [
-		...memoryRanges.map((range) => ({
-			start: range.address,
-			size: range.dataSize,
-		})),
-	];
+	const ranges = memoryRanges.map((range) => ({
+		start: range.address,
+		size: range.dataSize,
+	}));
 
 	if (ranges.length === 0) {
 		return null;
@@ -178,38 +142,34 @@ const emptyCell = "-";
 const buildAssociatedRows = (
 	associatedThreads: MinidumpAssociatedThread[] | null,
 ): string[][] =>
-	(associatedThreads ?? []).map((thread) => {
-		return [
-			String(thread.threadId),
-			thread.suspendCount ? String(thread.suspendCount) : emptyCell,
-			thread.priorityClass
-				? fmtPriority(thread.priorityClass, thread.priority)
-				: emptyCell,
-			thread.teb ? fmtHex16(thread.teb) : emptyCell,
-			thread.stack.startOfMemoryRange
-				? fmtHex16(thread.stack.startOfMemoryRange)
-				: emptyCell,
-			thread.stack.location.dataSize
-				? String(thread.stack.location.dataSize)
-				: emptyCell,
-			thread.stack.location.rva
-				? fmtHex8(thread.stack.location.rva)
-				: emptyCell,
-			thread.threadContext.dataSize
-				? String(thread.threadContext.dataSize)
-				: emptyCell,
-			thread.threadContext.rva ? fmtHex8(thread.threadContext.rva) : emptyCell,
-			thread.dumpFlags ? fmtHex8(thread.dumpFlags) : emptyCell,
-			thread.dumpError ? fmtHex8(thread.dumpError) : emptyCell,
-			thread.exitStatus ? String(thread.exitStatus) : emptyCell,
-			thread.createTime ? fmtHex16(thread.createTime) : emptyCell,
-			thread.exitTime ? fmtHex16(thread.exitTime) : emptyCell,
-			thread.kernelTime ? fmtHex16(thread.kernelTime) : emptyCell,
-			thread.userTime ? fmtHex16(thread.userTime) : emptyCell,
-			thread.startAddress ? fmtHex16(thread.startAddress) : emptyCell,
-			thread.affinity ? fmtHex16(thread.affinity) : emptyCell,
-		];
-	});
+	(associatedThreads ?? []).map((thread) => [
+		String(thread.threadId),
+		thread.suspendCount ? String(thread.suspendCount) : emptyCell,
+		thread.priorityClass
+			? fmtPriority(thread.priorityClass, thread.priority)
+			: emptyCell,
+		thread.teb ? fmtHex16(thread.teb) : emptyCell,
+		thread.stack.startOfMemoryRange
+			? fmtHex16(thread.stack.startOfMemoryRange)
+			: emptyCell,
+		thread.stack.location.dataSize
+			? String(thread.stack.location.dataSize)
+			: emptyCell,
+		thread.stack.location.rva ? fmtHex8(thread.stack.location.rva) : emptyCell,
+		thread.threadContext.dataSize
+			? String(thread.threadContext.dataSize)
+			: emptyCell,
+		thread.threadContext.rva ? fmtHex8(thread.threadContext.rva) : emptyCell,
+		thread.dumpFlags ? fmtHex8(thread.dumpFlags) : emptyCell,
+		thread.dumpError ? fmtHex8(thread.dumpError) : emptyCell,
+		thread.exitStatus ? String(thread.exitStatus) : emptyCell,
+		thread.createTime ? fmtHex16(thread.createTime) : emptyCell,
+		thread.exitTime ? fmtHex16(thread.exitTime) : emptyCell,
+		thread.kernelTime ? fmtHex16(thread.kernelTime) : emptyCell,
+		thread.userTime ? fmtHex16(thread.userTime) : emptyCell,
+		thread.startAddress ? fmtHex16(thread.startAddress) : emptyCell,
+		thread.affinity ? fmtHex16(thread.affinity) : emptyCell,
+	]);
 
 const buildExceptionParameterRows = (
 	exceptionStream: MinidumpExceptionStream | null,
@@ -257,6 +217,7 @@ const buildModuleRows = (moduleList: MinidumpModule[] | null): string[][] =>
 		const [cvFormat, cvPdb, cvIdentifier, cvAge] = buildCodeViewColumns(
 			module.codeViewInfo,
 		);
+
 		return [
 			fmtHex(module.baseOfImage, 16),
 			fmtHex(module.sizeOfImage, 8),
@@ -284,6 +245,238 @@ const buildUnloadedModuleRows = (
 		module.moduleName || emptyCell,
 	]);
 
+const SummarySection = (props: { dumpInfo: ParsedDumpInfo }) => (
+	<>
+		<h2 class="dump-info-panel__title m0">Dump Summary</h2>
+		<Row label="Checksum">{fmtHex(props.dumpInfo.checksum, 8)}</Row>
+		<Row label="Timestamp">{formatTimestamp(props.dumpInfo.timestamp)}</Row>
+		<Row label="Flags">{fmtHex(props.dumpInfo.flags, 16)}</Row>
+		<Row label="Streams">{props.dumpInfo.streamCount}</Row>
+		<Row label="Stream Types">
+			{props.dumpInfo.streamTypes.length > 0
+				? props.dumpInfo.streamTypes.map(getStreamTypeName).join(", ")
+				: "none"}
+		</Row>
+		{props.dumpInfo.systemInfo ? (
+			<div class="dump-info-panel__table-wrap">
+				<RawRow>{fmtOs(props.dumpInfo.systemInfo)}</RawRow>
+				<RawRow>{fmtProductAndSuite(props.dumpInfo.systemInfo)}</RawRow>
+				<Row label="CPU Revision">
+					level {props.dumpInfo.systemInfo.processorLevel}, rev{" "}
+					{fmtHex(props.dumpInfo.systemInfo.processorRevision, 4)}
+				</Row>
+				{props.dumpInfo.systemInfo.cpu.type === "x86" ? (
+					<Row label="CPU Vendor">
+						{props.dumpInfo.systemInfo.cpu.vendorId || "unknown"}
+					</Row>
+				) : (
+					<Row label="CPU Features">
+						{fmtHex(props.dumpInfo.systemInfo.cpu.processorFeatures[0], 16)},{" "}
+						{fmtHex(props.dumpInfo.systemInfo.cpu.processorFeatures[1], 16)}
+					</Row>
+				)}
+			</div>
+		) : null}
+		{props.dumpInfo.miscInfo ? (
+			<>
+				<Row label="MiscInfo Size">{props.dumpInfo.miscInfo.sizeOfInfo}</Row>
+				<Row label="MiscInfo Flags1">
+					{fmtHex(props.dumpInfo.miscInfo.flags1, 8)}
+				</Row>
+				{props.dumpInfo.miscInfo.processId !== null ? (
+					<Row label="Process ID">{props.dumpInfo.miscInfo.processId}</Row>
+				) : null}
+				{props.dumpInfo.miscInfo.processCreateTime !== null ? (
+					<Row label="Process Create Time">
+						{formatTimestamp(props.dumpInfo.miscInfo.processCreateTime)}
+					</Row>
+				) : null}
+				{props.dumpInfo.miscInfo.processUserTime !== null ? (
+					<Row label="Process User Time">
+						{formatSeconds(props.dumpInfo.miscInfo.processUserTime)}
+					</Row>
+				) : null}
+				{props.dumpInfo.miscInfo.processKernelTime !== null ? (
+					<Row label="Process Kernel Time">
+						{formatSeconds(props.dumpInfo.miscInfo.processKernelTime)}
+					</Row>
+				) : null}
+				{props.dumpInfo.miscInfo.processorMaxMhz !== null ? (
+					<Row label="CPU Max MHz">
+						{props.dumpInfo.miscInfo.processorMaxMhz}
+					</Row>
+				) : null}
+				{props.dumpInfo.miscInfo.processorCurrentMhz !== null ? (
+					<Row label="CPU Current MHz">
+						{props.dumpInfo.miscInfo.processorCurrentMhz}
+					</Row>
+				) : null}
+				{props.dumpInfo.miscInfo.processorMhzLimit !== null ? (
+					<Row label="CPU MHz Limit">
+						{props.dumpInfo.miscInfo.processorMhzLimit}
+					</Row>
+				) : null}
+				{props.dumpInfo.miscInfo.processorMaxIdleState !== null ? (
+					<Row label="CPU Max Idle State">
+						{props.dumpInfo.miscInfo.processorMaxIdleState}
+					</Row>
+				) : null}
+				{props.dumpInfo.miscInfo.processorCurrentIdleState !== null ? (
+					<Row label="CPU Current Idle State">
+						{props.dumpInfo.miscInfo.processorCurrentIdleState}
+					</Row>
+				) : null}
+			</>
+		) : null}
+	</>
+);
+
+const ExceptionSection = (props: {
+	dumpInfo: ParsedDumpInfo;
+	exceptionParameterRows: string[][];
+}) => (
+	<>
+		<Row label="Exception Thread ID">
+			{props.dumpInfo.exceptionStream?.threadId}
+		</Row>
+		<Row label="Exception Code">
+			{fmtHex(
+				props.dumpInfo.exceptionStream?.exceptionRecord.exceptionCode ?? 0,
+				8,
+			)}
+		</Row>
+		<Row label="Exception Flags">
+			{fmtHex(
+				props.dumpInfo.exceptionStream?.exceptionRecord.exceptionFlags ?? 0,
+				8,
+			)}
+		</Row>
+		<Row label="Exception Address">
+			{fmtHex(
+				props.dumpInfo.exceptionStream?.exceptionRecord.exceptionAddress ?? 0n,
+				16,
+			)}
+		</Row>
+		<Row label="Exception Record">
+			{fmtHex(
+				props.dumpInfo.exceptionStream?.exceptionRecord.exceptionRecord ?? 0n,
+				16,
+			)}
+		</Row>
+		<Row label="Exception Parameters">
+			{props.dumpInfo.exceptionStream?.exceptionRecord.numberParameters ?? 0}
+		</Row>
+		<Row label="Exception Context">
+			size={props.dumpInfo.exceptionStream?.threadContext.dataSize ?? 0}, rva=
+			{fmtHex(props.dumpInfo.exceptionStream?.threadContext.rva ?? 0, 8)}
+		</Row>
+		<DumpTable
+			title="Exception Information"
+			headers={["Index", "Value"]}
+			rows={props.exceptionParameterRows}
+		/>
+	</>
+);
+
+const ModulesSection = (props: {
+	dumpInfo: ParsedDumpInfo;
+	moduleRows: string[][];
+	unloadedModuleRows: string[][];
+}) => (
+	<>
+		{props.dumpInfo.moduleList ? (
+			<>
+				<Row label="Modules">{props.dumpInfo.moduleList.length}</Row>
+				<DumpTable
+					title="Module Entries"
+					headers={[
+						"Base",
+						"Size",
+						"Checksum",
+						"TimeDateStamp",
+						"Name",
+						"CV Size",
+						"CV Format",
+						"CV PDB",
+						"CV Identifier",
+						"CV Age",
+						"Misc Size",
+						"Misc RVA",
+					]}
+					rows={props.moduleRows}
+				/>
+			</>
+		) : null}
+		{props.dumpInfo.unloadedModuleList ? (
+			<>
+				<Row label="Unloaded Modules">
+					{props.dumpInfo.unloadedModuleList.length}
+				</Row>
+				<DumpTable
+					title="Unloaded Module Entries"
+					headers={["Base", "Size", "Checksum", "TimeDateStamp", "Name"]}
+					rows={props.unloadedModuleRows}
+				/>
+			</>
+		) : null}
+	</>
+);
+
+const MemorySection = (props: {
+	memoryListSummary: MemoryListSummary | null;
+}) => (
+	<>
+		<Row label="Memory Ranges">
+			{props.memoryListSummary ? props.memoryListSummary.rangeCount : 0}
+		</Row>
+		<Row label="Memory Bytes">
+			{props.memoryListSummary
+				? formatBytes(props.memoryListSummary.totalBytes)
+				: "0 B"}
+		</Row>
+		{props.memoryListSummary ? (
+			<Row label="Memory Address Span">
+				{fmtHex(props.memoryListSummary.startAddress, 16)} to{" "}
+				{fmtHex(props.memoryListSummary.endAddressExclusive, 16)} (end
+				exclusive)
+			</Row>
+		) : null}
+	</>
+);
+
+const ThreadsSection = (props: {
+	associatedRows: string[][];
+	mergedThreadCount: number;
+}) => (
+	<>
+		<Row label="Threads (Merged)">{props.mergedThreadCount}</Row>
+		<DumpTable
+			title="Merged Thread Entries"
+			headers={[
+				"Thread ID",
+				"Suspended",
+				"Priority",
+				"TEB",
+				"Stack Start",
+				"Stack Size",
+				"Stack RVA",
+				"Context Size",
+				"Context RVA",
+				"Dump Flags",
+				"Dump Error",
+				"Exit Status",
+				"Create Time",
+				"Exit Time",
+				"Kernel Time",
+				"User Time",
+				"Start Address",
+				"Affinity",
+			]}
+			rows={props.associatedRows}
+		/>
+	</>
+);
+
 export default function DumpSummary(props: DumpSummaryProps) {
 	const associatedRows = buildAssociatedRows(props.dumpInfo.associatedThreads);
 	const exceptionParameterRows = buildExceptionParameterRows(
@@ -298,240 +491,34 @@ export default function DumpSummary(props: DumpSummaryProps) {
 	);
 	const mergedThreadCount = associatedRows.length;
 	const hasSection = (section: DumpSection) =>
-		props.sections ? props.sections.includes(section) : true;
+		props.sections?.includes(section) ?? true;
 
 	return (
 		<section class="dump-info-panel" aria-label="Dump details">
 			{hasSection("summary") ? (
-				<>
-					<h2 class="dump-info-panel__title m0">Dump Summary</h2>
-					<Row label="Checksum">{fmtHex(props.dumpInfo.checksum, 8)}</Row>
-					<Row label="Timestamp">
-						{formatTimestamp(props.dumpInfo.timestamp)}
-					</Row>
-					<Row label="Flags">{fmtHex(props.dumpInfo.flags, 16)}</Row>
-					<Row label="Streams">{props.dumpInfo.streamCount}</Row>
-					<Row label="Stream Types">
-						{props.dumpInfo.streamTypes.length > 0
-							? props.dumpInfo.streamTypes.map(getStreamTypeName).join(", ")
-							: "none"}
-					</Row>
-					{props.dumpInfo.systemInfo ? (
-						<div class="dump-info-panel__table-wrap">
-							<RawRow>{fmtOs(props.dumpInfo.systemInfo)}</RawRow>
-							<RawRow>{fmtProductAndSuite(props.dumpInfo.systemInfo)}</RawRow>
-
-							<Row label="CPU Revision">
-								level {props.dumpInfo.systemInfo.processorLevel}, rev{" "}
-								{fmtHex(props.dumpInfo.systemInfo.processorRevision, 4)}
-							</Row>
-							{props.dumpInfo.systemInfo.cpu.type === "x86" ? (
-								<Row label="CPU Vendor">
-									{props.dumpInfo.systemInfo.cpu.vendorId || "unknown"}
-								</Row>
-							) : (
-								<Row label="CPU Features">
-									{fmtHex(
-										props.dumpInfo.systemInfo.cpu.processorFeatures[0],
-										16,
-									)}
-									,{" "}
-									{fmtHex(
-										props.dumpInfo.systemInfo.cpu.processorFeatures[1],
-										16,
-									)}
-								</Row>
-							)}
-						</div>
-					) : null}
-
-					{props.dumpInfo.miscInfo ? (
-						<>
-							<Row label="MiscInfo Size">
-								{props.dumpInfo.miscInfo.sizeOfInfo}
-							</Row>
-							<Row label="MiscInfo Flags1">
-								{fmtHex(props.dumpInfo.miscInfo.flags1, 8)}
-							</Row>
-							{props.dumpInfo.miscInfo.processId !== null ? (
-								<Row label="Process ID">
-									{props.dumpInfo.miscInfo.processId}
-								</Row>
-							) : null}
-							{props.dumpInfo.miscInfo.processCreateTime !== null ? (
-								<Row label="Process Create Time">
-									{formatTimestamp(props.dumpInfo.miscInfo.processCreateTime)}
-								</Row>
-							) : null}
-							{props.dumpInfo.miscInfo.processUserTime !== null ? (
-								<Row label="Process User Time">
-									{formatSeconds(props.dumpInfo.miscInfo.processUserTime)}
-								</Row>
-							) : null}
-							{props.dumpInfo.miscInfo.processKernelTime !== null ? (
-								<Row label="Process Kernel Time">
-									{formatSeconds(props.dumpInfo.miscInfo.processKernelTime)}
-								</Row>
-							) : null}
-							{props.dumpInfo.miscInfo.processorMaxMhz !== null ? (
-								<Row label="CPU Max MHz">
-									{props.dumpInfo.miscInfo.processorMaxMhz}
-								</Row>
-							) : null}
-							{props.dumpInfo.miscInfo.processorCurrentMhz !== null ? (
-								<Row label="CPU Current MHz">
-									{props.dumpInfo.miscInfo.processorCurrentMhz}
-								</Row>
-							) : null}
-							{props.dumpInfo.miscInfo.processorMhzLimit !== null ? (
-								<Row label="CPU MHz Limit">
-									{props.dumpInfo.miscInfo.processorMhzLimit}
-								</Row>
-							) : null}
-							{props.dumpInfo.miscInfo.processorMaxIdleState !== null ? (
-								<Row label="CPU Max Idle State">
-									{props.dumpInfo.miscInfo.processorMaxIdleState}
-								</Row>
-							) : null}
-							{props.dumpInfo.miscInfo.processorCurrentIdleState !== null ? (
-								<Row label="CPU Current Idle State">
-									{props.dumpInfo.miscInfo.processorCurrentIdleState}
-								</Row>
-							) : null}
-						</>
-					) : null}
-				</>
+				<SummarySection dumpInfo={props.dumpInfo} />
 			) : null}
-
 			{hasSection("exception") && props.dumpInfo.exceptionStream ? (
-				<>
-					<Row label="Exception Thread ID">
-						{props.dumpInfo.exceptionStream.threadId}
-					</Row>
-					<Row label="Exception Code">
-						{fmtHex(
-							props.dumpInfo.exceptionStream.exceptionRecord.exceptionCode,
-							8,
-						)}
-					</Row>
-					<Row label="Exception Flags">
-						{fmtHex(
-							props.dumpInfo.exceptionStream.exceptionRecord.exceptionFlags,
-							8,
-						)}
-					</Row>
-					<Row label="Exception Address">
-						{fmtHex(
-							props.dumpInfo.exceptionStream.exceptionRecord.exceptionAddress,
-							16,
-						)}
-					</Row>
-					<Row label="Exception Record">
-						{fmtHex(
-							props.dumpInfo.exceptionStream.exceptionRecord.exceptionRecord,
-							16,
-						)}
-					</Row>
-					<Row label="Exception Parameters">
-						{props.dumpInfo.exceptionStream.exceptionRecord.numberParameters}
-					</Row>
-					<Row label="Exception Context">
-						size={props.dumpInfo.exceptionStream.threadContext.dataSize}, rva=
-						{fmtHex(props.dumpInfo.exceptionStream.threadContext.rva, 8)}
-					</Row>
-					<DumpTable
-						title="Exception Information"
-						headers={["Index", "Value"]}
-						rows={exceptionParameterRows}
-					/>
-				</>
+				<ExceptionSection
+					dumpInfo={props.dumpInfo}
+					exceptionParameterRows={exceptionParameterRows}
+				/>
 			) : null}
-
-			{hasSection("modules") && props.dumpInfo.moduleList ? (
-				<>
-					<Row label="Modules">{props.dumpInfo.moduleList.length}</Row>
-					<DumpTable
-						title="Module Entries"
-						headers={[
-							"Base",
-							"Size",
-							"Checksum",
-							"TimeDateStamp",
-							"Name",
-							"CV Size",
-							"CV Format",
-							"CV PDB",
-							"CV Identifier",
-							"CV Age",
-							"Misc Size",
-							"Misc RVA",
-						]}
-						rows={moduleRows}
-					/>
-				</>
+			{hasSection("modules") ? (
+				<ModulesSection
+					dumpInfo={props.dumpInfo}
+					moduleRows={moduleRows}
+					unloadedModuleRows={unloadedModuleRows}
+				/>
 			) : null}
-
-			{hasSection("modules") && props.dumpInfo.unloadedModuleList ? (
-				<>
-					<Row label="Unloaded Modules">
-						{props.dumpInfo.unloadedModuleList.length}
-					</Row>
-					<DumpTable
-						title="Unloaded Module Entries"
-						headers={["Base", "Size", "Checksum", "TimeDateStamp", "Name"]}
-						rows={unloadedModuleRows}
-					/>
-				</>
+			{hasSection("memory") ? (
+				<MemorySection memoryListSummary={memoryListSummary} />
 			) : null}
-
-			{hasSection("memory") && props.dumpInfo.memoryRanges ? (
-				<>
-					<Row label="Memory Ranges">
-						{memoryListSummary ? memoryListSummary.rangeCount : 0}
-					</Row>
-					<Row label="Memory Bytes">
-						{memoryListSummary
-							? formatBytes(memoryListSummary.totalBytes)
-							: "0 B"}
-					</Row>
-					{memoryListSummary ? (
-						<Row label="Memory Address Span">
-							{fmtHex(memoryListSummary.startAddress, 16)} to{" "}
-							{fmtHex(memoryListSummary.endAddressExclusive, 16)} (end
-							exclusive)
-						</Row>
-					) : null}
-				</>
-			) : null}
-
 			{hasSection("threads") && props.dumpInfo.associatedThreads ? (
-				<>
-					<Row label="Threads (Merged)">{mergedThreadCount}</Row>
-					<DumpTable
-						title="Merged Thread Entries"
-						headers={[
-							"Thread ID",
-							"Suspended",
-							"Priority",
-							"TEB",
-							"Stack Start",
-							"Stack Size",
-							"Stack RVA",
-							"Context Size",
-							"Context RVA",
-							"Dump Flags",
-							"Dump Error",
-							"Exit Status",
-							"Create Time",
-							"Exit Time",
-							"Kernel Time",
-							"User Time",
-							"Start Address",
-							"Affinity",
-						]}
-						rows={associatedRows}
-					/>
-				</>
+				<ThreadsSection
+					associatedRows={associatedRows}
+					mergedThreadCount={mergedThreadCount}
+				/>
 			) : null}
 		</section>
 	);

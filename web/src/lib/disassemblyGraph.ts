@@ -1,15 +1,19 @@
-import {
-	MAX_INSTRUCTION_LENGTH,
-	disassembleInstruction,
-	type DisassembledControlFlow,
-} from "./disassembly";
 import type { DisassemblyMemorySource } from "./debugDisassembly";
+import {
+	type DisassembledControlFlow,
+	disassembleInstruction,
+	MAX_INSTRUCTION_LENGTH,
+} from "./disassembly";
 
 type Mutable<T> = {
 	-readonly [K in keyof T]: T[K];
 };
 
-export type CfgBuildStatus = "ok" | "missing_memory" | "decode_error" | "truncated";
+export type CfgBuildStatus =
+	| "ok"
+	| "missing_memory"
+	| "decode_error"
+	| "truncated";
 export type CfgNodeKind =
 	| "block"
 	| "unknown_exit"
@@ -132,7 +136,9 @@ const formatBytes = (bytes: Uint8Array) =>
 		.map((value) => value.toString(16).toUpperCase().padStart(2, "0"))
 		.join(" ");
 
-const formatInstructionText = (instruction: Pick<CfgInstruction, "mnemonic" | "operands">) =>
+const formatInstructionText = (
+	instruction: Pick<CfgInstruction, "mnemonic" | "operands">,
+) =>
 	instruction.operands
 		? `${instruction.mnemonic} ${instruction.operands}`
 		: instruction.mnemonic;
@@ -199,7 +205,10 @@ const isBlockTerminator = (instruction: CfgInstruction) => {
 	}
 };
 
-const buildBlockLabel = (startAddress: bigint, instructions: CfgInstruction[]) =>
+const buildBlockLabel = (
+	startAddress: bigint,
+	instructions: CfgInstruction[],
+) =>
 	[
 		fmtAddress(startAddress),
 		...instructions.map(
@@ -224,7 +233,10 @@ const makeSyntheticSuccessor = (
 	syntheticAddress: address,
 });
 
-export const decodeInstructionForCfg: CfgInstructionDecoder = (source, address) => {
+export const decodeInstructionForCfg: CfgInstructionDecoder = (
+	source,
+	address,
+) => {
 	const bytes = source.readMemoryAt(address, MAX_INSTRUCTION_LENGTH);
 	if (!bytes || bytes.byteLength === 0) {
 		return null;
@@ -543,7 +555,12 @@ export const buildControlFlowGraph = (
 		blockMap.set(block.id, block);
 
 		for (const successor of successors) {
-			if (successor.syntheticKind && successor.syntheticKey && successor.syntheticTitle && successor.syntheticLabel) {
+			if (
+				successor.syntheticKind &&
+				successor.syntheticKey &&
+				successor.syntheticTitle &&
+				successor.syntheticLabel
+			) {
 				const node = ensureSyntheticNode(
 					successor.syntheticKind,
 					successor.syntheticKey,
@@ -592,7 +609,9 @@ export const buildControlFlowGraph = (
 		(a, b) => a.discoveryIndex - b.discoveryIndex,
 	);
 	const nodeIds = new Set(nodes.map((node) => node.id));
-	const truncatedNodeId = syntheticMap.get(syntheticNodeId("truncated", "global"))?.id;
+	const truncatedNodeId = syntheticMap.get(
+		syntheticNodeId("truncated", "global"),
+	)?.id;
 	const resolvedEdges: CfgEdge[] = [];
 
 	for (const edge of edgeMap.values()) {
@@ -618,7 +637,9 @@ export const buildControlFlowGraph = (
 	}
 
 	const status: CfgBuildStatus =
-		blockMap.size === 0 && anchorNodeId && anchorNodeId.startsWith("synthetic:decode_error")
+		blockMap.size === 0 &&
+		anchorNodeId &&
+		anchorNodeId.startsWith("synthetic:decode_error")
 			? "decode_error"
 			: truncated
 				? "truncated"
@@ -700,7 +721,8 @@ const estimateNodeDimensions = (node: CfgNode) => {
 	}, 0);
 	const height = Math.max(
 		MIN_CARD_HEIGHT,
-		CARD_PADDING_Y * 2 + sanitizeLineCount(node.lineCount) * ESTIMATED_LINE_HEIGHT,
+		CARD_PADDING_Y * 2 +
+			sanitizeLineCount(node.lineCount) * ESTIMATED_LINE_HEIGHT,
 	);
 	const width = Math.max(
 		MIN_CARD_WIDTH,
@@ -717,7 +739,9 @@ const estimateNodeDimensions = (node: CfgNode) => {
 export const layoutControlFlowGraph = (
 	result: CfgBuildResult,
 ): PositionedCfgGraph => {
-	const nodesById = new Map(result.blocks.map((node) => [node.id, node] as const));
+	const nodesById = new Map(
+		result.blocks.map((node) => [node.id, node] as const),
+	);
 	const adjacency = new Map<string, string[]>();
 	for (const node of result.blocks) {
 		adjacency.set(node.id, []);
@@ -775,7 +799,10 @@ export const layoutControlFlowGraph = (
 	const positionedNodes: PositionedCfgNode[] = [];
 	const sortedColumns = [...columns.entries()].sort((a, b) => a[0] - b[0]);
 	const columnMetrics = sortedColumns.map(([depth, columnNodes]) => {
-		const nodeDimensions = new Map<string, ReturnType<typeof estimateNodeDimensions>>();
+		const nodeDimensions = new Map<
+			string,
+			ReturnType<typeof estimateNodeDimensions>
+		>();
 		let maxWidth = MIN_CARD_WIDTH;
 		for (const node of columnNodes) {
 			const dimensions = estimateNodeDimensions(node);
@@ -813,16 +840,21 @@ export const layoutControlFlowGraph = (
 		});
 
 		const totalHeight = columnNodes.reduce((total, node) => {
-			const dimensions = nodeDimensions.get(node.id) ?? estimateNodeDimensions(node);
+			const dimensions =
+				nodeDimensions.get(node.id) ?? estimateNodeDimensions(node);
 			return total + dimensions.height;
 		}, 0);
 		const totalHeightWithGaps =
 			totalHeight + Math.max(0, columnNodes.length - 1) * ROW_GAP;
 		let cursorY = sanitizeCoordinate(-totalHeightWithGaps / 2, 0);
 		const safeDepth = Number.isFinite(depth) ? depth : fallbackIndex;
-		const columnCenterX = sanitizeCoordinate(cursorX + maxWidth / 2, fallbackIndex * (MIN_CARD_WIDTH + COLUMN_GAP));
+		const columnCenterX = sanitizeCoordinate(
+			cursorX + maxWidth / 2,
+			fallbackIndex * (MIN_CARD_WIDTH + COLUMN_GAP),
+		);
 		for (const node of columnNodes) {
-			const dimensions = nodeDimensions.get(node.id) ?? estimateNodeDimensions(node);
+			const dimensions =
+				nodeDimensions.get(node.id) ?? estimateNodeDimensions(node);
 			const fallbackY = fallbackIndex * (MIN_CARD_HEIGHT + ROW_GAP);
 			positionedNodes.push({
 				...node,
@@ -848,7 +880,9 @@ export const layoutControlFlowGraph = (
 		);
 	}
 
-	const nodeDepths = new Map(positionedNodes.map((node) => [node.id, node.depth] as const));
+	const nodeDepths = new Map(
+		positionedNodes.map((node) => [node.id, node.depth] as const),
+	);
 	const positionedEdges: PositionedCfgEdge[] = result.edges.map((edge) => {
 		const fromDepth = nodeDepths.get(edge.from) ?? 0;
 		const toDepth = nodeDepths.get(edge.to) ?? fromDepth;

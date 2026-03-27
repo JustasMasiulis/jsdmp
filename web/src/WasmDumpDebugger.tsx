@@ -1,99 +1,72 @@
-import { createResource, createSignal, Show } from "solid-js";
+import { createResource, createSignal } from "solid-js";
 import DockviewDumpLayout from "./components/DockviewDumpLayout";
-import type { ParsedDumpInfo } from "./components/DumpSummary";
-import { type ResolvedDumpContext, resolveDumpContext } from "./lib/context";
-import { MiniDump } from "./lib/minidump";
+import type { ParsedDumpInfo } from "./lib/dumpInfo";
+import {
+	ALLOWED_DUMP_EXTENSIONS,
+	formatDumpFileSize,
+	isSupportedDumpFile,
+	parseDumpFile,
+} from "./lib/dumpInfo";
 import { WASM_PROMISE } from "./lib/wasm";
 
-export default function WasmDumpDebugger() {
-	createResource(async () => {
-		await WASM_PROMISE;
-	});
+const loadWasmRuntime = async () => {
+	await WASM_PROMISE;
+	return null;
+};
 
-	const [dumpFile, setDumpFile] = createSignal<File | null>(null);
-	const [dumpInfo, setDumpInfo] = createSignal<ParsedDumpInfo | null>(null);
-	const [isParsing, setIsParsing] = createSignal(false);
-	const [uploadError, setUploadError] = createSignal("");
-	const [isDragging, setIsDragging] = createSignal(false);
-	let dumpInputRef: HTMLInputElement | undefined;
-	let dragDepth = 0;
+type DumpFileSelectionActions = {
+	setDumpFile: (file: File | null) => void;
+	setDumpInfo: (dumpInfo: ParsedDumpInfo | null) => void;
+	setIsParsing: (value: boolean) => void;
+	setUploadError: (value: string) => void;
+};
 
-	const allowedDumpExtensions = [".dmp", ".mdmp", ".dump"];
+const selectDumpFile = async (
+	file: File | undefined,
+	actions: DumpFileSelectionActions,
+) => {
+	if (!file) {
+		return;
+	}
 
-	const formatBytes = (bytes: number) => {
-		if (bytes < 1024) return `${bytes} B`;
-		if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-		if (bytes < 1024 * 1024 * 1024)
-			return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
-		return `${(bytes / (1024 * 1024 * 1024)).toFixed(1)} GB`;
-	};
-
-	const isDumpFile = (file: File) => {
-		const lowerName = file.name.toLowerCase();
-		return allowedDumpExtensions.some((extension) =>
-			lowerName.endsWith(extension),
+	if (!isSupportedDumpFile(file)) {
+		actions.setDumpFile(null);
+		actions.setDumpInfo(null);
+		actions.setUploadError(
+			`Unsupported file type. Please use ${ALLOWED_DUMP_EXTENSIONS.join(", ")}.`,
 		);
-	};
+		return;
+	}
 
-	const selectDumpFile = async (file?: File) => {
-		if (!file) return;
+	actions.setDumpFile(file);
+	actions.setDumpInfo(null);
+	actions.setUploadError("");
+	actions.setIsParsing(true);
 
-		if (!isDumpFile(file)) {
-			setDumpFile(null);
-			setDumpInfo(null);
-			setUploadError(
-				`Unsupported file type. Please use ${allowedDumpExtensions.join(", ")}.`,
-			);
-			return;
-		}
+	try {
+		actions.setDumpInfo(await parseDumpFile(file));
+	} catch (error) {
+		const message = error instanceof Error ? error.message : String(error);
+		actions.setDumpInfo(null);
+		actions.setUploadError(`Failed to parse dump file: ${message}`);
+	} finally {
+		actions.setIsParsing(false);
+	}
+};
 
-		setDumpFile(file);
-		setDumpInfo(null);
-		setUploadError("");
-		setIsParsing(true);
+const formatSelectedDumpFileLabel = (file: File | null) =>
+	file
+		? `Selected: ${file.name} (${formatDumpFileSize(file.size)})`
+		: "No dump file selected.";
 
-		try {
-			const data = await file.arrayBuffer();
-			const parsed = new MiniDump(data);
-			const streamTypes = [...parsed.streams.keys()].sort((a, b) => a - b);
-
-			const resolvedContext: ResolvedDumpContext = resolveDumpContext(parsed);
-
-			setDumpInfo({
-				checksum: parsed.checksum,
-				timestamp: parsed.timestamp,
-				flags: parsed.flags,
-				streamCount: parsed.streams.size,
-				streamTypes,
-				systemInfo: parsed.systemInfo,
-				miscInfo: parsed.miscInfo,
-				exceptionStream: parsed.exceptionStream,
-				associatedThreads: parsed.associatedThreads,
-				moduleList: parsed.moduleList,
-				unloadedModuleList: parsed.unloadedModuleList,
-				memoryRanges: parsed.memoryRanges,
-				readMemoryAt: parsed.readMemoryAt.bind(parsed),
-				readMemoryViewAt: parsed.readMemoryViewAt.bind(parsed),
-				findMemoryRangeAt: parsed.findMemoryRangeAt.bind(parsed),
-				resolvedContext,
-			});
-		} catch (error) {
-			setDumpInfo(null);
-			const message = error instanceof Error ? error.message : String(error);
-			setUploadError(`Failed to parse dump file: ${message}`);
-		} finally {
-			setIsParsing(false);
-		}
-	};
-
-	const openFilePicker = () => {
-		dumpInputRef?.click();
-	};
+const createDumpDropTarget = (onSelectFile: (file?: File) => void) => {
+	const [isDragging, setIsDragging] = createSignal(false);
+	let dragDepth = 0;
 
 	const handleFileInputChange = (
 		event: Event & { currentTarget: HTMLInputElement },
 	) => {
-		void selectDumpFile(event.currentTarget.files?.[0]);
+		onSelectFile(event.currentTarget.files?.[0]);
 	};
 
 	const handleDragEnter = (event: DragEvent) => {
@@ -104,7 +77,9 @@ export default function WasmDumpDebugger() {
 
 	const handleDragOver = (event: DragEvent) => {
 		event.preventDefault();
-		if (event.dataTransfer) event.dataTransfer.dropEffect = "copy";
+		if (event.dataTransfer) {
+			event.dataTransfer.dropEffect = "copy";
+		}
 	};
 
 	const handleDragLeave = (event: DragEvent) => {
@@ -117,45 +92,77 @@ export default function WasmDumpDebugger() {
 		event.preventDefault();
 		dragDepth = 0;
 		setIsDragging(false);
-		void selectDumpFile(event.dataTransfer?.files?.[0]);
+		onSelectFile(event.dataTransfer?.files?.[0]);
+	};
+
+	return {
+		handleDragEnter,
+		handleDragLeave,
+		handleDragOver,
+		handleDrop,
+		handleFileInputChange,
+		isDragging,
+	};
+};
+
+export default function WasmDumpDebugger() {
+	createResource(loadWasmRuntime);
+
+	const [dumpFile, setDumpFile] = createSignal<File | null>(null);
+	const [dumpInfo, setDumpInfo] = createSignal<ParsedDumpInfo | null>(null);
+	const [isParsing, setIsParsing] = createSignal(false);
+	const [uploadError, setUploadError] = createSignal("");
+	let dumpInputRef!: HTMLInputElement;
+
+	const handleDumpFileSelect = (file?: File) => {
+		void selectDumpFile(file, {
+			setDumpFile,
+			setDumpInfo,
+			setIsParsing,
+			setUploadError,
+		});
+	};
+
+	const dropTarget = createDumpDropTarget(handleDumpFileSelect);
+	const renderDumpLayout = () => {
+		const info = dumpInfo();
+		return info ? <DockviewDumpLayout dumpInfo={info} /> : null;
 	};
 
 	return (
-		<section class={`wasm-debugger-shell${isDragging() ? " is-dragging" : ""}`}>
+		<section
+			class={`wasm-debugger-shell${dropTarget.isDragging() ? " is-dragging" : ""}`}
+		>
 			<h1 class="m0">WASM Dump Debugger</h1>
 
 			<input
-				ref={(element) => {
-					dumpInputRef = element;
-				}}
+				ref={dumpInputRef}
 				type="file"
-				accept={allowedDumpExtensions.join(",")}
-				onChange={handleFileInputChange}
+				accept={ALLOWED_DUMP_EXTENSIONS.join(",")}
+				onChange={dropTarget.handleFileInputChange}
 				style={{ display: "none" }}
 			/>
 
-			<Show when={!dumpInfo()}>
+			{!dumpInfo() ? (
 				<button
 					type="button"
-					class="dump-dropzone"
+					class={`dump-dropzone${dropTarget.isDragging() ? " is-dragging" : ""}`}
 					aria-label="Upload dump file"
-					onClick={openFilePicker}
-					onDragEnter={handleDragEnter}
-					onDragOver={handleDragOver}
-					onDragLeave={handleDragLeave}
-					onDrop={handleDrop}
+					onClick={() => dumpInputRef.click()}
+					onDragEnter={dropTarget.handleDragEnter}
+					onDragOver={dropTarget.handleDragOver}
+					onDragLeave={dropTarget.handleDragLeave}
+					onDrop={dropTarget.handleDrop}
 				>
 					<span class="dump-dropzone__title">Drop dump file here</span>
 					<span class="dump-dropzone__hint">
-						or click to browse ({allowedDumpExtensions.join(", ")})
+						or click to browse ({ALLOWED_DUMP_EXTENSIONS.join(", ")})
 					</span>
 				</button>
-			</Show>
+			) : null}
 
 			<p class="dump-dropzone__file">
-				{dumpFile()
-					? `Selected: ${dumpFile()?.name} (${formatBytes(dumpFile()?.size ?? 0)})`
-					: "No dump file selected."}
+				{formatSelectedDumpFileLabel(dumpFile())}
 			</p>
 
 			{isParsing() ? (
@@ -164,9 +171,10 @@ export default function WasmDumpDebugger() {
 			{uploadError() ? (
 				<p class="dump-dropzone__error">{uploadError()}</p>
 			) : null}
-			<Show when={dumpInfo()}>
-				{(info) => <DockviewDumpLayout dumpInfo={info()} />}
-			</Show>
+			{dumpInfo()?.contextWarning ? (
+				<p class="dump-dropzone__error">{dumpInfo()?.contextWarning}</p>
+			) : null}
+			{renderDumpLayout()}
 		</section>
 	);
 }

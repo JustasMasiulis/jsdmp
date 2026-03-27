@@ -1,16 +1,22 @@
 import Graph from "graphology";
 import Sigma from "sigma";
 import type { Settings } from "sigma/settings";
+import {
+	formatHexAddress,
+	loadAddressPanelState,
+	parseHexAddress,
+	saveAddressPanelState,
+} from "../lib/addressPanelState";
 import type { ResolvedDumpContext } from "../lib/context";
 import {
 	buildControlFlowGraph,
-	layoutControlFlowGraph,
 	type CfgBuildResult,
 	type CfgNode,
+	layoutControlFlowGraph,
 	type PositionedCfgGraph,
 	type PositionedCfgNode,
 } from "../lib/disassemblyGraph";
-import type { ParsedDumpInfo } from "./DumpSummary";
+import type { ParsedDumpInfo } from "../lib/dumpInfo";
 
 const DISASSEMBLY_GRAPH_PANEL_STATE_KEY =
 	"wasm-dump-debugger:disassembly-graph-panel-state:v1";
@@ -19,11 +25,6 @@ type DisassemblyGraphViewPanelOptions = {
 	container: HTMLElement;
 	dumpInfo: ParsedDumpInfo;
 	panelId: string;
-};
-
-type DisassemblyGraphPanelSavedState = {
-	manualAddressHex?: string;
-	followInstructionPointer?: boolean;
 };
 
 type SigmaNodeAttributes = {
@@ -53,36 +54,13 @@ type SigmaEdgeAttributes = {
 	type: string;
 };
 
-const fmtAddress = (value: bigint) =>
-	value.toString(16).toUpperCase().padStart(16, "0");
-
-const parseHexAddress = (value: string): bigint | null => {
-	const trimmed = value.trim();
-	if (!trimmed) {
-		return null;
-	}
-
-	const normalized =
-		trimmed.startsWith("0x") || trimmed.startsWith("0X")
-			? trimmed.slice(2)
-			: trimmed;
-	if (!/^[0-9a-fA-F]+$/.test(normalized)) {
-		return null;
-	}
-
-	try {
-		return BigInt(`0x${normalized}`);
-	} catch {
-		return null;
-	}
-};
-
 const getPanelStorageKey = (panelId: string) =>
 	`${DISASSEMBLY_GRAPH_PANEL_STATE_KEY}:${panelId}`;
 
 const FULL_LABEL_PADDING_X = 8;
 const FULL_LABEL_PADDING_Y = 6;
-const CARD_FONT = 'ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", Menlo, monospace';
+const CARD_FONT =
+	'ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", Menlo, monospace';
 const CARD_FONT_SIZE = 12;
 const CARD_LINE_HEIGHT = CARD_FONT_SIZE + 3;
 const EDGE_ARROW_LENGTH = 8;
@@ -168,8 +146,7 @@ const rectAnchorPoint = (
 	const safeHalfWidth = Math.max(halfWidth, 1);
 	const safeHalfHeight = Math.max(halfHeight, 1);
 	const scale =
-		1 /
-		Math.max(Math.abs(dx) / safeHalfWidth, Math.abs(dy) / safeHalfHeight);
+		1 / Math.max(Math.abs(dx) / safeHalfWidth, Math.abs(dy) / safeHalfHeight);
 
 	return {
 		x: centerX + dx * scale,
@@ -230,9 +207,10 @@ export class VanillaDisassemblyGraphView {
 	private readonly graphHost: HTMLDivElement;
 	private readonly graphOverlay: HTMLCanvasElement;
 
-	private sigmaGraph: Graph<SigmaNodeAttributes, SigmaEdgeAttributes> | null = null;
-	private sigmaRenderer: Sigma<SigmaNodeAttributes, SigmaEdgeAttributes> | null =
-		null;
+	private sigmaRenderer: Sigma<
+		SigmaNodeAttributes,
+		SigmaEdgeAttributes
+	> | null = null;
 	private positionedGraph: PositionedCfgGraph | null = null;
 	private projectedCards: ViewportCard[] = [];
 	private resizeObserver: ResizeObserver | null = null;
@@ -415,11 +393,15 @@ export class VanillaDisassemblyGraphView {
 			drawArrowHead(context, start.x, start.y, end.x, end.y, strokeColor);
 		}
 
-		const cardsInPaintOrder = [...this.projectedCards].sort((leftCard, rightCard) => {
-			const leftScore = (leftCard.selected ? 2 : 0) + (leftCard.anchor ? 1 : 0);
-			const rightScore = (rightCard.selected ? 2 : 0) + (rightCard.anchor ? 1 : 0);
-			return leftScore - rightScore;
-		});
+		const cardsInPaintOrder = [...this.projectedCards].sort(
+			(leftCard, rightCard) => {
+				const leftScore =
+					(leftCard.selected ? 2 : 0) + (leftCard.anchor ? 1 : 0);
+				const rightScore =
+					(rightCard.selected ? 2 : 0) + (rightCard.anchor ? 1 : 0);
+				return leftScore - rightScore;
+			},
+		);
 
 		for (const card of cardsInPaintOrder) {
 			const strokeColor = card.dimmed
@@ -625,46 +607,31 @@ export class VanillaDisassemblyGraphView {
 
 	private restoreState() {
 		const storageKey = getPanelStorageKey(this.panelId);
-		try {
-			const raw = window.localStorage.getItem(storageKey);
-			if (!raw) {
-				return;
-			}
+		const saved = loadAddressPanelState(storageKey);
+		if (typeof saved.followInstructionPointer === "boolean") {
+			this.followInstructionPointer = saved.followInstructionPointer;
+		}
 
-			const saved = JSON.parse(raw) as DisassemblyGraphPanelSavedState;
-			if (typeof saved.followInstructionPointer === "boolean") {
-				this.followInstructionPointer = saved.followInstructionPointer;
+		if (saved.manualAddressHex) {
+			const parsed = parseHexAddress(saved.manualAddressHex);
+			if (parsed !== null) {
+				this.manualAddress = parsed;
 			}
-
-			if (saved.manualAddressHex) {
-				const parsed = parseHexAddress(saved.manualAddressHex);
-				if (parsed !== null) {
-					this.manualAddress = parsed;
-				}
-			}
-		} catch {
-			// Ignore persisted-state errors so the panel remains usable.
 		}
 	}
 
 	private saveState() {
 		const storageKey = getPanelStorageKey(this.panelId);
-		const state: DisassemblyGraphPanelSavedState = {
+		saveAddressPanelState(storageKey, {
 			manualAddressHex:
-				this.manualAddress !== null
-					? `0x${this.manualAddress.toString(16)}`
-					: "",
+				this.manualAddress !== null ? formatHexAddress(this.manualAddress) : "",
 			followInstructionPointer: this.followInstructionPointer,
-		};
-
-		try {
-			window.localStorage.setItem(storageKey, JSON.stringify(state));
-		} catch {
-			// Ignore storage failures so navigation continues to work.
-		}
+		});
 	}
 
-	private createSigmaSettings(): Partial<Settings<SigmaNodeAttributes, SigmaEdgeAttributes>> {
+	private createSigmaSettings(): Partial<
+		Settings<SigmaNodeAttributes, SigmaEdgeAttributes>
+	> {
 		return {
 			renderLabels: false,
 			renderEdgeLabels: false,
@@ -679,21 +646,24 @@ export class VanillaDisassemblyGraphView {
 	private disposeSigma() {
 		this.sigmaRenderer?.kill();
 		this.sigmaRenderer = null;
-		this.sigmaGraph = null;
 		this.positionedGraph = null;
 		this.projectedCards = [];
 		const context = this.graphOverlay.getContext("2d");
 		if (context) {
 			context.setTransform(1, 0, 0, 1, 0, 0);
-			context.clearRect(0, 0, this.graphOverlay.width, this.graphOverlay.height);
+			context.clearRect(
+				0,
+				0,
+				this.graphOverlay.width,
+				this.graphOverlay.height,
+			);
 		}
 		this.graphOverlay.hidden = true;
 		this.graphHost.replaceChildren(this.graphOverlay);
 	}
 
 	private syncInputWithAddress(address: bigint | null) {
-		this.addressInput.value =
-			address === null ? "" : `0x${fmtAddress(address)}`;
+		this.addressInput.value = address === null ? "" : formatHexAddress(address);
 	}
 
 	private currentAnchor() {
@@ -778,8 +748,11 @@ export class VanillaDisassemblyGraphView {
 		this.positionedGraph = layout;
 		this.graphHost.hidden = false;
 		this.graphOverlay.hidden = false;
-		this.sigmaGraph = graph;
-		this.sigmaRenderer = new Sigma(graph, this.graphHost, this.createSigmaSettings());
+		this.sigmaRenderer = new Sigma(
+			graph,
+			this.graphHost,
+			this.createSigmaSettings(),
+		);
 		this.sigmaRenderer.on("afterRender", this.redrawGraphOverlay);
 		this.sigmaRenderer.on("resize", this.redrawGraphOverlay);
 		const xValues = layout.nodes.flatMap((node) => [
@@ -838,8 +811,9 @@ export class VanillaDisassemblyGraphView {
 		}
 
 		return (
-			this.graphResult.blocks.find((block) => block.id === this.selectedNodeId) ??
-			null
+			this.graphResult.blocks.find(
+				(block) => block.id === this.selectedNodeId,
+			) ?? null
 		);
 	}
 
