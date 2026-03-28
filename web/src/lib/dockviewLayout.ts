@@ -9,6 +9,7 @@ export const LAYOUT_STORAGE_KEY = "wasm-dump-debugger:dockview:v1";
 export const MEMORY_COMPONENT = "memory-view";
 export const DISASSEMBLY_COMPONENT = "disassembly";
 export const DISASSEMBLY_GRAPH_COMPONENT = "disassembly-graph";
+export const THREADS_COMPONENT = "threads";
 export const MEMORY_BASE_ID = "memory";
 
 type PanelSpec = {
@@ -69,8 +70,8 @@ const PANEL_SPECS_BY_ID = new Map(
 	PANEL_SPECS.map((panel) => [panel.id, panel] as const),
 );
 
-const PANEL_SECTIONS_BY_COMPONENT = new Map(
-	PANEL_SPECS.map((panel) => [panel.component, panel.section] as const),
+const PANEL_SECTIONS_BY_COMPONENT = new Map<string, DumpSection>(
+	PANEL_SPECS.map((panel) => [panel.component, panel.section]),
 );
 
 type LayoutStorage = Pick<Storage, "getItem" | "removeItem" | "setItem">;

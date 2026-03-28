@@ -19,6 +19,7 @@
 	"dependencies": {
 		"@flatten-js/interval-tree": "^2.0.3",
 		"dockview-core": "^5.1.0",
+		"lit-html": "^3.3.2",
 		"nanoclone": "1.0.2"
 	}
 }

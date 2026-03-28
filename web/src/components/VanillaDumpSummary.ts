@@ -2,7 +2,6 @@ import type {
 	DebugCodeViewInfo,
 	DebugMemoryRange,
 	DebugModule,
-	DebugThread,
 	DebugUnloadedModule,
 } from "../lib/debug_interface";
 import type { ParsedDumpInfo } from "../lib/dumpInfo";
@@ -12,7 +11,6 @@ import {
 	fmtHex8,
 	fmtHex16,
 	fmtOs,
-	fmtPriority,
 	fmtProductAndSuite,
 } from "../lib/formatting";
 import {
@@ -24,8 +22,6 @@ export type VanillaDumpSummaryOptions = {
 	container: HTMLElement;
 	dumpInfo: ParsedDumpInfo;
 	sections?: readonly DumpSection[];
-	selectedThreadId?: number;
-	onThreadSelect?: (id: number) => void;
 };
 
 // ─── helpers ──────────────────────────────────────────────────────────────────
@@ -126,28 +122,6 @@ const buildExceptionParameterRows = (
 	(exceptionInfo?.exceptionRecord.exceptionInformation ?? []).map(
 		(value, index) => [String(index), fmtHex(value, 16)],
 	);
-
-const buildAssociatedRows = (threads: DebugThread[]): string[][] =>
-	threads.map((t) => [
-		String(t.id),
-		t.suspendCount ? String(t.suspendCount) : emptyCell,
-		t.priorityClass ? fmtPriority(t.priorityClass, t.priority) : emptyCell,
-		t.teb ? fmtHex16(t.teb) : emptyCell,
-		t.stack.address ? fmtHex16(t.stack.address) : emptyCell,
-		t.stack.location.size ? String(t.stack.location.size) : emptyCell,
-		t.stack.location.rva ? fmtHex8(t.stack.location.rva) : emptyCell,
-		t.contextLocation.size ? String(t.contextLocation.size) : emptyCell,
-		t.contextLocation.rva ? fmtHex8(t.contextLocation.rva) : emptyCell,
-		t.dumpFlags ? fmtHex8(t.dumpFlags) : emptyCell,
-		t.dumpError ? fmtHex8(t.dumpError) : emptyCell,
-		t.exitStatus ? String(t.exitStatus) : emptyCell,
-		t.createTime ? fmtHex16(t.createTime) : emptyCell,
-		t.exitTime ? fmtHex16(t.exitTime) : emptyCell,
-		t.kernelTime ? fmtHex16(t.kernelTime) : emptyCell,
-		t.userTime ? fmtHex16(t.userTime) : emptyCell,
-		t.startAddress ? fmtHex16(t.startAddress) : emptyCell,
-		t.affinity ? fmtHex16(t.affinity) : emptyCell,
-	]);
 
 // ─── DOM helpers ──────────────────────────────────────────────────────────────
 
@@ -432,14 +406,8 @@ const buildMemorySection = (
 
 export class VanillaDumpSummary {
 	private panel: HTMLElement;
-	private threadTrs: HTMLTableRowElement[] = [];
-	private threads: DebugThread[];
-	private selectedThreadId: number | undefined;
 
-	constructor(private options: VanillaDumpSummaryOptions) {
-		this.threads = options.dumpInfo.debugInterface.dm.threads;
-		this.selectedThreadId = options.selectedThreadId;
-
+	constructor(options: VanillaDumpSummaryOptions) {
 		this.panel = mkEl("section", "dump-info-panel");
 		this.panel.setAttribute("aria-label", "Dump details");
 		options.container.append(this.panel);
@@ -459,65 +427,6 @@ export class VanillaDumpSummary {
 			buildExceptionSection(dumpInfo, this.panel);
 		if (hasSection("modules")) buildModulesSection(dumpInfo, this.panel);
 		if (hasSection("memory")) buildMemorySection(dumpInfo, this.panel);
-		if (hasSection("threads") && this.threads.length > 0)
-			this.renderThreadsSection();
-	}
-
-	private renderThreadsSection(): void {
-		const rows = buildAssociatedRows(this.threads);
-		const onThreadSelect = this.options.onThreadSelect;
-
-		let onRowClick: ((i: number) => void) | undefined;
-		if (onThreadSelect) {
-			onRowClick = (i: number) => {
-				const thread = this.threads[i];
-				if (thread) onThreadSelect(thread.id);
-			};
-		}
-
-		const selectedRowIndex = this.threads.findIndex(
-			(t) => t.id === this.selectedThreadId,
-		);
-
-		const wrap = mkTable(
-			[
-				"Thread ID",
-				"Suspended",
-				"Priority",
-				"TEB",
-				"Stack Start",
-				"Stack Size",
-				"Stack RVA",
-				"Context Size",
-				"Context RVA",
-				"Dump Flags",
-				"Dump Error",
-				"Exit Status",
-				"Create Time",
-				"Exit Time",
-				"Kernel Time",
-				"User Time",
-				"Start Address",
-				"Affinity",
-			],
-			rows,
-			undefined,
-			onRowClick,
-			selectedRowIndex >= 0 ? selectedRowIndex : undefined,
-		);
-
-		this.threadTrs = Array.from(
-			wrap.querySelectorAll<HTMLTableRowElement>("tbody tr"),
-		);
-		this.panel.append(wrap);
-	}
-
-	setSelectedThreadId(id: number): void {
-		this.selectedThreadId = id;
-		const newIndex = this.threads.findIndex((t) => t.id === id);
-		for (let i = 0; i < this.threadTrs.length; i++) {
-			this.threadTrs[i].classList.toggle("is-selected", i === newIndex);
-		}
 	}
 
 	dispose(): void {

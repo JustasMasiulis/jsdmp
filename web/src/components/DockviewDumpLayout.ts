@@ -19,17 +19,19 @@ import {
 	type PanelId,
 	restoreLayout,
 	saveLayout,
+	THREADS_COMPONENT,
 } from "../lib/dockviewLayout";
 import type { ParsedDumpInfo } from "../lib/dumpInfo";
 import { VanillaDisassemblyGraphView } from "./VanillaDisassemblyGraphView";
 import { VanillaDisassemblyView } from "./VanillaDisassemblyView";
 import { VanillaDumpSummary } from "./VanillaDumpSummary";
 import { VanillaMemoryView } from "./VanillaMemoryView";
+import { VanillaThreadsView } from "./VanillaThreadsView";
 
 export class DockviewDumpLayout {
 	private dockview: DockviewApi;
 	private selectedThreadId: number;
-	private summaryPanels = new Set<VanillaDumpSummary>();
+	private threadsPanels = new Set<VanillaThreadsView>();
 	private disassemblyPanels = new Set<VanillaDisassemblyView>();
 	private graphPanels = new Set<VanillaDisassemblyGraphView>();
 	private toolbar: HTMLElement;
@@ -84,7 +86,7 @@ export class DockviewDumpLayout {
 
 	private onThreadSelect = async (threadId: number): Promise<void> => {
 		this.selectedThreadId = threadId;
-		for (const p of this.summaryPanels) p.setSelectedThreadId(threadId);
+		for (const p of this.threadsPanels) p.setSelectedThreadId(threadId);
 
 		const newContext = await resolveContextForThread(
 			this.dumpInfo.debugInterface,
@@ -152,22 +154,34 @@ export class DockviewDumpLayout {
 					dispose: () => view.dispose(),
 				};
 			}
+			case THREADS_COMPONENT: {
+				const view = new VanillaThreadsView({
+					container: el,
+					dumpInfo: this.dumpInfo,
+					panelId: options.id,
+					selectedThreadId: this.selectedThreadId,
+					onThreadSelect: this.onThreadSelect,
+				});
+				this.threadsPanels.add(view);
+				return {
+					element: el,
+					init: () => {},
+					dispose: () => {
+						view.dispose();
+						this.threadsPanels.delete(view);
+					},
+				};
+			}
 			default: {
 				const summary = new VanillaDumpSummary({
 					container: el,
 					dumpInfo: this.dumpInfo,
 					sections: [getPanelSection(options.name)],
-					selectedThreadId: this.selectedThreadId,
-					onThreadSelect: this.onThreadSelect,
 				});
-				this.summaryPanels.add(summary);
 				return {
 					element: el,
 					init: () => {},
-					dispose: () => {
-						summary.dispose();
-						this.summaryPanels.delete(summary);
-					},
+					dispose: () => summary.dispose(),
 				};
 			}
 		}

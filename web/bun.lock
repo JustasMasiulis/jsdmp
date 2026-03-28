@@ -6,6 +6,7 @@
       "dependencies": {
         "@flatten-js/interval-tree": "^2.0.3",
         "dockview-core": "^5.1.0",
+        "lit-html": "^3.3.2",
         "nanoclone": "1.0.2",
       },
       "devDependencies": {
@@ -140,6 +141,8 @@
 
     "@types/estree": ["@types/estree@1.0.8", "", {}, "sha512-dWHzHa2WqEXI/O1E9OjrocMTKJl2mSrEolh1Iomrv6U+JuNwaHXsXx9bLu5gG7BUWFIN0skIQJQ/L1rIex4X6w=="],
 
+    "@types/trusted-types": ["@types/trusted-types@2.0.7", "", {}, "sha512-ScaPdn1dQczgbl0QFTeTOmVHFULt394XJgOQNoyVhZ6r2vLnMLJfBPd53SB52T/3G36VI1/g2MZaX0cwDuXsfw=="],
+
     "detect-libc": ["detect-libc@2.1.2", "", {}, "sha512-Btj2BOOO83o3WyH59e8MgXsxEQVcarkUOpEYrubB0urwnN10yQ364rsiByU11nZlqWYZm05i/of7io4mzihBtQ=="],
 
     "dockview-core": ["dockview-core@5.1.0", "", {}, "sha512-fqfr/mRUxL9Ap2gegGUW5EUL19nyvnHhXPTJ4PbbOjTBXu1g4rYN2gY9uSF3zfYdS3TVXY/jGXuGNKxoes1GHw=="],
@@ -173,6 +176,8 @@
     "lightningcss-win32-arm64-msvc": ["lightningcss-win32-arm64-msvc@1.31.1", "", { "os": "win32", "cpu": "arm64" }, "sha512-aJReEbSEQzx1uBlQizAOBSjcmr9dCdL3XuC/6HLXAxmtErsj2ICo5yYggg1qOODQMtnjNQv2UHb9NpOuFtYe4w=="],
 
     "lightningcss-win32-x64-msvc": ["lightningcss-win32-x64-msvc@1.31.1", "", { "os": "win32", "cpu": "x64" }, "sha512-I9aiFrbd7oYHwlnQDqr1Roz+fTz61oDDJX7n9tYF9FJymH1cIN1DtKw3iYt6b8WZgEjoNwVSncwF4wx/ZedMhw=="],
+
+    "lit-html": ["lit-html@3.3.2", "", { "dependencies": { "@types/trusted-types": "^2.0.2" } }, "sha512-Qy9hU88zcmaxBXcc10ZpdK7cOLXvXpRoBxERdtqV9QOrfpMZZ6pSYP91LhpPtap3sFMUiL7Tw2RImbe0Al2/kw=="],
 
     "nanoclone": ["nanoclone@1.0.2", "", {}, "sha512-rgGQL9k7pkQX4mxw59vDBhUQs8eMDa68YdnI+tHJCBDaORGlXJy1b1cLwnGUBarDT+gk0TGQDXIdl/WGTwtmyQ=="],
 
