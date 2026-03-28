@@ -1,3 +1,4 @@
+import type { IContentRenderer } from "dockview-core";
 import {
 	formatHexAddress,
 	loadAddressPanelState,
@@ -86,7 +87,7 @@ const cfgResultToAnnotatedDescriptor = (
 	return { nodes, edges };
 };
 
-export class VanillaDisassemblyGraphView {
+export class VanillaDisassemblyGraphView implements IContentRenderer {
 	private readonly panelId: string;
 	private dumpInfo: ParsedDumpInfo;
 	private resolvedContext: ResolvedDumpContext | null;
@@ -493,7 +494,7 @@ export class VanillaDisassemblyGraphView {
 				return;
 			}
 			this.graphResult = nextGraph;
-		} catch (error) {
+		} catch {
 			if (this.isDisposed || token !== this.reloadToken) {
 				return;
 			}

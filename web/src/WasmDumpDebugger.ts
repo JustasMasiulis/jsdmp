@@ -1,10 +1,10 @@
+import { DockviewDumpLayout } from "./components/DockviewDumpLayout";
 import type { ParsedDumpInfo } from "./lib/dumpInfo";
 import {
 	ALLOWED_DUMP_EXTENSIONS,
 	isSupportedDumpFile,
 	parseDumpFile,
 } from "./lib/dumpInfo";
-import { DockviewDumpLayout } from "./components/DockviewDumpLayout";
 
 export function initWasmDumpDebugger(root: HTMLElement): void {
 	new WasmDumpDebugger(root);

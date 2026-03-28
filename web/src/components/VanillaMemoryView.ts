@@ -84,8 +84,6 @@ const alignDownToRow = (address: bigint, spanStart: bigint): bigint => {
 const getPanelStorageKey = (panelId: string) =>
 	`${MEMORY_PANEL_STATE_KEY}:${panelId}`;
 
-const minBigInt = (a: bigint, b: bigint) => (a < b ? a : b);
-
 export class VanillaMemoryView {
 	private readonly panelId: string;
 	private readonly panelIndex: number;

@@ -63,7 +63,7 @@ export type CfgBuildResult = {
 	stats: CfgBuildStats;
 };
 
-const DEFAULT_CFG_BUILD_OPTIONS: CfgBuildOptions = {
+const _DEFAULT_CFG_BUILD_OPTIONS: CfgBuildOptions = {
 	maxBlocks: 50_000,
 	maxEdges: 200_000,
 	maxInstructions: 1_000_000,

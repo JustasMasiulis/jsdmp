@@ -198,10 +198,15 @@ const buildPreviousGuessLines = async (
 		return [];
 	}
 
-	const searchStart = maxU64(0n, endAddress - BigInt(DISASSEMBLY_LOOKBACK_BYTES));
+	const searchStart = maxU64(
+		0n,
+		endAddress - BigInt(DISASSEMBLY_LOOKBACK_BYTES),
+	);
 	const bestChains = new Map<bigint, Promise<DecodedInstruction[]>>();
 
-	const bestChainEndingAt = (candidateEnd: bigint): Promise<DecodedInstruction[]> => {
+	const bestChainEndingAt = (
+		candidateEnd: bigint,
+	): Promise<DecodedInstruction[]> => {
 		const cached = bestChains.get(candidateEnd);
 		if (cached) {
 			return cached;
@@ -225,7 +230,8 @@ const buildPreviousGuessLines = async (
 					continue;
 				}
 
-				const prefix = start > searchStart ? await bestChainEndingAt(start) : [];
+				const prefix =
+					start > searchStart ? await bestChainEndingAt(start) : [];
 				const chain = [...prefix, decoded];
 				const currentBestStart = best[0]?.address ?? null;
 				if (
@@ -338,8 +344,8 @@ export const buildDisassemblyListing = async (
 ): Promise<DebugDisassemblyListing> => {
 	try {
 		if (
-			(await source.read(anchorAddress, MAX_INSTRUCTION_LENGTH, 1)).byteLength ===
-			0
+			(await source.read(anchorAddress, MAX_INSTRUCTION_LENGTH, 1))
+				.byteLength === 0
 		) {
 			return makeListing(
 				"missing_memory",

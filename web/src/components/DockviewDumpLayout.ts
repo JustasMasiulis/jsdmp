@@ -2,10 +2,11 @@ import {
 	createDockview,
 	type DockviewApi,
 	type IContentRenderer,
+	type IDockviewPanel,
 	themeLight,
+	type VisibilityEvent,
 } from "dockview-core";
 import { resolveContextForThread } from "../lib/context";
-import type { ParsedDumpInfo } from "../lib/dumpInfo";
 import {
 	addMemoryPanel,
 	applyDefaultLayout,
@@ -19,9 +20,10 @@ import {
 	restoreLayout,
 	saveLayout,
 } from "../lib/dockviewLayout";
-import { VanillaDumpSummary } from "./VanillaDumpSummary";
-import { VanillaDisassemblyView } from "./VanillaDisassemblyView";
+import type { ParsedDumpInfo } from "../lib/dumpInfo";
 import { VanillaDisassemblyGraphView } from "./VanillaDisassemblyGraphView";
+import { VanillaDisassemblyView } from "./VanillaDisassemblyView";
+import { VanillaDumpSummary } from "./VanillaDumpSummary";
 import { VanillaMemoryView } from "./VanillaMemoryView";
 
 export class DockviewDumpLayout {
@@ -55,11 +57,19 @@ export class DockviewDumpLayout {
 			theme: themeLight,
 		});
 
+		const onDidAddPanel = (panel: IDockviewPanel) => {
+			panel.api.onDidVisibilityChange((e: VisibilityEvent) => {
+				console.log("visibility changed", e.isVisible);
+			});
+
+			onLayoutChange();
+		};
+
 		const onLayoutChange = () => {
 			saveLayout(this.dockview);
 			this.refreshToolbar();
 		};
-		this.dockview.onDidAddPanel(onLayoutChange);
+		this.dockview.onDidAddPanel(onDidAddPanel);
 		this.dockview.onDidRemovePanel(onLayoutChange);
 		this.dockview.onDidLayoutChange(onLayoutChange);
 
@@ -90,7 +100,10 @@ export class DockviewDumpLayout {
 
 	// ─── panel factory ────────────────────────────────────────────────────────
 
-	private createComponent = (options: { id: string; name: string }): IContentRenderer => {
+	private createComponent = (options: {
+		id: string;
+		name: string;
+	}): IContentRenderer => {
 		const el = document.createElement("div");
 		el.className = "dump-dockview-panel size-full";
 
@@ -204,7 +217,9 @@ export class DockviewDumpLayout {
 	}
 
 	private onToolbarClick = (event: MouseEvent): void => {
-		const btn = (event.target as HTMLElement).closest<HTMLButtonElement>("button[data-action]");
+		const btn = (event.target as HTMLElement).closest<HTMLButtonElement>(
+			"button[data-action]",
+		);
 		if (!btn) return;
 
 		switch (btn.dataset.action) {

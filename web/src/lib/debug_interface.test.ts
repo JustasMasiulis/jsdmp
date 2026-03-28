@@ -1,9 +1,5 @@
 import { describe, expect, it } from "bun:test";
 import { CONTEXT_AMD64, resolveDumpContext } from "./context";
-import {
-	MinidumpDebugInterface,
-	type MinidumpDebugSource,
-} from "./minidump_debug_interface";
 import type {
 	MinidumpAssociatedThread,
 	MinidumpExceptionStream,
@@ -14,6 +10,10 @@ import type {
 	MinidumpSystemInfo,
 	MinidumpUnloadedModule,
 } from "./minidump";
+import {
+	MinidumpDebugInterface,
+	type MinidumpDebugSource,
+} from "./minidump_debug_interface";
 
 type MemorySegment = {
 	start: bigint;
@@ -41,7 +41,10 @@ const makeContextBytes = (ip: bigint, sp = 0x8000n) => {
 	return bytes;
 };
 
-const makeLocation = (rva: number, dataSize = 0x100): MinidumpLocationDescriptor => ({
+const makeLocation = (
+	rva: number,
+	dataSize = 0x100,
+): MinidumpLocationDescriptor => ({
 	dataSize,
 	rva,
 });

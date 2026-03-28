@@ -1,7 +1,4 @@
-import type {
-	DebugInterface,
-	DebugThread,
-} from "./debug_interface";
+import type { DebugInterface, DebugThread } from "./debug_interface";
 import { readU16, readU32, readU64 } from "./reader";
 import { assert } from "./utils";
 
@@ -28,14 +25,12 @@ type ResolvedThreadContext = {
 
 export type ContextResolvableDebugInterface = DebugInterface & {
 	systemInfo?: { processorArchitecture: number } | null;
-	exceptionInfo?:
-		| {
-				exceptionRecord: {
-					exceptionCode: number;
-					exceptionAddress: bigint;
-				};
-		  }
-		| null;
+	exceptionInfo?: {
+		exceptionRecord: {
+			exceptionCode: number;
+			exceptionAddress: bigint;
+		};
+	} | null;
 };
 
 const AMD64_CONTEXT_MIN_SIZE = 0x100;
@@ -91,7 +86,9 @@ const readContextFromAddress = async (
 	}
 
 	try {
-		return new Context(await debugInterface.read(address, AMD64_CONTEXT_MIN_SIZE));
+		return new Context(
+			await debugInterface.read(address, AMD64_CONTEXT_MIN_SIZE),
+		);
 	} catch {
 		return null;
 	}
