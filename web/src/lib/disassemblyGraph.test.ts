@@ -3,6 +3,7 @@ import type { DisassemblyMemorySource } from "./debugDisassembly";
 import type { DisassembledControlFlow } from "./disassembly";
 import {
 	buildCfgInstructionLine,
+	buildCfgInstructionLines,
 	buildCfgTextLinesFromLabel,
 	buildControlFlowGraph,
 	type CfgInstruction,
@@ -122,6 +123,11 @@ describe("tokenizeCfgTextSegments", () => {
 		).toEqual(["qword", "ptr", "rax", "0x20", "rbx"]);
 		expect(
 			segments
+				.filter((segment) => segment.clickable)
+				.map((segment) => segment.syntaxKind),
+		).toEqual(["plain", "plain", "plain", "number", "plain"]);
+		expect(
+			segments
 				.filter((segment) => !segment.clickable)
 				.map((segment) => segment.text),
 		).toEqual([" ", " [", "+", "], "]);
@@ -144,6 +150,47 @@ describe("buildCfgInstructionLine", () => {
 				.filter((segment) => segment.clickable)
 				.map((segment) => segment.term),
 		).toEqual(["0000000000401000", "mov", "qword", "ptr", "rax", "0x20", "rbx"]);
+		expect(
+			line.segments
+				.filter((segment) => segment.clickable)
+				.map((segment) => segment.syntaxKind),
+		).toEqual([
+			"number",
+			"mnemonic",
+			"plain",
+			"plain",
+			"plain",
+			"number",
+			"plain",
+		]);
+	});
+});
+
+describe("buildCfgInstructionLines", () => {
+	it("pads mnemonics so operand columns align within a block", () => {
+		const lines = buildCfgInstructionLines([
+			{
+				address: 0x401000n,
+				mnemonic: "mov",
+				operands: "rax, rbx",
+			},
+			{
+				address: 0x401002n,
+				mnemonic: "cmovne",
+				operands: "rcx, rdx",
+			},
+			{
+				address: 0x401004n,
+				mnemonic: "ret",
+				operands: "",
+			},
+		]);
+
+		expect(lines.map((line) => line.text)).toEqual([
+			"0000000000401000  mov    rax, rbx",
+			"0000000000401002  cmovne rcx, rdx",
+			"0000000000401004  ret",
+		]);
 	});
 });
 
@@ -165,5 +212,10 @@ describe("buildCfgTextLinesFromLabel", () => {
 				.filter((segment) => segment.clickable)
 				.map((segment) => segment.term),
 		).toEqual(["0000000000001000"]);
+		expect(
+			lines[1]?.segments
+				.filter((segment) => segment.clickable)
+				.map((segment) => segment.syntaxKind),
+		).toEqual(["number"]);
 	});
 });

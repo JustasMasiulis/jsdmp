@@ -652,6 +652,7 @@ Design language notes for future re-additions:
 
 .cfg-block__line {
 	display: block;
+	white-space: pre;
 	user-select: text;
 	-webkit-user-select: text;
 }
@@ -659,6 +660,15 @@ Design language notes for future re-additions:
 .cfg-block__term {
 	user-select: text;
 	-webkit-user-select: text;
+}
+
+.cfg-block__term--syntax-mnemonic {
+	color: var(--color-sidebar-indicator);
+	font-weight: 500;
+}
+
+.cfg-block__term--syntax-number {
+	color: #c74329;
 }
 
 .cfg-block__term--selected {

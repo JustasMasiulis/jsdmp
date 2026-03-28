@@ -746,6 +746,9 @@ export class VanillaDisassemblyGraphView {
 
 				const span = document.createElement("span");
 				span.className = "cfg-block__term";
+				if (segment.syntaxKind !== "plain") {
+					span.classList.add(`cfg-block__term--syntax-${segment.syntaxKind}`);
+				}
 				span.dataset.term = segment.term;
 				span.textContent = segment.text;
 				lineNode.append(span);

@@ -32,7 +32,10 @@ export type CfgTextSegment = {
 	text: string;
 	clickable: boolean;
 	term: string | null;
+	syntaxKind: CfgTextSyntaxKind;
 };
+
+export type CfgTextSyntaxKind = "plain" | "mnemonic" | "number";
 
 export type CfgTextLine = {
 	text: string;
@@ -128,14 +131,24 @@ const formatInstructionText = (
 const joinTextSegments = (segments: readonly CfgTextSegment[]) =>
 	segments.map((segment) => segment.text).join("");
 
+const isNumericCfgToken = (token: string) =>
+	/^0x[0-9a-f]+$/i.test(token) ||
+	/^\d+$/.test(token) ||
+	/^(?=.*\d)[0-9a-f]+h?$/i.test(token);
+
+const classifyCfgTokenSyntax = (token: string): CfgTextSyntaxKind =>
+	isNumericCfgToken(token) ? "number" : "plain";
+
 const makeTextSegment = (
 	text: string,
 	clickable = false,
 	term: string | null = null,
+	syntaxKind: CfgTextSyntaxKind = "plain",
 ): CfgTextSegment => ({
 	text,
 	clickable,
-	term: clickable ? term ?? text : null,
+	term: clickable ? (term ?? text) : null,
+	syntaxKind,
 });
 
 export const tokenizeCfgTextSegments = (text: string): CfgTextSegment[] => {
@@ -155,7 +168,9 @@ export const tokenizeCfgTextSegments = (text: string): CfgTextSegment[] => {
 		if (matchIndex > lastIndex) {
 			segments.push(makeTextSegment(text.slice(lastIndex, matchIndex)));
 		}
-		segments.push(makeTextSegment(token, true));
+		segments.push(
+			makeTextSegment(token, true, null, classifyCfgTokenSyntax(token)),
+		);
 		lastIndex = matchIndex + token.length;
 	}
 
@@ -168,15 +183,20 @@ export const tokenizeCfgTextSegments = (text: string): CfgTextSegment[] => {
 
 export const buildCfgInstructionLine = (
 	instruction: Pick<CfgInstruction, "address" | "mnemonic" | "operands">,
+	mnemonicColumnWidth = instruction.mnemonic.length,
 ): CfgTextLine => {
 	const segments: CfgTextSegment[] = [
-		makeTextSegment(fmtAddress(instruction.address), true),
+		// while the adress is a number, we don't want to give it special highlighting
+		makeTextSegment(fmtAddress(instruction.address), true, null, "plain"),
 		makeTextSegment("  "),
-		makeTextSegment(instruction.mnemonic, true),
+		makeTextSegment(instruction.mnemonic, true, null, "mnemonic"),
 	];
 
 	if (instruction.operands) {
-		segments.push(makeTextSegment(" "));
+		const paddedGap = " ".repeat(
+			Math.max(1, mnemonicColumnWidth - instruction.mnemonic.length + 1),
+		);
+		segments.push(makeTextSegment(paddedGap));
 		segments.push(...tokenizeCfgTextSegments(instruction.operands));
 	}
 
@@ -192,8 +212,20 @@ export const buildCfgTextLinesFromLabel = (label: string): CfgTextLine[] =>
 		segments: tokenizeCfgTextSegments(line),
 	}));
 
-const buildBlockLines = (instructions: CfgInstruction[]) =>
-	instructions.map((instruction) => buildCfgInstructionLine(instruction));
+export const buildCfgInstructionLines = (
+	instructions: readonly Pick<
+		CfgInstruction,
+		"address" | "mnemonic" | "operands"
+	>[],
+) => {
+	const mnemonicColumnWidth = instructions.reduce((maxWidth, instruction) => {
+		return Math.max(maxWidth, instruction.mnemonic.length);
+	}, 0);
+
+	return instructions.map((instruction) =>
+		buildCfgInstructionLine(instruction, mnemonicColumnWidth),
+	);
+};
 
 const buildLabelFromLines = (lines: readonly CfgTextLine[]) =>
 	lines.map((line) => line.text).join("\n");
@@ -430,7 +462,7 @@ const buildBlock = (
 			endAddressExclusive,
 			instructions,
 			fmtAddress(startAddress),
-			buildBlockLines(instructions),
+			buildCfgInstructionLines(instructions),
 		),
 		successors,
 	};
