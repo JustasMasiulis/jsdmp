@@ -10,8 +10,8 @@ import type {
 	DebugUnloadedModule,
 } from "./debug_interface";
 import {
-	MiniDumpStreamType,
 	type MiniDump,
+	MiniDumpStreamType,
 	type MinidumpAssociatedThread,
 	type MinidumpExceptionStream,
 	type MinidumpMiscInfo,
@@ -201,23 +201,33 @@ export class MinidumpDebugInterface implements DebugInterface {
 		};
 	}
 
-	async read(address: bigint, size: number): Promise<Uint8Array> {
+	async read(
+		address: bigint,
+		size: number,
+		minSize?: number,
+	): Promise<Uint8Array> {
+		const requiredSize = minSize ?? size;
 		if (size <= 0) {
 			return new Uint8Array(0);
 		}
+		if (requiredSize < 0 || requiredSize > size) {
+			throw new Error(
+				`Invalid read size range: size=${size}, minSize=${requiredSize}`,
+			);
+		}
 
-		const syntheticBytes = this.readSynthetic(address, size);
+		const syntheticBytes = this.readSynthetic(address, size, requiredSize);
 		if (syntheticBytes) {
 			return syntheticBytes;
 		}
 
-		const memoryBytes = this.source.readMemoryAt(address, size);
+		const memoryBytes = this.source.readMemoryAt(address, size, requiredSize);
 		if (memoryBytes) {
 			return memoryBytes;
 		}
 
 		throw new Error(
-			`Unable to read ${size} byte${size === 1 ? "" : "s"} at 0x${address.toString(16).toUpperCase()}`,
+			`Unable to read ${requiredSize}-${size} byte range at 0x${address.toString(16).toUpperCase()}`,
 		);
 	}
 
@@ -267,7 +277,11 @@ export class MinidumpDebugInterface implements DebugInterface {
 		return address;
 	}
 
-	private readSynthetic(address: Address, size: number): Uint8Array | null {
+	private readSynthetic(
+		address: Address,
+		size: number,
+		minSize: number,
+	): Uint8Array | null {
 		for (const range of this.syntheticRanges) {
 			const rangeStart = range.address;
 			const rangeEnd = range.address + BigInt(range.bytes.byteLength);
@@ -275,13 +289,14 @@ export class MinidumpDebugInterface implements DebugInterface {
 				continue;
 			}
 
-			const end = address + BigInt(size);
-			if (end > rangeEnd) {
+			const available = rangeEnd - address;
+			if (available < BigInt(minSize)) {
 				return null;
 			}
 
 			const offset = Number(address - rangeStart);
-			return range.bytes.slice(offset, offset + size);
+			const byteCount = available < BigInt(size) ? Number(available) : size;
+			return range.bytes.slice(offset, offset + byteCount);
 		}
 
 		return null;
@@ -295,7 +310,9 @@ export class MinidumpDebugInterface implements DebugInterface {
 			return exceptionInfo.threadId;
 		}
 
-		return threads.find((thread) => thread.context !== 0n)?.id ?? threads[0]?.id ?? 0;
+		return (
+			threads.find((thread) => thread.context !== 0n)?.id ?? threads[0]?.id ?? 0
+		);
 	}
 
 	private selectCurrentContext(
@@ -307,7 +324,8 @@ export class MinidumpDebugInterface implements DebugInterface {
 		}
 
 		const currentThread = threads.find(
-			(thread) => thread.id === this.selectCurrentThreadId(threads, exceptionInfo),
+			(thread) =>
+				thread.id === this.selectCurrentThreadId(threads, exceptionInfo),
 		);
 		return currentThread?.context ? 0n : 0n;
 	}

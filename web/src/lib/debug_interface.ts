@@ -94,5 +94,5 @@ export type DebugDataModel = {
 export type DebugInterface = {
 	readonly dm: DebugDataModel;
 
-	read(address: bigint, size: number): Promise<Uint8Array>;
+	read(address: bigint, size: number, minSize?: number): Promise<Uint8Array>;
 };

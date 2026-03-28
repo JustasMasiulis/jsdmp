@@ -117,38 +117,28 @@ const decodeInstructionAt = async (
 	address: bigint,
 	maxBytes = MAX_INSTRUCTION_LENGTH,
 ): Promise<DecodedInstruction | null> => {
-	for (
-		let size = Math.max(
-			1,
-			Math.min(MAX_INSTRUCTION_LENGTH, Math.floor(maxBytes)),
-		);
-		size >= 1;
-		size -= 1
-	) {
-		let bytes: Uint8Array;
-		try {
-			bytes = await source.read(address, size);
-		} catch {
-			continue;
-		}
+	const requestedSize = Math.max(
+		1,
+		Math.min(MAX_INSTRUCTION_LENGTH, Math.floor(maxBytes)),
+	);
 
-		if (bytes.byteLength === 0) {
-			continue;
-		}
-
-		const decoded = disassembleInstruction(bytes, address);
-		return decoded
-			? {
-					address,
-					length: decoded.length,
-					bytesHex: formatBytes(decoded.bytes),
-					mnemonic: decoded.mnemonic,
-					operands: decoded.operands,
-				}
-			: null;
+	let bytes: Uint8Array;
+	try {
+		bytes = await source.read(address, requestedSize, 1);
+	} catch {
+		return null;
 	}
 
-	return null;
+	const decoded = disassembleInstruction(bytes, address);
+	return decoded
+		? {
+				address,
+				length: decoded.length,
+				bytesHex: formatBytes(decoded.bytes),
+				mnemonic: decoded.mnemonic,
+				operands: decoded.operands,
+			}
+		: null;
 };
 
 const decodeLine = async (
@@ -172,14 +162,15 @@ const decodeLine = async (
 		};
 	}
 
+	const requestedSize = Math.max(
+		1,
+		Math.min(MAX_INSTRUCTION_LENGTH, Math.floor(maxBytes)),
+	);
+
 	let fallback: Uint8Array;
 	try {
-		fallback = await source.read(address, 1);
+		fallback = await source.read(address, requestedSize, 1);
 	} catch {
-		return null;
-	}
-
-	if (fallback.byteLength === 0) {
 		return null;
 	}
 
@@ -187,7 +178,7 @@ const decodeLine = async (
 		line: makeLine(
 			address,
 			1,
-			formatBytes(fallback),
+			formatBytes(fallback.subarray(0, 1)),
 			"db",
 			formatDbOperand(fallback[0]),
 			isCurrent,
@@ -225,7 +216,11 @@ const buildPreviousGuessLines = async (
 
 			for (let start = candidateStart; start < candidateEnd; start += 1n) {
 				const instructionLength = Number(candidateEnd - start);
-				const decoded = await decodeInstructionAt(source, start, instructionLength);
+				const decoded = await decodeInstructionAt(
+					source,
+					start,
+					instructionLength,
+				);
 				if (!decoded || decoded.length !== instructionLength) {
 					continue;
 				}
@@ -328,7 +323,8 @@ const loadForwardWindow = async (
 
 	let hasMoreAfter = false;
 	try {
-		hasMoreAfter = (await source.read(cursor, 1)).byteLength > 0;
+		hasMoreAfter =
+			(await source.read(cursor, MAX_INSTRUCTION_LENGTH, 1)).byteLength > 0;
 	} catch {
 		hasMoreAfter = false;
 	}
@@ -341,8 +337,10 @@ export const buildDisassemblyListing = async (
 	anchorAddress: bigint,
 ): Promise<DebugDisassemblyListing> => {
 	try {
-		const anchorByte = await source.read(anchorAddress, 1);
-		if (anchorByte.byteLength === 0) {
+		if (
+			(await source.read(anchorAddress, MAX_INSTRUCTION_LENGTH, 1)).byteLength ===
+			0
+		) {
 			return makeListing(
 				"missing_memory",
 				`Address ${fmtAddress(anchorAddress)} is not present in dump memory.`,

@@ -448,10 +448,7 @@ export class VanillaDisassemblyView {
 		if (this.listing) {
 			return this.listing.message || "No disassembly instructions available.";
 		}
-		if (
-			!this.followInstructionPointer &&
-			this.manualAddress !== null
-		) {
+		if (!this.followInstructionPointer && this.manualAddress !== null) {
 			return "Enter an address that exists in dump memory to view disassembly.";
 		}
 		if (this.resolvedContext) {
@@ -595,15 +592,6 @@ export class VanillaDisassemblyView {
 		if (parsed === null) {
 			this.setAddressError(
 				"Address must be hexadecimal (for example: 0x7FF612340000).",
-			);
-			return;
-		}
-
-		try {
-			await this.dumpInfo.debugInterface.read(parsed, 1);
-		} catch {
-			this.setAddressError(
-				"Address is not present in dump memory and cannot be disassembled.",
 			);
 			return;
 		}

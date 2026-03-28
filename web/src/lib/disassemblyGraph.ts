@@ -1,19 +1,10 @@
 import type { DebugInterface } from "./debug_interface";
-import type { DisassemblyMemorySource } from "./debugDisassembly";
 import {
 	type DisassembledControlFlow,
-	type DisassembledInstruction,
 	disassembleInstruction,
 	MAX_INSTRUCTION_LENGTH,
 } from "./disassembly";
 
-export type CfgBuildStatus =
-	| "ok"
-	| "missing_memory"
-	| "decode_error"
-	| "truncated";
-
-export type CfgNodeKind = "block" | "missing_memory" | "decode_error";
 export type CfgEdgeKind = "true" | "false" | "unconditional";
 
 export type CfgInstruction = {
@@ -40,7 +31,6 @@ export type CfgTextLine = {
 
 export type CfgNode = {
 	id: string;
-	kind: CfgNodeKind;
 	title: string;
 	instructionCount: number;
 	lines: CfgTextLine[];
@@ -67,28 +57,10 @@ export type CfgBuildStats = {
 };
 
 export type CfgBuildResult = {
-	status: CfgBuildStatus;
-	message: string;
 	anchorAddress: bigint;
 	blocks: CfgNode[];
 	edges: CfgEdge[];
 	stats: CfgBuildStats;
-};
-
-type SyntheticSuccessor = {
-	address: bigint;
-	key: string;
-	kind: Exclude<CfgNodeKind, "block">;
-};
-
-type PendingSuccessor = {
-	kind: CfgEdgeKind;
-	target: bigint | SyntheticSuccessor;
-};
-
-type CfgBuildState = {
-	instructionCount: number;
-	truncated: boolean;
 };
 
 const DEFAULT_CFG_BUILD_OPTIONS: CfgBuildOptions = {
@@ -127,9 +99,6 @@ const makeTextSegment = (
 });
 
 const blockIdForAddress = (address: bigint) => `block:${address.toString(16)}`;
-
-const syntheticNodeId = (kind: CfgNodeKind, key: string) =>
-	`synthetic:${kind}:${key}`;
 
 export const tokenizeCfgTextSegments = (text: string): CfgTextSegment[] => {
 	if (!text) {
@@ -215,384 +184,151 @@ export const buildCfgInstructionLines = (
 	);
 };
 
-const makeSyntheticSuccessor = (
-	edgeKind: CfgEdgeKind,
-	kind: Exclude<CfgNodeKind, "block">,
-	address: bigint,
-): PendingSuccessor => ({
-	kind: edgeKind,
-	target: {
-		address,
-		key: fmtAddress(address),
-		kind,
-	},
-});
+const buildBlock2 = async (
+	dbg: DebugInterface,
+	blockAddr: bigint,
+	blocks: Map<bigint, CfgNode>,
+	knownBlockStarts: Set<bigint>,
+	addPendingBlock: (addr: bigint) => void,
+	addEdge: (to: bigint, kind: CfgEdgeKind) => void,
+) => {
+	const instructions: CfgInstruction[] = [];
+	let ip = blockAddr;
 
-const buildSyntheticNode = (
-	kind: Exclude<CfgNodeKind, "block">,
-	key: string,
-	address: bigint,
-): CfgNode => {
-	const title = kind === "missing_memory" ? "missing memory" : "decode error";
-	return {
-		id: syntheticNodeId(kind, key),
-		kind,
-		title,
-		instructionCount: 0,
-		lines: buildCfgTextLinesFromLabel(`${title}\n${fmtAddress(address)}`),
-	};
-};
+	let error: string | null = null;
+	loop: while (true) {
+		if (instructions.length > 0 && knownBlockStarts.has(ip)) {
+			addEdge(ip, "unconditional");
+			break;
+		}
 
-const decodeInstructionAt = async (
-	source: DisassemblyMemorySource,
-	address: bigint,
-): Promise<CfgInstruction | null> => {
-	for (let size = MAX_INSTRUCTION_LENGTH; size >= 1; size -= 1) {
 		let bytes: Uint8Array;
 		try {
-			bytes = await source.read(address, size);
+			bytes = await dbg.read(ip, MAX_INSTRUCTION_LENGTH, 1);
 		} catch {
-			continue;
+			error = "missing memory";
+			break;
 		}
 
-		if (bytes.byteLength === 0) {
-			continue;
-		}
-
-		const decoded = disassembleInstruction(bytes, address);
+		const decoded = disassembleInstruction(bytes, ip);
 		if (!decoded) {
-			return null;
+			error = "decode error";
+			break;
 		}
 
-		return {
-			address,
+		instructions.push({
+			address: ip,
 			byteLength: decoded.length,
 			mnemonic: decoded.mnemonic,
 			operands: decoded.operands,
 			controlFlow: decoded.controlFlow,
-		};
-	}
+		});
 
-	return null;
-};
-
-const buildBlock = async (
-	source: DisassemblyMemorySource,
-	startAddress: bigint,
-	knownBlockStarts: Set<bigint>,
-	state: CfgBuildState,
-	options: CfgBuildOptions,
-): Promise<{ block: CfgNode | null; successors: PendingSuccessor[] }> => {
-	const instructions: CfgInstruction[] = [];
-	const successors: PendingSuccessor[] = [];
-	let cursor = startAddress;
-
-	blockLoop: while (true) {
-		if (state.instructionCount >= options.maxInstructions) {
-			state.truncated = true;
-			break;
-		}
-
-		if (instructions.length > 0 && knownBlockStarts.has(cursor)) {
-			successors.push({ kind: "unconditional", target: cursor });
-			break;
-		}
-
-		const instruction = await decodeInstructionAt(source, cursor);
-		if (!instruction) {
-			if (instructions.length === 0) {
-				return { block: null, successors };
-			}
-
-			successors.push(
-				makeSyntheticSuccessor("unconditional", "decode_error", cursor),
-			);
-			break;
-		}
-
-		instructions.push(instruction);
-		state.instructionCount += 1;
-		const nextAddress = cursor + BigInt(instruction.byteLength);
-
-		switch (instruction.controlFlow.kind) {
+		const nextIp = ip + BigInt(decoded.length);
+		const targetAddress = decoded.controlFlow.directTargetAddress;
+		switch (decoded.controlFlow.kind) {
 			case "conditional_branch": {
-				if (instruction.controlFlow.directTargetAddress !== null) {
-					successors.push({
-						kind: "true",
-						target: instruction.controlFlow.directTargetAddress,
-					});
+				if (targetAddress !== null) {
+					addEdge(decoded.controlFlow.directTargetAddress, "true");
+					addPendingBlock(decoded.controlFlow.directTargetAddress);
 				}
-				let hasFallthroughByte = false;
-				try {
-					hasFallthroughByte =
-						(await source.read(nextAddress, 1)).byteLength > 0;
-				} catch {
-					hasFallthroughByte = false;
-				}
-				successors.push(
-					hasFallthroughByte
-						? { kind: "false", target: nextAddress }
-						: makeSyntheticSuccessor("false", "missing_memory", nextAddress),
-				);
-				break blockLoop;
+
+				addEdge(nextIp, "false");
+				addPendingBlock(nextIp);
+				break loop;
 			}
-			case "unconditional_branch":
-			case "return":
-				if (instruction.controlFlow.directTargetAddress !== null) {
-					successors.push({
-						kind: "unconditional",
-						target: instruction.controlFlow.directTargetAddress,
-					});
+			case "unconditional_branch": {
+				if (targetAddress !== null) {
+					addEdge(targetAddress, "unconditional");
+					addPendingBlock(targetAddress);
 				}
-				break blockLoop;
+				break loop;
+			}
+			case "return":
+				break loop;
 		}
 
-		let hasNextByte = false;
-		try {
-			hasNextByte = (await source.read(nextAddress, 1)).byteLength > 0;
-		} catch {
-			hasNextByte = false;
-		}
-
-		if (!hasNextByte) {
-			successors.push(
-				makeSyntheticSuccessor("unconditional", "missing_memory", nextAddress),
-			);
-			break;
-		}
-
-		cursor = nextAddress;
+		ip = nextIp;
 	}
 
-	if (instructions.length === 0) {
-		return { block: null, successors };
+	const lines = buildCfgInstructionLines(instructions);
+	if (error) {
+		lines.push(
+			...buildCfgTextLinesFromLabel(
+				error === "decode_error" ? "decode error" : "missing memory",
+			),
+		);
 	}
 
-	return {
-		block: {
-			id: blockIdForAddress(startAddress),
-			kind: "block",
-			title: fmtAddress(startAddress),
-			instructionCount: instructions.length,
-			lines: buildCfgInstructionLines(instructions),
-		},
-		successors,
-	};
+	blocks.set(blockAddr, {
+		id: blockIdForAddress(blockAddr),
+		title: fmtAddress(blockAddr),
+		instructionCount: instructions.length,
+		lines: lines,
+	});
 };
 
-export const buildControlFlowGraph = async (
-	source: DisassemblyMemorySource,
-	anchorAddress: bigint,
-	options?: Partial<CfgBuildOptions>,
+export const buildCfg2 = async (
+	dbg: DebugInterface,
+	entryAddress: bigint,
 ): Promise<CfgBuildResult> => {
-	const mergedOptions = { ...DEFAULT_CFG_BUILD_OPTIONS, ...options };
-	try {
-		const anchorByte = await source.read(anchorAddress, 1);
-		if (anchorByte.byteLength === 0) {
-			return {
-				status: "missing_memory",
-				message: `Address ${fmtAddress(anchorAddress)} is not present in dump memory.`,
-				anchorAddress,
-				blocks: [],
-				edges: [],
-				stats: {
-					blockCount: 0,
-					edgeCount: 0,
-					instructionCount: 0,
-					truncated: false,
-				},
-			};
-		}
-	} catch {
-		return {
-			status: "missing_memory",
-			message: `Address ${fmtAddress(anchorAddress)} is not present in dump memory.`,
-			anchorAddress,
-			blocks: [],
-			edges: [],
-			stats: {
-				blockCount: 0,
-				edgeCount: 0,
-				instructionCount: 0,
-				truncated: false,
-			},
+	const blocks = new Map<bigint, CfgNode>();
+	const edges = new Map<string, CfgEdge>();
+	const pendingBlocks = new Set<bigint>([entryAddress]);
+	const knownBlockStarts = new Set<bigint>([entryAddress]);
+
+	while (pendingBlocks.size > 0) {
+		// pop the first pending block
+		const addr = pendingBlocks.values().next().value;
+		pendingBlocks.delete(addr);
+
+		const addPendingBlock = (newBlockAddr: bigint) => {
+			if (
+				addr === newBlockAddr ||
+				blocks.has(newBlockAddr) ||
+				knownBlockStarts.has(newBlockAddr)
+			) {
+				return;
+			}
+
+			knownBlockStarts.add(newBlockAddr);
+			pendingBlocks.add(newBlockAddr);
 		};
-	}
 
-	const pendingStarts = [anchorAddress];
-	const knownBlockStarts = new Set(pendingStarts);
-	const nodes: CfgNode[] = [];
-	const blockMap = new Map<string, CfgNode>();
-	const syntheticMap = new Map<string, CfgNode>();
-	const aliasMap = new Map<string, string>();
-	const edgeMap = new Map<string, CfgEdge>();
-	const state: CfgBuildState = { instructionCount: 0, truncated: false };
-	let anchorDecodeFailed = false;
+		const addEdge = (to: bigint, kind: CfgEdgeKind) => {
+			const id = `${addr}->${to}:${kind}`;
+			if (!edges.has(id)) {
+				edges.set(id, {
+					id,
+					from: blockIdForAddress(addr),
+					to: blockIdForAddress(to),
+					kind,
+				});
+			}
+		};
 
-	const ensureSyntheticNode = (
-		kind: Exclude<CfgNodeKind, "block">,
-		key: string,
-		address: bigint,
-	) => {
-		const id = syntheticNodeId(kind, key);
-		const existing = syntheticMap.get(id);
-		if (existing) {
-			return existing;
-		}
-
-		const node = buildSyntheticNode(kind, key, address);
-		syntheticMap.set(id, node);
-		nodes.push(node);
-		return node;
-	};
-
-	const enqueueStart = (address: bigint) => {
-		const blockId = blockIdForAddress(address);
-		if (blockMap.has(blockId) || knownBlockStarts.has(address)) {
-			return;
-		}
-
-		knownBlockStarts.add(address);
-		pendingStarts.push(address);
-	};
-
-	const addEdge = (from: string, to: string, kind: CfgEdgeKind) => {
-		if (edgeMap.size >= mergedOptions.maxEdges) {
-			state.truncated = true;
-			return;
-		}
-
-		const id = `${from}->${to}:${kind}`;
-		if (!edgeMap.has(id)) {
-			edgeMap.set(id, { id, from, to, kind });
-		}
-	};
-
-	while (pendingStarts.length > 0) {
-		if (blockMap.size >= mergedOptions.maxBlocks) {
-			state.truncated = true;
-			break;
-		}
-		if (state.instructionCount >= mergedOptions.maxInstructions) {
-			state.truncated = true;
-			break;
-		}
-
-		const startAddress = pendingStarts.shift();
-		if (startAddress === undefined) {
-			break;
-		}
-
-		const { block, successors } = await buildBlock(
-			source,
-			startAddress,
+		await buildBlock2(
+			dbg,
+			addr,
+			blocks,
 			knownBlockStarts,
-			state,
-			mergedOptions,
-		);
-		const blockId = blockIdForAddress(startAddress);
-
-		if (!block) {
-			const errorNode = ensureSyntheticNode(
-				"decode_error",
-				fmtAddress(startAddress),
-				startAddress,
-			);
-			aliasMap.set(blockId, errorNode.id);
-			if (startAddress === anchorAddress) {
-				anchorDecodeFailed = true;
-			}
-			continue;
-		}
-
-		blockMap.set(block.id, block);
-		nodes.push(block);
-
-		for (const successor of successors) {
-			if (typeof successor.target !== "bigint") {
-				const node = ensureSyntheticNode(
-					successor.target.kind,
-					successor.target.key,
-					successor.target.address,
-				);
-				addEdge(block.id, node.id, successor.kind);
-				continue;
-			}
-
-			const targetAddress = successor.target;
-			let hasTargetByte = false;
-			try {
-				hasTargetByte = (await source.read(targetAddress, 1)).byteLength > 0;
-			} catch {
-				hasTargetByte = false;
-			}
-
-			if (!hasTargetByte) {
-				const node = ensureSyntheticNode(
-					"missing_memory",
-					fmtAddress(targetAddress),
-					targetAddress,
-				);
-				addEdge(block.id, node.id, successor.kind);
-				continue;
-			}
-
-			addEdge(block.id, blockIdForAddress(targetAddress), successor.kind);
-			enqueueStart(targetAddress);
-		}
-	}
-
-	const nodeIds = new Set(nodes.map((node) => node.id));
-	const resolvedEdgeIds = new Set<string>();
-	const resolvedEdges: CfgEdge[] = [];
-
-	for (const edge of edgeMap.values()) {
-		const targetId = aliasMap.get(edge.to) ?? edge.to;
-		if (!nodeIds.has(targetId)) {
-			continue;
-		}
-
-		const id = `${edge.from}->${targetId}:${edge.kind}`;
-		if (resolvedEdgeIds.has(id)) {
-			continue;
-		}
-
-		resolvedEdgeIds.add(id);
-		resolvedEdges.push(
-			targetId === edge.to
-				? edge
-				: {
-						...edge,
-						id,
-						to: targetId,
-					},
+			addPendingBlock,
+			addEdge,
 		);
 	}
-
-	const status: CfgBuildStatus = anchorDecodeFailed
-		? "decode_error"
-		: state.truncated
-			? "truncated"
-			: "ok";
-
-	const message =
-		status === "decode_error"
-			? `Failed to decode an instruction at ${fmtAddress(anchorAddress)}.`
-			: status === "truncated"
-				? `Graph from ${fmtAddress(anchorAddress)} was truncated at configured limits.`
-				: `Showing graph from ${fmtAddress(anchorAddress)}.`;
 
 	return {
-		status,
-		message,
-		anchorAddress,
-		blocks: nodes,
-		edges: resolvedEdges,
+		anchorAddress: entryAddress,
+		blocks: Array.from(blocks.values()),
+		edges: Array.from(edges.values()),
 		stats: {
-			blockCount: blockMap.size,
-			edgeCount: resolvedEdges.length,
-			instructionCount: state.instructionCount,
-			truncated: state.truncated,
+			blockCount: blocks.size,
+			edgeCount: edges.size,
+			instructionCount: Array.from(blocks.values()).reduce(
+				(total, block) => total + block.instructionCount,
+				0,
+			),
+			truncated: false,
 		},
 	};
 };

@@ -6,7 +6,7 @@ import {
 } from "../lib/addressPanelState";
 import type { ResolvedDumpContext } from "../lib/context";
 import {
-	buildControlFlowGraph,
+	buildCfg2,
 	type CfgBuildResult,
 	type CfgEdgeKind,
 	type CfgNode,
@@ -485,7 +485,7 @@ export class VanillaDisassemblyGraphView {
 		}
 
 		try {
-			const nextGraph = await buildControlFlowGraph(
+			const nextGraph = await buildCfg2(
 				this.dumpInfo.debugInterface,
 				anchorAddress,
 			);
@@ -497,10 +497,7 @@ export class VanillaDisassemblyGraphView {
 			if (this.isDisposed || token !== this.reloadToken) {
 				return;
 			}
-			const message = error instanceof Error ? error.message : String(error);
 			this.graphResult = {
-				status: "decode_error",
-				message: `Graph loading failed: ${message}`,
 				anchorAddress,
 				blocks: [],
 				edges: [],
@@ -712,10 +709,6 @@ export class VanillaDisassemblyGraphView {
 			div.style.height = `${block.data.height}px`;
 
 			const cfgNode = nodesById.get(block.data.id);
-			if (cfgNode && cfgNode.kind !== "block") {
-				div.classList.add(`cfg-block--kind-${cfgNode.kind}`);
-			}
-
 			this.renderBlockText(div, cfgNode, block.data.label);
 			container.append(div);
 			this.blockElements.set(block.data.id, div);
@@ -840,7 +833,7 @@ export class VanillaDisassemblyGraphView {
 		const termText = this.selectedTerm
 			? ` Highlighting "${this.selectedTerm}" (${this.termMatchCount()} matches).`
 			: "";
-		this.statusNode.textContent = `${result.message} ${summary}.${selectedText}${termText}`;
+		this.statusNode.textContent = `${summary}.${selectedText}${termText}`;
 	}
 
 	private selectedBlock(): CfgNode | null {
@@ -879,18 +872,15 @@ export class VanillaDisassemblyGraphView {
 
 	private emptyMessage() {
 		if (this.addressError) {
-			return this.graphResult?.message || "No graph instructions available.";
+			return "No graph instructions available.";
 		}
 		if (this.graphResult) {
-			return this.graphResult.message || "No graph instructions available.";
+			return "No graph instructions available.";
 		}
 		if (this.isLoadingGraph) {
 			return "Loading graph...";
 		}
-		if (
-			!this.followInstructionPointer &&
-			this.manualAddress !== null
-		) {
+		if (!this.followInstructionPointer && this.manualAddress !== null) {
 			return "Enter an address that exists in dump memory to view a graph.";
 		}
 		if (this.resolvedContext) {
@@ -923,15 +913,6 @@ export class VanillaDisassemblyGraphView {
 		if (parsed === null) {
 			this.setAddressError(
 				"Address must be hexadecimal (for example: 0x7FF612340000).",
-			);
-			return;
-		}
-
-		try {
-			await this.dumpInfo.debugInterface.read(parsed, 1);
-		} catch {
-			this.setAddressError(
-				"Address is not present in dump memory and cannot be graphed.",
 			);
 			return;
 		}

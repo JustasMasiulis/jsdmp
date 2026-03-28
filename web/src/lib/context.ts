@@ -39,6 +39,7 @@ type ContextResolvableDebugInterface = DebugInterface & {
 };
 
 const AMD64_CONTEXT_MIN_SIZE = 0x100;
+const MEMORY_PROBE_SIZE = 0x10;
 
 export class Context {
 	private _data: DataView;
@@ -172,7 +173,7 @@ export const resolveDumpContext = async (
 	let anchorAddress = instructionPointer;
 	if (exceptionAddress !== null) {
 		try {
-			await debugInterface.read(exceptionAddress, 1);
+			await debugInterface.read(exceptionAddress, MEMORY_PROBE_SIZE, 1);
 			anchorAddress = exceptionAddress;
 		} catch {
 			anchorAddress = instructionPointer;

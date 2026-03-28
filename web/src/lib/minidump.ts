@@ -411,9 +411,11 @@ export class MiniDump {
 	readMemoryViewAt(
 		address: bigint,
 		size: number,
+		minSize?: number,
 		hintRangeIndex?: number,
 	): MinidumpMemoryReadView | null {
-		if (size <= 0) {
+		const requiredSize = minSize ?? size;
+		if (size <= 0 || requiredSize < 0 || requiredSize > size) {
 			return null;
 		}
 
@@ -425,13 +427,16 @@ export class MiniDump {
 		const { range, index } = match;
 		const offset = address - range.address;
 		const available = range.dataSize - offset;
+		const minimum = BigInt(requiredSize);
 		const requested = BigInt(size);
-		if (available < requested) {
+		if (available < minimum) {
 			return null;
 		}
 
+		const byteCountBig = available < requested ? available : requested;
+
 		const start = range.dataRva + offset;
-		const end = start + requested;
+		const end = start + byteCountBig;
 		const maxByteLength = BigInt(this._data.byteLength);
 		if (start < 0n || end > maxByteLength) {
 			return null;
@@ -446,7 +451,7 @@ export class MiniDump {
 			bytes: new Uint8Array(
 				this._data.buffer,
 				this._data.byteOffset + Number(start),
-				size,
+				Number(byteCountBig),
 			),
 			rangeIndex: index,
 		};
@@ -455,9 +460,10 @@ export class MiniDump {
 	readMemoryAt(
 		address: bigint,
 		size: number,
+		minSize?: number,
 		hintRangeIndex?: number,
 	): Uint8Array | null {
-		const view = this.readMemoryViewAt(address, size, hintRangeIndex);
+		const view = this.readMemoryViewAt(address, size, minSize, hintRangeIndex);
 		if (!view) {
 			return null;
 		}

@@ -137,17 +137,21 @@ const buildSource = (options: SourceOptions = {}): MinidumpDebugSource => {
 			const bytes = locationBytes.get(location.rva);
 			return bytes ? bytes.slice(0, location.dataSize) : null;
 		},
-		readMemoryAt: (address, size) => {
+		readMemoryAt: (address, size, minSize) => {
 			const segment = findSegment(memorySegments, address);
 			if (!segment) {
 				return null;
 			}
 
 			const offset = Number(address - segment.start);
-			const end = offset + size;
-			return end <= segment.bytes.byteLength
-				? segment.bytes.slice(offset, end)
-				: null;
+			const available = segment.bytes.byteLength - offset;
+			const requiredSize = minSize ?? size;
+			if (available < requiredSize) {
+				return null;
+			}
+
+			const byteCount = Math.min(size, available);
+			return segment.bytes.slice(offset, offset + byteCount);
 		},
 	};
 };
@@ -171,6 +175,9 @@ describe("MinidumpDebugInterface", () => {
 		expect(debugInterface.dm.currentContext).toBe(0n);
 		expect(debugInterface.dm.threads[0]?.context).not.toBe(0n);
 		expect(await debugInterface.read(0x5000n, 3)).toEqual(
+			new Uint8Array([0x90, 0x90, 0xc3]),
+		);
+		expect(await debugInterface.read(0x5000n, 0x10, 1)).toEqual(
 			new Uint8Array([0x90, 0x90, 0xc3]),
 		);
 
