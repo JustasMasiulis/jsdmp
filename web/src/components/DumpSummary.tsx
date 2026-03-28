@@ -1,4 +1,4 @@
-import { For, type ParentComponent } from "solid-js";
+import { For, type ParentComponent, Show } from "solid-js";
 import type { ParsedDumpInfo } from "../lib/dumpInfo";
 import type { DumpSection } from "../lib/dumpSections";
 import {
@@ -96,14 +96,16 @@ const summarizeMemoryList = (
 };
 
 type DumpTableProps = {
-	title: string;
+	title?: string;
 	headers: string[];
 	rows: string[][];
 };
 
 const DumpTable = (props: DumpTableProps) => (
 	<div class="dump-info-panel__table-wrap">
-		<p class="dump-info-panel__table-title text-medium">{props.title}</p>
+		<Show when={props.title}>
+			<p class="dump-info-panel__table-title text-medium">{props.title}</p>
+		</Show>
 		<table class="dump-info-table">
 			<thead>
 				<tr>
@@ -371,7 +373,6 @@ const ExceptionSection = (props: {
 			{fmtHex(props.dumpInfo.exceptionStream?.threadContext.rva ?? 0, 8)}
 		</Row>
 		<DumpTable
-			title="Exception Information"
 			headers={["Index", "Value"]}
 			rows={props.exceptionParameterRows}
 		/>
@@ -385,39 +386,29 @@ const ModulesSection = (props: {
 }) => (
 	<>
 		{props.dumpInfo.moduleList ? (
-			<>
-				<Row label="Modules">{props.dumpInfo.moduleList.length}</Row>
-				<DumpTable
-					title="Module Entries"
-					headers={[
-						"Base",
-						"Size",
-						"Checksum",
-						"TimeDateStamp",
-						"Name",
-						"CV Size",
-						"CV Format",
-						"CV PDB",
-						"CV Identifier",
-						"CV Age",
-						"Misc Size",
-						"Misc RVA",
-					]}
-					rows={props.moduleRows}
-				/>
-			</>
+			<DumpTable
+				headers={[
+					"Base",
+					"Size",
+					"Checksum",
+					"TimeDateStamp",
+					"Name",
+					"CV Size",
+					"CV Format",
+					"CV PDB",
+					"CV Identifier",
+					"CV Age",
+					"Misc Size",
+					"Misc RVA",
+				]}
+				rows={props.moduleRows}
+			/>
 		) : null}
 		{props.dumpInfo.unloadedModuleList ? (
-			<>
-				<Row label="Unloaded Modules">
-					{props.dumpInfo.unloadedModuleList.length}
-				</Row>
-				<DumpTable
-					title="Unloaded Module Entries"
-					headers={["Base", "Size", "Checksum", "TimeDateStamp", "Name"]}
-					rows={props.unloadedModuleRows}
-				/>
-			</>
+			<DumpTable
+				headers={["Base", "Size", "Checksum", "TimeDateStamp", "Name"]}
+				rows={props.unloadedModuleRows}
+			/>
 		) : null}
 	</>
 );
@@ -448,33 +439,29 @@ const ThreadsSection = (props: {
 	associatedRows: string[][];
 	mergedThreadCount: number;
 }) => (
-	<>
-		<Row label="Threads (Merged)">{props.mergedThreadCount}</Row>
-		<DumpTable
-			title="Merged Thread Entries"
-			headers={[
-				"Thread ID",
-				"Suspended",
-				"Priority",
-				"TEB",
-				"Stack Start",
-				"Stack Size",
-				"Stack RVA",
-				"Context Size",
-				"Context RVA",
-				"Dump Flags",
-				"Dump Error",
-				"Exit Status",
-				"Create Time",
-				"Exit Time",
-				"Kernel Time",
-				"User Time",
-				"Start Address",
-				"Affinity",
-			]}
-			rows={props.associatedRows}
-		/>
-	</>
+	<DumpTable
+		headers={[
+			"Thread ID",
+			"Suspended",
+			"Priority",
+			"TEB",
+			"Stack Start",
+			"Stack Size",
+			"Stack RVA",
+			"Context Size",
+			"Context RVA",
+			"Dump Flags",
+			"Dump Error",
+			"Exit Status",
+			"Create Time",
+			"Exit Time",
+			"Kernel Time",
+			"User Time",
+			"Start Address",
+			"Affinity",
+		]}
+		rows={props.associatedRows}
+	/>
 );
 
 export default function DumpSummary(props: DumpSummaryProps) {

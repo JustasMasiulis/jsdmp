@@ -223,6 +223,8 @@ Design language notes for future re-additions:
 	}
 
 	.wasm-debugger-shell {
+		display: flex;
+		flex-direction: column;
 		min-height: 100dvh;
 		transition:
 			background-color 0.15s ease,
@@ -376,10 +378,10 @@ Design language notes for future re-additions:
 
 	.dump-dockview-shell {
 		display: flex;
+		flex: 1;
 		flex-direction: column;
 		gap: 0.5rem;
-		height: 70dvh;
-		min-height: 30rem;
+		min-height: 0;
 		margin-top: 0.75rem;
 	}
 
