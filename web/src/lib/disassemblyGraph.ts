@@ -248,6 +248,11 @@ const buildBlock2 = async (
 				break loop;
 		}
 
+		// treat INT3 and UD2 as terminators.
+		if (decoded.mnemonic === "int3" || decoded.mnemonic === "ud2") {
+			break;
+		}
+
 		ip = nextIp;
 	}
 
