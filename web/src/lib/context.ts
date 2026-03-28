@@ -1,8 +1,7 @@
 import type {
-	MiniDump,
-	MinidumpAssociatedThread,
-	MinidumpLocationDescriptor,
-} from "./minidump";
+	DebugInterface,
+	DebugThread,
+} from "./debug_interface";
 import { readU16, readU32, readU64 } from "./reader";
 import { assert } from "./utils";
 
@@ -26,6 +25,20 @@ type ResolvedThreadContext = {
 	threadId: number | null;
 	threadContext: Context | null;
 };
+
+type ContextResolvableDebugInterface = DebugInterface & {
+	systemInfo?: { processorArchitecture: number } | null;
+	exceptionInfo?:
+		| {
+				exceptionRecord: {
+					exceptionCode: number;
+					exceptionAddress: bigint;
+				};
+		  }
+		| null;
+};
+
+const AMD64_CONTEXT_MIN_SIZE = 0x100;
 
 export class Context {
 	private _data: DataView;
@@ -68,89 +81,103 @@ export class Context {
 	}
 }
 
-const readContextFromLocation = (
-	dump: MiniDump,
-	location: MinidumpLocationDescriptor | null | undefined,
-): Context | null => {
-	if (!location) {
-		return null;
-	}
-
-	const view = dump.readLocationView(location);
-	if (!view) {
+const readContextFromAddress = async (
+	debugInterface: DebugInterface,
+	address: bigint,
+): Promise<Context | null> => {
+	if (address === 0n) {
 		return null;
 	}
 
 	try {
-		return new Context(view);
+		return new Context(await debugInterface.read(address, AMD64_CONTEXT_MIN_SIZE));
 	} catch {
 		return null;
 	}
 };
 
-const resolveThreadContext = (dump: MiniDump): ResolvedThreadContext => {
-	const exceptionThreadId = dump.exceptionStream?.threadId ?? null;
-	const exceptionContext = readContextFromLocation(
-		dump,
-		dump.exceptionStream?.threadContext,
+const tryThreadContext = async (
+	debugInterface: DebugInterface,
+	thread: DebugThread,
+): Promise<ResolvedThreadContext | null> => {
+	const threadContext = await readContextFromAddress(
+		debugInterface,
+		thread.context,
 	);
-	if (exceptionContext) {
-		return {
-			threadId: exceptionThreadId,
-			threadContext: exceptionContext,
-		};
-	}
+	return threadContext
+		? {
+				threadId: thread.id,
+				threadContext,
+			}
+		: null;
+};
 
-	const tryThread = (
-		thread: MinidumpAssociatedThread,
-	): ResolvedThreadContext | null => {
-		const threadContext = readContextFromLocation(dump, thread.threadContext);
-		return threadContext
-			? {
-					threadId: thread.threadId,
-					threadContext,
-				}
-			: null;
-	};
+const resolveThreadContext = async (
+	debugInterface: DebugInterface,
+): Promise<ResolvedThreadContext> => {
+	const currentThreadId = debugInterface.dm.currentThreadId || null;
 
-	if (exceptionThreadId !== null) {
-		const exceptionThread = (dump.associatedThreads ?? []).find(
-			(thread) => thread.threadId === exceptionThreadId,
+	if (debugInterface.dm.currentContext !== 0n) {
+		const currentContext = await readContextFromAddress(
+			debugInterface,
+			debugInterface.dm.currentContext,
 		);
-		const resolved = exceptionThread ? tryThread(exceptionThread) : null;
-		if (resolved) {
-			return resolved;
+		if (currentContext) {
+			return {
+				threadId: currentThreadId,
+				threadContext: currentContext,
+			};
 		}
 	}
 
-	for (const thread of dump.associatedThreads ?? []) {
-		const resolved = tryThread(thread);
+	if (currentThreadId !== null) {
+		const currentThread = debugInterface.dm.threads.find(
+			(thread) => thread.id === currentThreadId,
+		);
+		const resolvedCurrentThread = currentThread
+			? await tryThreadContext(debugInterface, currentThread)
+			: null;
+		if (resolvedCurrentThread) {
+			return resolvedCurrentThread;
+		}
+	}
+
+	for (const thread of debugInterface.dm.threads) {
+		const resolved = await tryThreadContext(debugInterface, thread);
 		if (resolved) {
 			return resolved;
 		}
 	}
 
 	return {
-		threadId: exceptionThreadId,
+		threadId: currentThreadId,
 		threadContext: null,
 	};
 };
 
-export const resolveDumpContext = (dump: MiniDump): ResolvedDumpContext => {
-	const processorArchitecture = dump.systemInfo?.processorArchitecture ?? 0;
+export const resolveDumpContext = async (
+	debugInterface: ContextResolvableDebugInterface,
+): Promise<ResolvedDumpContext> => {
+	const processorArchitecture =
+		debugInterface.systemInfo?.processorArchitecture ?? 0;
 	assert(processorArchitecture === 9, "Only x64 dumps are supported");
 
-	const resolved = resolveThreadContext(dump);
+	const resolved = await resolveThreadContext(debugInterface);
 
 	const exceptionCode =
-		dump.exceptionStream?.exceptionRecord.exceptionCode ?? null;
+		debugInterface.exceptionInfo?.exceptionRecord.exceptionCode ?? null;
 	const exceptionAddress =
-		dump.exceptionStream?.exceptionRecord.exceptionAddress ?? null;
+		debugInterface.exceptionInfo?.exceptionRecord.exceptionAddress ?? null;
 	const instructionPointer = resolved.threadContext?.ip ?? null;
-	const anchorAddress =
-		exceptionAddress !== null && dump.findMemoryRange(exceptionAddress)
-			? exceptionAddress
-			: instructionPointer;
+	let anchorAddress = instructionPointer;
+	if (exceptionAddress !== null) {
+		try {
+			await debugInterface.read(exceptionAddress, 1);
+			anchorAddress = exceptionAddress;
+		} catch {
+			anchorAddress = instructionPointer;
+		}
+	}
 
 	return {
 		threadId: resolved.threadId,

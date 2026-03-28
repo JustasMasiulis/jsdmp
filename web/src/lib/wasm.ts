@@ -19,6 +19,10 @@ export const WASM_MEMORY = new WebAssembly.Memory({
 // will be initialized before the app is rendered
 export let WASM_EXPORTS: WasmExports | null = null;
 
+export const __setWasmExportsForTesting = (wasmExports: WasmExports | null) => {
+	WASM_EXPORTS = wasmExports;
+};
+
 const loadWasm = async (): Promise<void> => {
 	const response = await fetch("/web_dmp.wasm");
 	if (!response.ok) {

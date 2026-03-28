@@ -2,6 +2,17 @@ import { For, type ParentComponent, Show } from "solid-js";
 import type { ParsedDumpInfo } from "../lib/dumpInfo";
 import type { DumpSection } from "../lib/dumpSections";
 import {
+	type DebugCodeViewInfo,
+	type DebugMemoryRange,
+	type DebugModule,
+	type DebugThread,
+	type DebugUnloadedModule,
+} from "../lib/debug_interface";
+import {
+	getMinidumpStreamTypeName,
+	type MinidumpDebugExceptionInfo,
+} from "../lib/minidump_debug_interface";
+import {
 	fmtHex,
 	fmtHex8,
 	fmtHex16,
@@ -9,15 +20,6 @@ import {
 	fmtPriority,
 	fmtProductAndSuite,
 } from "../lib/formatting";
-import {
-	MiniDumpStreamType,
-	type MinidumpAssociatedThread,
-	type MinidumpCodeViewInfo,
-	type MinidumpExceptionStream,
-	type MinidumpMemory64Range,
-	type MinidumpModule,
-	type MinidumpUnloadedModule,
-} from "../lib/minidump";
 
 type DumpSummaryProps = {
 	dumpInfo: ParsedDumpInfo;
@@ -48,9 +50,6 @@ const formatTimestamp = (timestamp: number) => {
 
 const formatSeconds = (value: number) => `${value} sec`;
 
-const getStreamTypeName = (streamType: number) =>
-	MiniDumpStreamType[streamType] ?? `Unknown(${streamType})`;
-
 const formatBytes = (value: bigint) => `${value.toString()} B`;
 
 type MemoryListSummary = {
@@ -61,11 +60,11 @@ type MemoryListSummary = {
 };
 
 const summarizeMemoryList = (
-	memoryRanges: MinidumpMemory64Range[],
+	memoryRanges: DebugMemoryRange[],
 ): MemoryListSummary | null => {
 	const ranges = memoryRanges.map((range) => ({
 		start: range.address,
-		size: range.dataSize,
+		size: range.size,
 	}));
 
 	if (ranges.length === 0) {
@@ -142,26 +141,24 @@ const DumpTable = (props: DumpTableProps) => (
 const emptyCell = "-";
 
 const buildAssociatedRows = (
-	associatedThreads: MinidumpAssociatedThread[] | null,
+	threads: DebugThread[],
 ): string[][] =>
-	(associatedThreads ?? []).map((thread) => [
-		String(thread.threadId),
+	threads.map((thread) => [
+		String(thread.id),
 		thread.suspendCount ? String(thread.suspendCount) : emptyCell,
 		thread.priorityClass
 			? fmtPriority(thread.priorityClass, thread.priority)
 			: emptyCell,
 		thread.teb ? fmtHex16(thread.teb) : emptyCell,
-		thread.stack.startOfMemoryRange
-			? fmtHex16(thread.stack.startOfMemoryRange)
-			: emptyCell,
-		thread.stack.location.dataSize
-			? String(thread.stack.location.dataSize)
+		thread.stack.address ? fmtHex16(thread.stack.address) : emptyCell,
+		thread.stack.location.size
+			? String(thread.stack.location.size)
 			: emptyCell,
 		thread.stack.location.rva ? fmtHex8(thread.stack.location.rva) : emptyCell,
-		thread.threadContext.dataSize
-			? String(thread.threadContext.dataSize)
+		thread.contextLocation.size ? String(thread.contextLocation.size) : emptyCell,
+		thread.contextLocation.rva
+			? fmtHex8(thread.contextLocation.rva)
 			: emptyCell,
-		thread.threadContext.rva ? fmtHex8(thread.threadContext.rva) : emptyCell,
 		thread.dumpFlags ? fmtHex8(thread.dumpFlags) : emptyCell,
 		thread.dumpError ? fmtHex8(thread.dumpError) : emptyCell,
 		thread.exitStatus ? String(thread.exitStatus) : emptyCell,
@@ -174,14 +171,14 @@ const buildAssociatedRows = (
 	]);
 
 const buildExceptionParameterRows = (
-	exceptionStream: MinidumpExceptionStream | null,
+	exceptionInfo: MinidumpDebugExceptionInfo | null,
 ): string[][] =>
-	(exceptionStream?.exceptionRecord.exceptionInformation ?? []).map(
+	(exceptionInfo?.exceptionRecord.exceptionInformation ?? []).map(
 		(value, index) => [String(index), fmtHex(value, 16)],
 	);
 
 const buildCodeViewColumns = (
-	codeViewInfo: MinidumpCodeViewInfo | null,
+	codeViewInfo: DebugCodeViewInfo | null,
 ): [string, string, string, string] => {
 	if (!codeViewInfo) {
 		return [emptyCell, emptyCell, emptyCell, emptyCell];
@@ -214,122 +211,129 @@ const buildCodeViewColumns = (
 	}
 };
 
-const buildModuleRows = (moduleList: MinidumpModule[] | null): string[][] =>
-	(moduleList ?? []).map((module) => {
+const buildModuleRows = (moduleList: DebugModule[]): string[][] =>
+	moduleList.map((module) => {
 		const [cvFormat, cvPdb, cvIdentifier, cvAge] = buildCodeViewColumns(
 			module.codeViewInfo,
 		);
 
 		return [
-			fmtHex(module.baseOfImage, 16),
-			fmtHex(module.sizeOfImage, 8),
-			fmtHex(module.checkSum, 8),
+			fmtHex(module.address, 16),
+			fmtHex(module.size, 8),
+			fmtHex(module.checksum, 8),
 			fmtHex(module.timeDateStamp, 8),
-			module.moduleName || emptyCell,
-			fmtHex(module.cvRecord.dataSize, 8),
+			module.path || emptyCell,
+			fmtHex(module.codeViewRecord.size, 8),
 			cvFormat,
 			cvPdb,
 			cvIdentifier,
 			cvAge,
-			fmtHex(module.miscRecord.dataSize, 8),
+			fmtHex(module.miscRecord.size, 8),
 			fmtHex(module.miscRecord.rva, 8),
 		];
 	});
 
 const buildUnloadedModuleRows = (
-	unloadedModuleList: MinidumpUnloadedModule[] | null,
+	unloadedModuleList: DebugUnloadedModule[],
 ): string[][] =>
-	(unloadedModuleList ?? []).map((module) => [
-		fmtHex(module.baseOfImage, 16),
-		fmtHex(module.sizeOfImage, 8),
-		fmtHex(module.checkSum, 8),
+	unloadedModuleList.map((module) => [
+		fmtHex(module.address, 16),
+		fmtHex(module.size, 8),
+		fmtHex(module.checksum, 8),
 		fmtHex(module.timeDateStamp, 8),
-		module.moduleName || emptyCell,
+		module.path || emptyCell,
 	]);
 
 const SummarySection = (props: { dumpInfo: ParsedDumpInfo }) => (
 	<>
+		{(() => {
+			const debugInterface = props.dumpInfo.debugInterface;
+			return (
+				<>
 		<h2 class="dump-info-panel__title m0">Dump Summary</h2>
-		<Row label="Checksum">{fmtHex(props.dumpInfo.checksum, 8)}</Row>
-		<Row label="Timestamp">{formatTimestamp(props.dumpInfo.timestamp)}</Row>
-		<Row label="Flags">{fmtHex(props.dumpInfo.flags, 16)}</Row>
-		<Row label="Streams">{props.dumpInfo.streamCount}</Row>
+		<Row label="Checksum">{fmtHex(debugInterface.checksum, 8)}</Row>
+		<Row label="Timestamp">{formatTimestamp(debugInterface.timestamp)}</Row>
+		<Row label="Flags">{fmtHex(debugInterface.flags, 16)}</Row>
+		<Row label="Streams">{debugInterface.streamCount}</Row>
 		<Row label="Stream Types">
-			{props.dumpInfo.streamTypes.length > 0
-				? props.dumpInfo.streamTypes.map(getStreamTypeName).join(", ")
+			{debugInterface.streamTypes.length > 0
+				? debugInterface.streamTypes.map(getMinidumpStreamTypeName).join(", ")
 				: "none"}
 		</Row>
-		{props.dumpInfo.systemInfo ? (
+		{debugInterface.systemInfo ? (
 			<div class="dump-info-panel__table-wrap">
-				<RawRow>{fmtOs(props.dumpInfo.systemInfo)}</RawRow>
-				<RawRow>{fmtProductAndSuite(props.dumpInfo.systemInfo)}</RawRow>
+				<RawRow>{fmtOs(debugInterface.systemInfo)}</RawRow>
+				<RawRow>{fmtProductAndSuite(debugInterface.systemInfo)}</RawRow>
 				<Row label="CPU Revision">
-					level {props.dumpInfo.systemInfo.processorLevel}, rev{" "}
-					{fmtHex(props.dumpInfo.systemInfo.processorRevision, 4)}
+					level {debugInterface.systemInfo.processorLevel}, rev{" "}
+					{fmtHex(debugInterface.systemInfo.processorRevision, 4)}
 				</Row>
-				{props.dumpInfo.systemInfo.cpu.type === "x86" ? (
+				{debugInterface.systemInfo.cpu.type === "x86" ? (
 					<Row label="CPU Vendor">
-						{props.dumpInfo.systemInfo.cpu.vendorId || "unknown"}
+						{debugInterface.systemInfo.cpu.vendorId || "unknown"}
 					</Row>
 				) : (
 					<Row label="CPU Features">
-						{fmtHex(props.dumpInfo.systemInfo.cpu.processorFeatures[0], 16)},{" "}
-						{fmtHex(props.dumpInfo.systemInfo.cpu.processorFeatures[1], 16)}
+						{fmtHex(debugInterface.systemInfo.cpu.processorFeatures[0], 16)},{" "}
+						{fmtHex(debugInterface.systemInfo.cpu.processorFeatures[1], 16)}
 					</Row>
 				)}
 			</div>
 		) : null}
-		{props.dumpInfo.miscInfo ? (
+		{debugInterface.miscInfo ? (
 			<>
-				<Row label="MiscInfo Size">{props.dumpInfo.miscInfo.sizeOfInfo}</Row>
+				<Row label="MiscInfo Size">{debugInterface.miscInfo.sizeOfInfo}</Row>
 				<Row label="MiscInfo Flags1">
-					{fmtHex(props.dumpInfo.miscInfo.flags1, 8)}
+					{fmtHex(debugInterface.miscInfo.flags1, 8)}
 				</Row>
-				{props.dumpInfo.miscInfo.processId !== null ? (
-					<Row label="Process ID">{props.dumpInfo.miscInfo.processId}</Row>
+				{debugInterface.miscInfo.processId !== null ? (
+					<Row label="Process ID">{debugInterface.miscInfo.processId}</Row>
 				) : null}
-				{props.dumpInfo.miscInfo.processCreateTime !== null ? (
+				{debugInterface.miscInfo.processCreateTime !== null ? (
 					<Row label="Process Create Time">
-						{formatTimestamp(props.dumpInfo.miscInfo.processCreateTime)}
+						{formatTimestamp(debugInterface.miscInfo.processCreateTime)}
 					</Row>
 				) : null}
-				{props.dumpInfo.miscInfo.processUserTime !== null ? (
+				{debugInterface.miscInfo.processUserTime !== null ? (
 					<Row label="Process User Time">
-						{formatSeconds(props.dumpInfo.miscInfo.processUserTime)}
+						{formatSeconds(debugInterface.miscInfo.processUserTime)}
 					</Row>
 				) : null}
-				{props.dumpInfo.miscInfo.processKernelTime !== null ? (
+				{debugInterface.miscInfo.processKernelTime !== null ? (
 					<Row label="Process Kernel Time">
-						{formatSeconds(props.dumpInfo.miscInfo.processKernelTime)}
+						{formatSeconds(debugInterface.miscInfo.processKernelTime)}
 					</Row>
 				) : null}
-				{props.dumpInfo.miscInfo.processorMaxMhz !== null ? (
+				{debugInterface.miscInfo.processorMaxMhz !== null ? (
 					<Row label="CPU Max MHz">
-						{props.dumpInfo.miscInfo.processorMaxMhz}
+						{debugInterface.miscInfo.processorMaxMhz}
 					</Row>
 				) : null}
-				{props.dumpInfo.miscInfo.processorCurrentMhz !== null ? (
+				{debugInterface.miscInfo.processorCurrentMhz !== null ? (
 					<Row label="CPU Current MHz">
-						{props.dumpInfo.miscInfo.processorCurrentMhz}
+						{debugInterface.miscInfo.processorCurrentMhz}
 					</Row>
 				) : null}
-				{props.dumpInfo.miscInfo.processorMhzLimit !== null ? (
+				{debugInterface.miscInfo.processorMhzLimit !== null ? (
 					<Row label="CPU MHz Limit">
-						{props.dumpInfo.miscInfo.processorMhzLimit}
+						{debugInterface.miscInfo.processorMhzLimit}
 					</Row>
 				) : null}
-				{props.dumpInfo.miscInfo.processorMaxIdleState !== null ? (
+				{debugInterface.miscInfo.processorMaxIdleState !== null ? (
 					<Row label="CPU Max Idle State">
-						{props.dumpInfo.miscInfo.processorMaxIdleState}
+						{debugInterface.miscInfo.processorMaxIdleState}
 					</Row>
 				) : null}
-				{props.dumpInfo.miscInfo.processorCurrentIdleState !== null ? (
+				{debugInterface.miscInfo.processorCurrentIdleState !== null ? (
 					<Row label="CPU Current Idle State">
-						{props.dumpInfo.miscInfo.processorCurrentIdleState}
+						{debugInterface.miscInfo.processorCurrentIdleState}
 					</Row>
 				) : null}
 			</>
 		) : null}
+				</>
+			);
+		})()}
 	</>
 );
 
@@ -339,38 +343,47 @@ const ExceptionSection = (props: {
 }) => (
 	<>
 		<Row label="Exception Thread ID">
-			{props.dumpInfo.exceptionStream?.threadId}
+			{props.dumpInfo.debugInterface.exceptionInfo?.threadId}
 		</Row>
 		<Row label="Exception Code">
 			{fmtHex(
-				props.dumpInfo.exceptionStream?.exceptionRecord.exceptionCode ?? 0,
+				props.dumpInfo.debugInterface.exceptionInfo?.exceptionRecord.exceptionCode ??
+					0,
 				8,
 			)}
 		</Row>
 		<Row label="Exception Flags">
 			{fmtHex(
-				props.dumpInfo.exceptionStream?.exceptionRecord.exceptionFlags ?? 0,
+				props.dumpInfo.debugInterface.exceptionInfo?.exceptionRecord
+					.exceptionFlags ?? 0,
 				8,
 			)}
 		</Row>
 		<Row label="Exception Address">
 			{fmtHex(
-				props.dumpInfo.exceptionStream?.exceptionRecord.exceptionAddress ?? 0n,
+				props.dumpInfo.debugInterface.exceptionInfo?.exceptionRecord
+					.exceptionAddress ?? 0n,
 				16,
 			)}
 		</Row>
 		<Row label="Exception Record">
 			{fmtHex(
-				props.dumpInfo.exceptionStream?.exceptionRecord.exceptionRecord ?? 0n,
+				props.dumpInfo.debugInterface.exceptionInfo?.exceptionRecord
+					.exceptionRecord ?? 0n,
 				16,
 			)}
 		</Row>
 		<Row label="Exception Parameters">
-			{props.dumpInfo.exceptionStream?.exceptionRecord.numberParameters ?? 0}
+			{props.dumpInfo.debugInterface.exceptionInfo?.exceptionRecord
+				.numberParameters ?? 0}
 		</Row>
 		<Row label="Exception Context">
-			size={props.dumpInfo.exceptionStream?.threadContext.dataSize ?? 0}, rva=
-			{fmtHex(props.dumpInfo.exceptionStream?.threadContext.rva ?? 0, 8)}
+			size={props.dumpInfo.debugInterface.exceptionInfo?.contextLocation.size ?? 0},
+			rva=
+			{fmtHex(
+				props.dumpInfo.debugInterface.exceptionInfo?.contextLocation.rva ?? 0,
+				8,
+			)}
 		</Row>
 		<DumpTable
 			headers={["Index", "Value"]}
@@ -385,7 +398,7 @@ const ModulesSection = (props: {
 	unloadedModuleRows: string[][];
 }) => (
 	<>
-		{props.dumpInfo.moduleList ? (
+		{props.dumpInfo.debugInterface.dm.modules.length > 0 ? (
 			<DumpTable
 				headers={[
 					"Base",
@@ -404,7 +417,7 @@ const ModulesSection = (props: {
 				rows={props.moduleRows}
 			/>
 		) : null}
-		{props.dumpInfo.unloadedModuleList ? (
+		{props.dumpInfo.debugInterface.dm.unloadedModules.length > 0 ? (
 			<DumpTable
 				headers={["Base", "Size", "Checksum", "TimeDateStamp", "Name"]}
 				rows={props.unloadedModuleRows}
@@ -465,16 +478,16 @@ const ThreadsSection = (props: {
 );
 
 export default function DumpSummary(props: DumpSummaryProps) {
-	const associatedRows = buildAssociatedRows(props.dumpInfo.associatedThreads);
+	const associatedRows = buildAssociatedRows(props.dumpInfo.debugInterface.dm.threads);
 	const exceptionParameterRows = buildExceptionParameterRows(
-		props.dumpInfo.exceptionStream,
+		props.dumpInfo.debugInterface.exceptionInfo,
 	);
-	const moduleRows = buildModuleRows(props.dumpInfo.moduleList);
+	const moduleRows = buildModuleRows(props.dumpInfo.debugInterface.dm.modules);
 	const unloadedModuleRows = buildUnloadedModuleRows(
-		props.dumpInfo.unloadedModuleList,
+		props.dumpInfo.debugInterface.dm.unloadedModules,
 	);
 	const memoryListSummary = summarizeMemoryList(
-		props.dumpInfo.memoryRanges ?? [],
+		props.dumpInfo.debugInterface.dm.memoryRanges ?? [],
 	);
 	const mergedThreadCount = associatedRows.length;
 	const hasSection = (section: DumpSection) =>
@@ -485,7 +498,7 @@ export default function DumpSummary(props: DumpSummaryProps) {
 			{hasSection("summary") ? (
 				<SummarySection dumpInfo={props.dumpInfo} />
 			) : null}
-			{hasSection("exception") && props.dumpInfo.exceptionStream ? (
+			{hasSection("exception") && props.dumpInfo.debugInterface.exceptionInfo ? (
 				<ExceptionSection
 					dumpInfo={props.dumpInfo}
 					exceptionParameterRows={exceptionParameterRows}
@@ -501,7 +514,8 @@ export default function DumpSummary(props: DumpSummaryProps) {
 			{hasSection("memory") ? (
 				<MemorySection memoryListSummary={memoryListSummary} />
 			) : null}
-			{hasSection("threads") && props.dumpInfo.associatedThreads ? (
+			{hasSection("threads") &&
+			props.dumpInfo.debugInterface.dm.threads.length > 0 ? (
 				<ThreadsSection
 					associatedRows={associatedRows}
 					mergedThreadCount={mergedThreadCount}

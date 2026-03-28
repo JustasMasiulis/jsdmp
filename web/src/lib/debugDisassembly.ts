@@ -1,5 +1,5 @@
+import type { DebugInterface } from "./debug_interface";
 import { disassembleInstruction, MAX_INSTRUCTION_LENGTH } from "./disassembly";
-import type { MinidumpMemoryRangeMatch } from "./minidump";
 import { maxU64 } from "./utils";
 
 const DISASSEMBLY_LOOKBACK_BYTES = 256;
@@ -36,13 +36,7 @@ export type NextDisassemblyLoadResult = {
 	hasMoreAfter: boolean;
 };
 
-export type DisassemblyMemorySource = {
-	readMemoryAt: (address: bigint, size: number) => Uint8Array | null;
-	findMemoryRangeAt: (
-		address: bigint,
-		hintRangeIndex?: number,
-	) => MinidumpMemoryRangeMatch | null;
-};
+export type DisassemblyMemorySource = DebugInterface;
 
 type DecodedInstruction = {
 	address: bigint;
@@ -118,38 +112,52 @@ const emptyNextLoad = (
 	hasMoreAfter,
 });
 
-const decodeInstructionAt = (
+const decodeInstructionAt = async (
 	source: DisassemblyMemorySource,
 	address: bigint,
 	maxBytes = MAX_INSTRUCTION_LENGTH,
-): DecodedInstruction | null => {
-	const bytes = source.readMemoryAt(
-		address,
-		Math.max(1, Math.min(MAX_INSTRUCTION_LENGTH, Math.floor(maxBytes))),
-	);
-	if (!bytes || bytes.byteLength === 0) {
-		return null;
+): Promise<DecodedInstruction | null> => {
+	for (
+		let size = Math.max(
+			1,
+			Math.min(MAX_INSTRUCTION_LENGTH, Math.floor(maxBytes)),
+		);
+		size >= 1;
+		size -= 1
+	) {
+		let bytes: Uint8Array;
+		try {
+			bytes = await source.read(address, size);
+		} catch {
+			continue;
+		}
+
+		if (bytes.byteLength === 0) {
+			continue;
+		}
+
+		const decoded = disassembleInstruction(bytes, address);
+		return decoded
+			? {
+					address,
+					length: decoded.length,
+					bytesHex: formatBytes(decoded.bytes),
+					mnemonic: decoded.mnemonic,
+					operands: decoded.operands,
+				}
+			: null;
 	}
 
-	const decoded = disassembleInstruction(bytes, address);
-	return decoded
-		? {
-				address,
-				length: decoded.length,
-				bytesHex: formatBytes(decoded.bytes),
-				mnemonic: decoded.mnemonic,
-				operands: decoded.operands,
-			}
-		: null;
+	return null;
 };
 
-const decodeLine = (
+const decodeLine = async (
 	source: DisassemblyMemorySource,
 	address: bigint,
 	maxBytes: number,
 	isCurrent: boolean,
-): LoadedLine | null => {
-	const decoded = decodeInstructionAt(source, address, maxBytes);
+): Promise<LoadedLine | null> => {
+	const decoded = await decodeInstructionAt(source, address, maxBytes);
 	if (decoded) {
 		return {
 			line: makeLine(
@@ -164,8 +172,14 @@ const decodeLine = (
 		};
 	}
 
-	const fallback = source.readMemoryAt(address, 1);
-	if (!fallback || fallback.byteLength === 0) {
+	let fallback: Uint8Array;
+	try {
+		fallback = await source.read(address, 1);
+	} catch {
+		return null;
+	}
+
+	if (fallback.byteLength === 0) {
 		return null;
 	}
 
@@ -185,57 +199,57 @@ const decodeLine = (
 const countLoadedBytes = (lines: readonly DisassemblyLine[]) =>
 	lines.reduce((total, line) => total + line.byteLength, 0);
 
-const buildPreviousGuessLines = (
+const buildPreviousGuessLines = async (
 	source: DisassemblyMemorySource,
 	endAddress: bigint,
-	rangeStart: bigint,
-): DisassemblyLine[] => {
-	if (endAddress <= rangeStart) {
+): Promise<DisassemblyLine[]> => {
+	if (endAddress <= 0n) {
 		return [];
 	}
 
-	const searchStart = maxU64(
-		rangeStart,
-		endAddress - BigInt(DISASSEMBLY_LOOKBACK_BYTES),
-	);
-	const bestChains = new Map<bigint, DecodedInstruction[]>();
+	const searchStart = maxU64(0n, endAddress - BigInt(DISASSEMBLY_LOOKBACK_BYTES));
+	const bestChains = new Map<bigint, Promise<DecodedInstruction[]>>();
 
-	const bestChainEndingAt = (candidateEnd: bigint): DecodedInstruction[] => {
+	const bestChainEndingAt = (candidateEnd: bigint): Promise<DecodedInstruction[]> => {
 		const cached = bestChains.get(candidateEnd);
 		if (cached) {
 			return cached;
 		}
 
-		let best: DecodedInstruction[] = [];
-		const candidateStart = maxU64(
-			searchStart,
-			candidateEnd - BigInt(MAX_INSTRUCTION_LENGTH),
-		);
+		const chainPromise = (async () => {
+			let best: DecodedInstruction[] = [];
+			const candidateStart = maxU64(
+				searchStart,
+				candidateEnd - BigInt(MAX_INSTRUCTION_LENGTH),
+			);
 
-		for (let start = candidateStart; start < candidateEnd; start += 1n) {
-			const instructionLength = Number(candidateEnd - start);
-			const decoded = decodeInstructionAt(source, start, instructionLength);
-			if (!decoded || decoded.length !== instructionLength) {
-				continue;
+			for (let start = candidateStart; start < candidateEnd; start += 1n) {
+				const instructionLength = Number(candidateEnd - start);
+				const decoded = await decodeInstructionAt(source, start, instructionLength);
+				if (!decoded || decoded.length !== instructionLength) {
+					continue;
+				}
+
+				const prefix = start > searchStart ? await bestChainEndingAt(start) : [];
+				const chain = [...prefix, decoded];
+				const currentBestStart = best[0]?.address ?? null;
+				if (
+					chain.length > best.length ||
+					(chain.length === best.length &&
+						(currentBestStart === null || chain[0].address < currentBestStart))
+				) {
+					best = chain;
+				}
 			}
 
-			const prefix = start > searchStart ? bestChainEndingAt(start) : [];
-			const chain = [...prefix, decoded];
-			const currentBestStart = best[0]?.address ?? null;
-			if (
-				chain.length > best.length ||
-				(chain.length === best.length &&
-					(currentBestStart === null || chain[0].address < currentBestStart))
-			) {
-				best = chain;
-			}
-		}
+			return best;
+		})();
 
-		bestChains.set(candidateEnd, best);
-		return best;
+		bestChains.set(candidateEnd, chainPromise);
+		return chainPromise;
 	};
 
-	return bestChainEndingAt(endAddress).map((decoded) =>
+	return (await bestChainEndingAt(endAddress)).map((decoded) =>
 		makeLine(
 			decoded.address,
 			decoded.length,
@@ -247,12 +261,11 @@ const buildPreviousGuessLines = (
 	);
 };
 
-const loadPreviousWindow = (
+const loadPreviousWindow = async (
 	source: DisassemblyMemorySource,
 	beforeAddress: bigint,
-	rangeStart: bigint,
-): PreviousDisassemblyLoadResult => {
-	if (beforeAddress <= rangeStart) {
+): Promise<PreviousDisassemblyLoadResult> => {
+	if (beforeAddress <= 0n) {
 		return emptyPreviousLoad();
 	}
 
@@ -260,8 +273,8 @@ const loadPreviousWindow = (
 	let cursor = beforeAddress;
 	let loadedBytes = 0;
 
-	while (cursor > rangeStart && loadedBytes < DISASSEMBLY_PAGE_BYTES) {
-		const batch = buildPreviousGuessLines(source, cursor, rangeStart);
+	while (cursor > 0n && loadedBytes < DISASSEMBLY_PAGE_BYTES) {
+		const batch = await buildPreviousGuessLines(source, cursor);
 		if (batch.length === 0) {
 			return emptyPreviousLoad(lines, false);
 		}
@@ -275,45 +288,30 @@ const loadPreviousWindow = (
 		cursor = nextCursor;
 	}
 
-	if (cursor <= rangeStart) {
+	if (cursor <= 0n) {
 		return emptyPreviousLoad(lines, false);
 	}
 
 	return emptyPreviousLoad(
 		lines,
-		buildPreviousGuessLines(source, cursor, rangeStart).length > 0,
+		(await buildPreviousGuessLines(source, cursor)).length > 0,
 	);
 };
 
-const loadForwardWindow = (
+const loadForwardWindow = async (
 	source: DisassemblyMemorySource,
 	startAddress: bigint,
 	isCurrentStart: boolean,
-): NextDisassemblyLoadResult => {
-	const match = source.findMemoryRangeAt(startAddress);
-	if (!match) {
-		return emptyNextLoad();
-	}
-
-	const rangeEnd = match.range.address + match.range.dataSize;
+): Promise<NextDisassemblyLoadResult> => {
 	const lines: DisassemblyLine[] = [];
 	let cursor = startAddress;
 	let loadedBytes = 0;
 
-	while (cursor < rangeEnd && loadedBytes < DISASSEMBLY_PAGE_BYTES) {
-		const maxBytes = Number(
-			rangeEnd - cursor > BigInt(MAX_INSTRUCTION_LENGTH)
-				? BigInt(MAX_INSTRUCTION_LENGTH)
-				: rangeEnd - cursor,
-		);
-		if (maxBytes <= 0) {
-			break;
-		}
-
-		const loaded = decodeLine(
+	while (loadedBytes < DISASSEMBLY_PAGE_BYTES) {
+		const loaded = await decodeLine(
 			source,
 			cursor,
-			maxBytes,
+			MAX_INSTRUCTION_LENGTH,
 			isCurrentStart && cursor === startAddress,
 		);
 		if (!loaded) {
@@ -321,19 +319,37 @@ const loadForwardWindow = (
 		}
 
 		lines.push(loaded.line);
-		cursor = loaded.nextAddress;
 		loadedBytes += loaded.line.byteLength;
+		if (loaded.nextAddress <= cursor) {
+			break;
+		}
+		cursor = loaded.nextAddress;
 	}
 
-	return emptyNextLoad(lines, cursor < rangeEnd);
+	let hasMoreAfter = false;
+	try {
+		hasMoreAfter = (await source.read(cursor, 1)).byteLength > 0;
+	} catch {
+		hasMoreAfter = false;
+	}
+
+	return emptyNextLoad(lines, hasMoreAfter);
 };
 
-export const buildDisassemblyListing = (
+export const buildDisassemblyListing = async (
 	source: DisassemblyMemorySource,
 	anchorAddress: bigint,
-): DebugDisassemblyListing => {
-	const anchorMatch = source.findMemoryRangeAt(anchorAddress);
-	if (!anchorMatch) {
+): Promise<DebugDisassemblyListing> => {
+	try {
+		const anchorByte = await source.read(anchorAddress, 1);
+		if (anchorByte.byteLength === 0) {
+			return makeListing(
+				"missing_memory",
+				`Address ${fmtAddress(anchorAddress)} is not present in dump memory.`,
+				anchorAddress,
+			);
+		}
+	} catch {
 		return makeListing(
 			"missing_memory",
 			`Address ${fmtAddress(anchorAddress)} is not present in dump memory.`,
@@ -341,12 +357,8 @@ export const buildDisassemblyListing = (
 		);
 	}
 
-	const previousLoad = loadPreviousWindow(
-		source,
-		anchorAddress,
-		anchorMatch.range.address,
-	);
-	const nextLoad = loadForwardWindow(source, anchorAddress, true);
+	const previousLoad = await loadPreviousWindow(source, anchorAddress);
+	const nextLoad = await loadForwardWindow(source, anchorAddress, true);
 	const lines = [...previousLoad.lines, ...nextLoad.lines];
 	if (lines.length <= previousLoad.lines.length) {
 		return makeListing(
@@ -367,17 +379,14 @@ export const buildDisassemblyListing = (
 	);
 };
 
-export const loadPreviousDisassemblyLines = (
+export const loadPreviousDisassemblyLines = async (
 	source: DisassemblyMemorySource,
 	beforeAddress: bigint,
-): PreviousDisassemblyLoadResult => {
-	const match = source.findMemoryRangeAt(beforeAddress);
-	return match
-		? loadPreviousWindow(source, beforeAddress, match.range.address)
-		: emptyPreviousLoad();
-};
+): Promise<PreviousDisassemblyLoadResult> =>
+	loadPreviousWindow(source, beforeAddress);
 
-export const loadNextDisassemblyLines = (
+export const loadNextDisassemblyLines = async (
 	source: DisassemblyMemorySource,
 	startAddress: bigint,
-): NextDisassemblyLoadResult => loadForwardWindow(source, startAddress, false);
+): Promise<NextDisassemblyLoadResult> =>
+	loadForwardWindow(source, startAddress, false);

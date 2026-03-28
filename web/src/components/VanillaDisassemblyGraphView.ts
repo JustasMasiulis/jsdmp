@@ -96,7 +96,9 @@ export class VanillaDisassemblyGraphView {
 	private addressError = "";
 	private selectedNodeId: string | null = null;
 	private selectedTerm: string | null = null;
+	private isLoadingGraph = false;
 	private isDisposed = false;
+	private reloadToken = 0;
 
 	private readonly root: HTMLElement;
 	private readonly addressInput: HTMLInputElement;
@@ -142,28 +144,7 @@ export class VanillaDisassemblyGraphView {
 
 	private readonly onAddressSubmit = (event: Event) => {
 		event.preventDefault();
-		const parsed = parseHexAddress(this.addressInput.value);
-		if (parsed === null) {
-			this.setAddressError(
-				"Address must be hexadecimal (for example: 0x7FF612340000).",
-			);
-			return;
-		}
-
-		if (!this.dumpInfo.findMemoryRangeAt(parsed)) {
-			this.setAddressError(
-				"Address is not present in dump memory and cannot be graphed.",
-			);
-			return;
-		}
-
-		this.manualAddress = parsed;
-		this.followInstructionPointer = false;
-		this.selectedNodeId = null;
-		this.selectedTerm = null;
-		this.clearAddressError();
-		this.saveState();
-		this.refreshView(true);
+		void this.submitAddress();
 	};
 
 	private readonly onGraphHostClick = (event: MouseEvent) => {
@@ -475,33 +456,47 @@ export class VanillaDisassemblyGraphView {
 			return null;
 		}
 
-		return this.dumpInfo.findMemoryRangeAt(this.manualAddress)
-			? this.manualAddress
-			: null;
+		return this.manualAddress;
 	}
 
 	private refreshView(reloadGraph: boolean) {
 		this.syncDisplayedAddress();
 		if (reloadGraph) {
-			this.reloadGraph();
+			void this.reloadGraph();
+			return;
 		}
 		this.syncStatus();
 		this.syncControlState();
 	}
 
-	private reloadGraph() {
+	private async reloadGraph() {
+		const token = ++this.reloadToken;
 		const anchorAddress = this.currentAnchor();
 		this.selectedNodeId = null;
 		this.selectedTerm = null;
+		this.isLoadingGraph = true;
 		if (anchorAddress === null) {
 			this.graphResult = null;
 			this.disposeGraph();
+			this.isLoadingGraph = false;
+			this.syncStatus();
+			this.syncControlState();
 			return;
 		}
 
 		try {
-			this.graphResult = buildControlFlowGraph(this.dumpInfo, anchorAddress);
+			const nextGraph = await buildControlFlowGraph(
+				this.dumpInfo.debugInterface,
+				anchorAddress,
+			);
+			if (this.isDisposed || token !== this.reloadToken) {
+				return;
+			}
+			this.graphResult = nextGraph;
 		} catch (error) {
+			if (this.isDisposed || token !== this.reloadToken) {
+				return;
+			}
 			const message = error instanceof Error ? error.message : String(error);
 			this.graphResult = {
 				status: "decode_error",
@@ -516,10 +511,17 @@ export class VanillaDisassemblyGraphView {
 					truncated: false,
 				},
 			};
+		} finally {
+			if (this.isDisposed || token !== this.reloadToken) {
+				return;
+			}
+			this.isLoadingGraph = false;
 		}
 
 		if (!this.graphResult || this.graphResult.blocks.length === 0) {
 			this.disposeGraph();
+			this.syncStatus();
+			this.syncControlState();
 			return;
 		}
 
@@ -530,6 +532,8 @@ export class VanillaDisassemblyGraphView {
 		this.graphHost.hidden = false;
 		this.renderGraph();
 		this.fitToView();
+		this.syncStatus();
+		this.syncControlState();
 	}
 
 	private renderGraph() {
@@ -821,7 +825,9 @@ export class VanillaDisassemblyGraphView {
 	private syncStatus() {
 		const result = this.graphResult;
 		if (!result) {
-			this.statusNode.textContent = "Graph view is idle.";
+			this.statusNode.textContent = this.isLoadingGraph
+				? "Loading graph..."
+				: "Graph view is idle.";
 
 			return;
 		}
@@ -878,10 +884,12 @@ export class VanillaDisassemblyGraphView {
 		if (this.graphResult) {
 			return this.graphResult.message || "No graph instructions available.";
 		}
+		if (this.isLoadingGraph) {
+			return "Loading graph...";
+		}
 		if (
 			!this.followInstructionPointer &&
-			this.manualAddress !== null &&
-			!this.dumpInfo.findMemoryRangeAt(this.manualAddress)
+			this.manualAddress !== null
 		) {
 			return "Enter an address that exists in dump memory to view a graph.";
 		}
@@ -908,5 +916,32 @@ export class VanillaDisassemblyGraphView {
 
 		this.addressError = "";
 		this.syncControlState();
+	}
+
+	private async submitAddress() {
+		const parsed = parseHexAddress(this.addressInput.value);
+		if (parsed === null) {
+			this.setAddressError(
+				"Address must be hexadecimal (for example: 0x7FF612340000).",
+			);
+			return;
+		}
+
+		try {
+			await this.dumpInfo.debugInterface.read(parsed, 1);
+		} catch {
+			this.setAddressError(
+				"Address is not present in dump memory and cannot be graphed.",
+			);
+			return;
+		}
+
+		this.manualAddress = parsed;
+		this.followInstructionPointer = false;
+		this.selectedNodeId = null;
+		this.selectedTerm = null;
+		this.clearAddressError();
+		this.saveState();
+		this.refreshView(true);
 	}
 }

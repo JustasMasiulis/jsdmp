@@ -1,6 +1,8 @@
+import type { DebugInterface } from "./debug_interface";
 import type { DisassemblyMemorySource } from "./debugDisassembly";
 import {
 	type DisassembledControlFlow,
+	type DisassembledInstruction,
 	disassembleInstruction,
 	MAX_INSTRUCTION_LENGTH,
 } from "./disassembly";
@@ -72,11 +74,6 @@ export type CfgBuildResult = {
 	edges: CfgEdge[];
 	stats: CfgBuildStats;
 };
-
-export type CfgInstructionDecoder = (
-	source: DisassemblyMemorySource,
-	address: bigint,
-) => CfgInstruction | null;
 
 type SyntheticSuccessor = {
 	address: bigint;
@@ -174,7 +171,6 @@ export const buildCfgInstructionLine = (
 	mnemonicColumnWidth = instruction.mnemonic.length,
 ): CfgTextLine => {
 	const segments: CfgTextSegment[] = [
-		// Keep addresses searchable/clickable without giving them number styling.
 		makeTextSegment(fmtAddress(instruction.address), true, null, "plain"),
 		makeTextSegment("  "),
 		makeTextSegment(instruction.mnemonic, true, null, "mnemonic"),
@@ -247,37 +243,46 @@ const buildSyntheticNode = (
 	};
 };
 
-export const decodeInstructionForCfg: CfgInstructionDecoder = (
-	source,
-	address,
-) => {
-	const bytes = source.readMemoryAt(address, MAX_INSTRUCTION_LENGTH);
-	if (!bytes || bytes.byteLength === 0) {
-		return null;
+const decodeInstructionAt = async (
+	source: DisassemblyMemorySource,
+	address: bigint,
+): Promise<CfgInstruction | null> => {
+	for (let size = MAX_INSTRUCTION_LENGTH; size >= 1; size -= 1) {
+		let bytes: Uint8Array;
+		try {
+			bytes = await source.read(address, size);
+		} catch {
+			continue;
+		}
+
+		if (bytes.byteLength === 0) {
+			continue;
+		}
+
+		const decoded = disassembleInstruction(bytes, address);
+		if (!decoded) {
+			return null;
+		}
+
+		return {
+			address,
+			byteLength: decoded.length,
+			mnemonic: decoded.mnemonic,
+			operands: decoded.operands,
+			controlFlow: decoded.controlFlow,
+		};
 	}
 
-	const decoded = disassembleInstruction(bytes, address);
-	if (!decoded) {
-		return null;
-	}
-
-	return {
-		address,
-		byteLength: decoded.length,
-		mnemonic: decoded.mnemonic,
-		operands: decoded.operands,
-		controlFlow: decoded.controlFlow,
-	};
+	return null;
 };
 
-const buildBlock = (
+const buildBlock = async (
 	source: DisassemblyMemorySource,
 	startAddress: bigint,
-	decoder: CfgInstructionDecoder,
 	knownBlockStarts: Set<bigint>,
 	state: CfgBuildState,
 	options: CfgBuildOptions,
-): { block: CfgNode | null; successors: PendingSuccessor[] } => {
+): Promise<{ block: CfgNode | null; successors: PendingSuccessor[] }> => {
 	const instructions: CfgInstruction[] = [];
 	const successors: PendingSuccessor[] = [];
 	let cursor = startAddress;
@@ -293,7 +298,7 @@ const buildBlock = (
 			break;
 		}
 
-		const instruction = decoder(source, cursor);
+		const instruction = await decodeInstructionAt(source, cursor);
 		if (!instruction) {
 			if (instructions.length === 0) {
 				return { block: null, successors };
@@ -310,19 +315,27 @@ const buildBlock = (
 		const nextAddress = cursor + BigInt(instruction.byteLength);
 
 		switch (instruction.controlFlow.kind) {
-			case "conditional_branch":
+			case "conditional_branch": {
 				if (instruction.controlFlow.directTargetAddress !== null) {
 					successors.push({
 						kind: "true",
 						target: instruction.controlFlow.directTargetAddress,
 					});
 				}
+				let hasFallthroughByte = false;
+				try {
+					hasFallthroughByte =
+						(await source.read(nextAddress, 1)).byteLength > 0;
+				} catch {
+					hasFallthroughByte = false;
+				}
 				successors.push(
-					source.findMemoryRangeAt(nextAddress)
+					hasFallthroughByte
 						? { kind: "false", target: nextAddress }
 						: makeSyntheticSuccessor("false", "missing_memory", nextAddress),
 				);
 				break blockLoop;
+			}
 			case "unconditional_branch":
 			case "return":
 				if (instruction.controlFlow.directTargetAddress !== null) {
@@ -334,7 +347,14 @@ const buildBlock = (
 				break blockLoop;
 		}
 
-		if (!source.findMemoryRangeAt(nextAddress)) {
+		let hasNextByte = false;
+		try {
+			hasNextByte = (await source.read(nextAddress, 1)).byteLength > 0;
+		} catch {
+			hasNextByte = false;
+		}
+
+		if (!hasNextByte) {
 			successors.push(
 				makeSyntheticSuccessor("unconditional", "missing_memory", nextAddress),
 			);
@@ -360,14 +380,30 @@ const buildBlock = (
 	};
 };
 
-export const buildControlFlowGraph = (
+export const buildControlFlowGraph = async (
 	source: DisassemblyMemorySource,
 	anchorAddress: bigint,
 	options?: Partial<CfgBuildOptions>,
-	decoder: CfgInstructionDecoder = decodeInstructionForCfg,
-): CfgBuildResult => {
+): Promise<CfgBuildResult> => {
 	const mergedOptions = { ...DEFAULT_CFG_BUILD_OPTIONS, ...options };
-	if (!source.findMemoryRangeAt(anchorAddress)) {
+	try {
+		const anchorByte = await source.read(anchorAddress, 1);
+		if (anchorByte.byteLength === 0) {
+			return {
+				status: "missing_memory",
+				message: `Address ${fmtAddress(anchorAddress)} is not present in dump memory.`,
+				anchorAddress,
+				blocks: [],
+				edges: [],
+				stats: {
+					blockCount: 0,
+					edgeCount: 0,
+					instructionCount: 0,
+					truncated: false,
+				},
+			};
+		}
+	} catch {
 		return {
 			status: "missing_memory",
 			message: `Address ${fmtAddress(anchorAddress)} is not present in dump memory.`,
@@ -447,10 +483,9 @@ export const buildControlFlowGraph = (
 			break;
 		}
 
-		const { block, successors } = buildBlock(
+		const { block, successors } = await buildBlock(
 			source,
 			startAddress,
-			decoder,
 			knownBlockStarts,
 			state,
 			mergedOptions,
@@ -485,7 +520,14 @@ export const buildControlFlowGraph = (
 			}
 
 			const targetAddress = successor.target;
-			if (!source.findMemoryRangeAt(targetAddress)) {
+			let hasTargetByte = false;
+			try {
+				hasTargetByte = (await source.read(targetAddress, 1)).byteLength > 0;
+			} catch {
+				hasTargetByte = false;
+			}
+
+			if (!hasTargetByte) {
 				const node = ensureSyntheticNode(
 					"missing_memory",
 					fmtAddress(targetAddress),

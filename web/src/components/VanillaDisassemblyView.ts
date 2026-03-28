@@ -71,7 +71,9 @@ export class VanillaDisassemblyView {
 	private addressError = "";
 	private isLoadingPrevious = false;
 	private isLoadingNext = false;
+	private isLoadingListing = false;
 	private isDisposed = false;
+	private reloadToken = 0;
 
 	private readonly root: HTMLElement;
 	private readonly addressInput: HTMLInputElement;
@@ -98,26 +100,7 @@ export class VanillaDisassemblyView {
 
 	private readonly onAddressSubmit = (event: Event) => {
 		event.preventDefault();
-		const parsed = parseHexAddress(this.addressInput.value);
-		if (parsed === null) {
-			this.setAddressError(
-				"Address must be hexadecimal (for example: 0x7FF612340000).",
-			);
-			return;
-		}
-
-		if (!this.dumpInfo.findMemoryRangeAt(parsed)) {
-			this.setAddressError(
-				"Address is not present in dump memory and cannot be disassembled.",
-			);
-			return;
-		}
-
-		this.manualAddress = parsed;
-		this.followInstructionPointer = false;
-		this.clearAddressError();
-		this.saveState();
-		this.refreshView(true);
+		void this.submitAddress();
 	};
 
 	private readonly onViewportChange = (
@@ -323,45 +306,72 @@ export class VanillaDisassemblyView {
 			return null;
 		}
 
-		return this.dumpInfo.findMemoryRangeAt(this.manualAddress)
-			? this.manualAddress
-			: null;
+		return this.manualAddress;
 	}
 
 	private refreshView(reloadListing: boolean) {
 		this.syncDisplayedAddress();
 		if (reloadListing) {
-			this.reloadListing();
+			void this.reloadListing();
+			return;
 		}
 		this.recomputeRows(true);
 		this.syncControlState();
 		this.requestRender(true);
 	}
 
-	private reloadListing() {
+	private async reloadListing() {
+		const token = ++this.reloadToken;
 		this.isLoadingPrevious = false;
 		this.isLoadingNext = false;
+		this.isLoadingListing = true;
 
 		const context = this.resolvedContext;
 		if (!context) {
 			this.listing = null;
+			this.isLoadingListing = false;
+			this.recomputeRows(true);
+			this.syncControlState();
+			this.requestRender(true);
 			return;
 		}
 
 		const anchorAddress = this.currentAnchor();
 		if (anchorAddress === null) {
 			this.listing = null;
+			this.isLoadingListing = false;
+			this.recomputeRows(true);
+			this.syncControlState();
+			this.requestRender(true);
 			return;
 		}
 
 		try {
-			this.listing = buildDisassemblyListing(this.dumpInfo, anchorAddress);
+			const nextListing = await buildDisassemblyListing(
+				this.dumpInfo.debugInterface,
+				anchorAddress,
+			);
+			if (this.isDisposed || token !== this.reloadToken) {
+				return;
+			}
+			this.listing = nextListing;
 		} catch (error) {
+			if (this.isDisposed || token !== this.reloadToken) {
+				return;
+			}
 			const message = error instanceof Error ? error.message : String(error);
 			this.listing = toDecodeErrorListing(
 				`Disassembly loading failed: ${message}`,
 				anchorAddress,
 			);
+		} finally {
+			if (this.isDisposed || token !== this.reloadToken) {
+				return;
+			}
+			this.isLoadingListing = false;
+			this.recomputeRows(true);
+			this.syncControlState();
+			this.requestRender(true);
 		}
 	}
 
@@ -432,13 +442,15 @@ export class VanillaDisassemblyView {
 		if (this.addressError) {
 			return this.listing?.message || "No disassembly instructions available.";
 		}
+		if (this.isLoadingListing) {
+			return "Loading disassembly...";
+		}
 		if (this.listing) {
 			return this.listing.message || "No disassembly instructions available.";
 		}
 		if (
 			!this.followInstructionPointer &&
-			this.manualAddress !== null &&
-			!this.dumpInfo.findMemoryRangeAt(this.manualAddress)
+			this.manualAddress !== null
 		) {
 			return "Enter an address that exists in dump memory to view disassembly.";
 		}
@@ -467,7 +479,7 @@ export class VanillaDisassemblyView {
 		this.syncControlState();
 	}
 
-	private maybeLoadPreviousLines() {
+	private async maybeLoadPreviousLines() {
 		if (this.isDisposed || this.isLoadingPrevious || this.isLoadingNext) {
 			return;
 		}
@@ -490,8 +502,8 @@ export class VanillaDisassemblyView {
 				return;
 			}
 
-			const previousLoad = loadPreviousDisassemblyLines(
-				this.dumpInfo,
+			const previousLoad = await loadPreviousDisassemblyLines(
+				this.dumpInfo.debugInterface,
 				beforeAddress,
 			);
 			currentListing.hasMorePrevious = previousLoad.hasMoreBefore;
@@ -517,7 +529,7 @@ export class VanillaDisassemblyView {
 		}
 	}
 
-	private maybeLoadNextLines() {
+	private async maybeLoadNextLines() {
 		if (this.isDisposed || this.isLoadingPrevious || this.isLoadingNext) {
 			return;
 		}
@@ -536,7 +548,10 @@ export class VanillaDisassemblyView {
 				return;
 			}
 
-			const nextLoad = loadNextDisassemblyLines(this.dumpInfo, startAddress);
+			const nextLoad = await loadNextDisassemblyLines(
+				this.dumpInfo.debugInterface,
+				startAddress,
+			);
 			currentListing.hasMoreNext = nextLoad.hasMoreAfter;
 			if (nextLoad.lines.length === 0) {
 				return;
@@ -573,5 +588,30 @@ export class VanillaDisassemblyView {
 		row.addressCode.textContent = formatHexAddressValue(line.address);
 		row.bytesCode.textContent = line.bytesHex;
 		row.instructionCode.textContent = formatInstruction(line);
+	}
+
+	private async submitAddress() {
+		const parsed = parseHexAddress(this.addressInput.value);
+		if (parsed === null) {
+			this.setAddressError(
+				"Address must be hexadecimal (for example: 0x7FF612340000).",
+			);
+			return;
+		}
+
+		try {
+			await this.dumpInfo.debugInterface.read(parsed, 1);
+		} catch {
+			this.setAddressError(
+				"Address is not present in dump memory and cannot be disassembled.",
+			);
+			return;
+		}
+
+		this.manualAddress = parsed;
+		this.followInstructionPointer = false;
+		this.clearAddressError();
+		this.saveState();
+		this.refreshView(true);
 	}
 }

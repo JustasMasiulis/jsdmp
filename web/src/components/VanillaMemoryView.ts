@@ -5,6 +5,7 @@ import {
 	parseHexAddress,
 	saveAddressPanelState,
 } from "../lib/addressPanelState";
+import type { DebugMemoryRange } from "../lib/debug_interface";
 import type { ParsedDumpInfo } from "../lib/dumpInfo";
 import {
 	FixedRowVirtualTable,
@@ -35,6 +36,7 @@ type MemoryRowState = {
 	asciiCode: HTMLElement;
 	hexParts: string[];
 	asciiParts: string[];
+	renderToken: number;
 };
 
 const fmtByte = (value: number) =>
@@ -88,14 +90,13 @@ export class VanillaMemoryView {
 	private readonly panelId: string;
 	private readonly panelIndex: number;
 	private dumpInfo: ParsedDumpInfo;
-	private ranges: ParsedDumpInfo["memoryRanges"] = [];
+	private ranges: DebugMemoryRange[] = [];
 	private span: MemorySpan | null = null;
 	private totalRows = 0;
 	private followInstructionPointer = true;
 	private manualAddress: bigint | null = null;
 	private addressError = "";
 	private lastFollowAddress: bigint | null = null;
-	private rangeHint = -1;
 	private isDisposed = false;
 
 	private readonly root: HTMLElement;
@@ -214,6 +215,7 @@ export class VanillaMemoryView {
 				asciiCode: cells[2].code,
 				hexParts: new Array(BYTES_PER_ROW),
 				asciiParts: new Array(BYTES_PER_ROW),
+				renderToken: 0,
 			}),
 			renderRow: (rowIndex, rowState) => {
 				this.fillRow(rowState, rowIndex);
@@ -284,22 +286,21 @@ export class VanillaMemoryView {
 	}
 
 	private recomputeRangeState() {
-		this.ranges = this.dumpInfo.memoryRanges ?? [];
+		this.ranges = this.dumpInfo.debugInterface.dm.memoryRanges;
 		if (this.ranges.length === 0) {
 			this.span = null;
 			this.totalRows = 0;
-			this.rangeHint = -1;
 			this.table.setRowCount(0);
 			return;
 		}
 
 		let minAddress = this.ranges[0].address;
-		let maxAddress = this.ranges[0].address + this.ranges[0].dataSize;
+		let maxAddress = this.ranges[0].address + this.ranges[0].size;
 		for (const range of this.ranges) {
 			if (range.address < minAddress) {
 				minAddress = range.address;
 			}
-			const rangeEnd = range.address + range.dataSize;
+			const rangeEnd = range.address + range.size;
 			if (rangeEnd > maxAddress) {
 				maxAddress = rangeEnd;
 			}
@@ -315,7 +316,6 @@ export class VanillaMemoryView {
 			(spanSize + BigInt(BYTES_PER_ROW) - 1n) / BigInt(BYTES_PER_ROW);
 		const maxRows = BigInt(Number.MAX_SAFE_INTEGER);
 		this.totalRows = Number(rowsBig > maxRows ? maxRows : rowsBig);
-		this.rangeHint = -1;
 		this.table.setRowCount(this.totalRows);
 	}
 
@@ -452,123 +452,56 @@ export class VanillaMemoryView {
 	private fillRow(row: MemoryRowState, rowIndex: number) {
 		const span = this.span;
 		if (!span) {
+			row.addressCode.textContent = "";
+			row.hexCode.textContent = "";
+			row.asciiCode.textContent = "";
 			return;
 		}
 
 		const rowAddress = span.start + BigInt(rowIndex) * BigInt(BYTES_PER_ROW);
-		const rowEnd = rowAddress + BigInt(BYTES_PER_ROW);
-		let out = 0;
-		let rangeHint = this.rangeHint;
-
-		while (out < BYTES_PER_ROW) {
-			const address = rowAddress + BigInt(out);
-			if (!isInSpan(address, span)) {
-				row.hexParts[out] = "??";
-				row.asciiParts[out] = "?";
-				out += 1;
-				continue;
-			}
-
-			const match = this.dumpInfo.findMemoryRangeAt(
-				address,
-				rangeHint >= 0 ? rangeHint : undefined,
-			);
-			if (!match) {
-				const nextRangeIndex = this.findNextRangeIndex(address, rangeHint);
-				const nextRangeStart =
-					nextRangeIndex >= 0 && nextRangeIndex < this.ranges.length
-						? this.ranges[nextRangeIndex].address
-						: rowEnd;
-				const gapEnd = minBigInt(rowEnd, nextRangeStart);
-				let gap = Number(gapEnd - address);
-				if (gap <= 0) {
-					gap = 1;
-				}
-
-				for (let i = 0; i < gap && out < BYTES_PER_ROW; i++) {
-					row.hexParts[out] = "??";
-					row.asciiParts[out] = "?";
-					out += 1;
-				}
-
-				if (nextRangeIndex >= 0) {
-					rangeHint = nextRangeIndex;
-				}
-				continue;
-			}
-
-			rangeHint = match.index;
-			const rangeEnd = match.range.address + match.range.dataSize;
-			const chunkEnd = minBigInt(
-				minBigInt(rowEnd, rangeEnd),
-				span.endExclusive,
-			);
-			const chunkSize = Number(chunkEnd - address);
-			if (chunkSize <= 0) {
-				row.hexParts[out] = "??";
-				row.asciiParts[out] = "?";
-				out += 1;
-				continue;
-			}
-
-			const view = this.dumpInfo.readMemoryViewAt(
-				address,
-				chunkSize,
-				match.index,
-			);
-			if (!view) {
-				row.hexParts[out] = "??";
-				row.asciiParts[out] = "?";
-				out += 1;
-				continue;
-			}
-
-			rangeHint = view.rangeIndex;
-			for (let i = 0; i < view.bytes.length && out < BYTES_PER_ROW; i++) {
-				const value = view.bytes[i];
-				row.hexParts[out] = fmtByte(value);
-				row.asciiParts[out] = toAscii(value);
-				out += 1;
-			}
-		}
-
+		const token = row.renderToken + 1;
+		row.renderToken = token;
 		row.addressCode.textContent = formatHexAddressValue(rowAddress);
-		row.hexCode.textContent = row.hexParts.join(" ");
-		row.asciiCode.textContent = row.asciiParts.join("");
-		this.rangeHint = rangeHint;
+		row.hexCode.textContent = "";
+		row.asciiCode.textContent = "";
+		void this.fillRowAsync(row, rowAddress, span, token);
 	}
 
-	private findNextRangeIndex(address: bigint, hintIndex: number): number {
-		const ranges = this.ranges;
-		if (ranges.length === 0) {
-			return -1;
-		}
+	private async fillRowAsync(
+		row: MemoryRowState,
+		rowAddress: bigint,
+		span: MemorySpan,
+		token: number,
+	) {
+		const hexParts = new Array<string>(BYTES_PER_ROW);
+		const asciiParts = new Array<string>(BYTES_PER_ROW);
 
-		let low = 0;
-		if (hintIndex >= 0 && hintIndex < ranges.length) {
-			if (ranges[hintIndex].address >= address) {
-				return hintIndex;
+		for (let out = 0; out < BYTES_PER_ROW; out += 1) {
+			const address = rowAddress + BigInt(out);
+			if (!isInSpan(address, span)) {
+				hexParts[out] = "??";
+				asciiParts[out] = "?";
+				continue;
 			}
 
-			const next = hintIndex + 1;
-			if (next < ranges.length && ranges[next].address >= address) {
-				return next;
+			try {
+				const bytes = await this.dumpInfo.debugInterface.read(address, 1);
+				const value = bytes[0];
+				hexParts[out] = fmtByte(value);
+				asciiParts[out] = toAscii(value);
+			} catch {
+				hexParts[out] = "??";
+				asciiParts[out] = "?";
 			}
-			low = next;
 		}
 
-		let high = ranges.length - 1;
-		let found = -1;
-		while (low <= high) {
-			const mid = (low + high) >> 1;
-			const rangeAddress = ranges[mid].address;
-			if (rangeAddress >= address) {
-				found = mid;
-				high = mid - 1;
-			} else {
-				low = mid + 1;
-			}
+		if (this.isDisposed || row.renderToken !== token) {
+			return;
 		}
-		return found;
+
+		row.hexParts.splice(0, row.hexParts.length, ...hexParts);
+		row.asciiParts.splice(0, row.asciiParts.length, ...asciiParts);
+		row.hexCode.textContent = hexParts.join(" ");
+		row.asciiCode.textContent = asciiParts.join("");
 	}
 }

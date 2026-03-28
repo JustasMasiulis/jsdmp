@@ -1,42 +1,11 @@
 import { type ResolvedDumpContext, resolveDumpContext } from "./context";
-import {
-	MiniDump,
-	type MinidumpAssociatedThread,
-	type MinidumpExceptionStream,
-	type MinidumpMemory64Range,
-	type MinidumpMemoryRangeMatch,
-	type MinidumpMemoryReadView,
-	type MinidumpMiscInfo,
-	type MinidumpModule,
-	type MinidumpSystemInfo,
-	type MinidumpUnloadedModule,
-} from "./minidump";
+import { MiniDump } from "./minidump";
+import { MinidumpDebugInterface } from "./minidump_debug_interface";
 
 export const ALLOWED_DUMP_EXTENSIONS = [".dmp", ".mdmp", ".dump"] as const;
 
 export type ParsedDumpInfo = {
-	checksum: number;
-	timestamp: number;
-	flags: bigint;
-	streamCount: number;
-	streamTypes: number[];
-	systemInfo: MinidumpSystemInfo | null;
-	miscInfo: MinidumpMiscInfo | null;
-	exceptionStream: MinidumpExceptionStream | null;
-	associatedThreads: MinidumpAssociatedThread[] | null;
-	moduleList: MinidumpModule[] | null;
-	unloadedModuleList: MinidumpUnloadedModule[] | null;
-	memoryRanges: MinidumpMemory64Range[];
-	readMemoryAt: (address: bigint, size: number) => Uint8Array | null;
-	readMemoryViewAt: (
-		address: bigint,
-		size: number,
-		hintRangeIndex?: number,
-	) => MinidumpMemoryReadView | null;
-	findMemoryRangeAt: (
-		address: bigint,
-		hintRangeIndex?: number,
-	) => MinidumpMemoryRangeMatch | null;
+	debugInterface: MinidumpDebugInterface;
 	resolvedContext: ResolvedDumpContext | null;
 	contextWarning: string | null;
 };
@@ -61,32 +30,21 @@ export const isSupportedDumpFile = (file: Pick<File, "name">): boolean => {
 	);
 };
 
-export const buildParsedDumpInfo = (parsed: MiniDump): ParsedDumpInfo => {
+export const buildParsedDumpInfo = async (
+	parsed: MiniDump,
+): Promise<ParsedDumpInfo> => {
+	const debugInterface = new MinidumpDebugInterface(parsed);
 	let resolvedContext: ResolvedDumpContext | null = null;
 	let contextWarning: string | null = null;
 
 	try {
-		resolvedContext = resolveDumpContext(parsed);
+		resolvedContext = await resolveDumpContext(debugInterface);
 	} catch (error) {
 		contextWarning = error instanceof Error ? error.message : String(error);
 	}
 
 	return {
-		checksum: parsed.checksum,
-		timestamp: parsed.timestamp,
-		flags: parsed.flags,
-		streamCount: parsed.streams.size,
-		streamTypes: [...parsed.streams.keys()].sort((left, right) => left - right),
-		systemInfo: parsed.systemInfo,
-		miscInfo: parsed.miscInfo,
-		exceptionStream: parsed.exceptionStream,
-		associatedThreads: parsed.associatedThreads,
-		moduleList: parsed.moduleList,
-		unloadedModuleList: parsed.unloadedModuleList,
-		memoryRanges: parsed.memoryRanges,
-		readMemoryAt: parsed.readMemoryAt.bind(parsed),
-		readMemoryViewAt: parsed.readMemoryViewAt.bind(parsed),
-		findMemoryRangeAt: parsed.findMemoryRangeAt.bind(parsed),
+		debugInterface,
 		resolvedContext,
 		contextWarning,
 	};

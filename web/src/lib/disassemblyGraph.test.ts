@@ -1,72 +1,74 @@
-import { describe, expect, it } from "bun:test";
+import { afterAll, beforeAll, describe, expect, it } from "bun:test";
 import type { DisassemblyMemorySource } from "./debugDisassembly";
-import type { DisassembledControlFlow } from "./disassembly";
 import {
 	buildCfgInstructionLine,
 	buildCfgInstructionLines,
 	buildCfgTextLinesFromLabel,
 	buildControlFlowGraph,
-	type CfgInstruction,
-	type CfgInstructionDecoder,
 	tokenizeCfgTextSegments,
 } from "./disassemblyGraph";
+import {
+	type WasmExports,
+	WASM_MEMORY,
+	__setWasmExportsForTesting,
+} from "./wasm";
 
-type FakeRange = {
+type MemorySegment = {
 	start: bigint;
-	endExclusive: bigint;
+	bytes: Uint8Array;
 };
 
-const makeSource = (ranges: FakeRange[]): DisassemblyMemorySource => ({
-	readMemoryAt: () => new Uint8Array([0xc3]),
-	findMemoryRangeAt: (address) => {
-		const index = ranges.findIndex(
-			(range) => address >= range.start && address < range.endExclusive,
-		);
-		if (index < 0) {
-			return null;
+const makeSource = (segments: MemorySegment[]): DisassemblyMemorySource => ({
+	dm: {
+		threads: [],
+		modules: [],
+		unloadedModules: [],
+		memoryRanges: segments.map((segment) => ({
+			address: segment.start,
+			size: BigInt(segment.bytes.byteLength),
+		})),
+		currentThreadId: 0,
+		currentContext: 0n,
+	},
+	read: async (address, size) => {
+		const segment = segments.find((candidate) => {
+			const endExclusive = candidate.start + BigInt(candidate.bytes.byteLength);
+			return (
+				address >= candidate.start &&
+				address + BigInt(size) <= endExclusive
+			);
+		});
+		if (!segment) {
+			throw new Error("missing memory");
 		}
 
-		const range = ranges[index];
-		return {
-			index,
-			range: {
-				address: range.start,
-				dataSize: range.endExclusive - range.start,
-				dataRva: 0n,
-			},
-		};
+		const offset = Number(address - segment.start);
+		return segment.bytes.slice(offset, offset + size);
 	},
 });
 
-const makeInstruction = (
-	address: bigint,
-	controlFlow: DisassembledControlFlow = {
-		kind: "return",
-		directTargetAddress: null,
-	},
-): CfgInstruction => ({
-	address,
-	byteLength: 1,
-	mnemonic: "ret",
-	operands: "",
-	controlFlow,
+beforeAll(async () => {
+	const wasmFile = Bun.file(
+		new URL("../../public/web_dmp.wasm", import.meta.url),
+	);
+	const { instance } = await WebAssembly.instantiate(
+		await wasmFile.arrayBuffer(),
+		{ env: { memory: WASM_MEMORY } },
+	);
+	__setWasmExportsForTesting(instance.exports as unknown as WasmExports);
+});
+
+afterAll(() => {
+	__setWasmExportsForTesting(null);
 });
 
 describe("buildControlFlowGraph", () => {
-	it("does not expose an anchor-specific node id on successful builds", () => {
+	it("does not expose an anchor-specific node id on successful builds", async () => {
 		const anchorAddress = 0x1000n;
 		const source = makeSource([
-			{ start: anchorAddress, endExclusive: 0x1002n },
+			{ start: anchorAddress, bytes: new Uint8Array([0xc3]) },
 		]);
-		const decoder: CfgInstructionDecoder = (_, address) =>
-			address === anchorAddress ? makeInstruction(address) : null;
-
-		const result = buildControlFlowGraph(
-			source,
-			anchorAddress,
-			undefined,
-			decoder,
-		);
+		const result = await buildControlFlowGraph(source, anchorAddress);
 
 		expect(result.status).toBe("ok");
 		expect("anchorNodeId" in result).toBe(false);
@@ -74,19 +76,12 @@ describe("buildControlFlowGraph", () => {
 		expect(result.blocks[0]?.id).toBe("block:1000");
 	});
 
-	it("still reports decode_error when the anchor address cannot be decoded", () => {
+	it("still reports decode_error when the anchor address cannot be decoded", async () => {
 		const anchorAddress = 0x2000n;
 		const source = makeSource([
-			{ start: anchorAddress, endExclusive: 0x2001n },
+			{ start: anchorAddress, bytes: new Uint8Array([0x0f]) },
 		]);
-		const decoder: CfgInstructionDecoder = () => null;
-
-		const result = buildControlFlowGraph(
-			source,
-			anchorAddress,
-			undefined,
-			decoder,
-		);
+		const result = await buildControlFlowGraph(source, anchorAddress);
 
 		expect(result.status).toBe("decode_error");
 		expect(result.blocks).toHaveLength(1);
@@ -94,13 +89,8 @@ describe("buildControlFlowGraph", () => {
 		expect(result.message).toContain("Failed to decode an instruction");
 	});
 
-	it("returns missing_memory when the anchor address is outside dump memory", () => {
-		const result = buildControlFlowGraph(
-			makeSource([]),
-			0x3000n,
-			undefined,
-			() => makeInstruction(0x3000n),
-		);
+	it("returns missing_memory when the anchor address is outside dump memory", async () => {
+		const result = await buildControlFlowGraph(makeSource([]), 0x3000n);
 
 		expect(result.status).toBe("missing_memory");
 		expect(result.blocks).toHaveLength(0);

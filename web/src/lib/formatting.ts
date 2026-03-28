@@ -1,4 +1,4 @@
-import type { MinidumpSystemInfo } from "./minidump";
+import type { MinidumpDebugSystemInfo } from "./minidump_debug_interface";
 
 const suiteMaskNames = [
 	"SmallBusiness",
@@ -21,7 +21,7 @@ const suiteMaskNames = [
 	"MultiUserTS",
 ];
 
-export function fmtProductAndSuite(sys: MinidumpSystemInfo): string {
+export function fmtProductAndSuite(sys: MinidumpDebugSystemInfo): string {
 	let res = "Product: ";
 	switch (sys.productType) {
 		case 1:
@@ -53,7 +53,7 @@ export function fmtProductAndSuite(sys: MinidumpSystemInfo): string {
 	return res;
 }
 
-export function fmtOs(sys: MinidumpSystemInfo): string {
+export function fmtOs(sys: MinidumpDebugSystemInfo): string {
 	return `Windows ${sys.majorVersion}.${sys.minorVersion} Version ${sys.buildNumber} MP (${sys.numberOfProcessors} procs) Free ${sys.processorArchitectureName}`;
 }
 
