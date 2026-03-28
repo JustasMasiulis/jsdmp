@@ -26,7 +26,7 @@ type ResolvedThreadContext = {
 	threadContext: Context | null;
 };
 
-type ContextResolvableDebugInterface = DebugInterface & {
+export type ContextResolvableDebugInterface = DebugInterface & {
 	systemInfo?: { processorArchitecture: number } | null;
 	exceptionInfo?:
 		| {
@@ -97,7 +97,7 @@ const readContextFromAddress = async (
 	}
 };
 
-const tryThreadContext = async (
+export const tryThreadContext = async (
 	debugInterface: DebugInterface,
 	thread: DebugThread,
 ): Promise<ResolvedThreadContext | null> => {
@@ -153,6 +153,38 @@ const resolveThreadContext = async (
 	return {
 		threadId: currentThreadId,
 		threadContext: null,
+	};
+};
+
+export const resolveContextForThread = async (
+	debugInterface: ContextResolvableDebugInterface,
+	threadId: number,
+): Promise<ResolvedDumpContext | null> => {
+	const thread = debugInterface.dm.threads.find((t) => t.id === threadId);
+	if (!thread) return null;
+	const resolved = await tryThreadContext(debugInterface, thread);
+	if (!resolved?.threadContext) return null;
+	const ip = resolved.threadContext.ip;
+	const exceptionAddress =
+		debugInterface.exceptionInfo?.exceptionRecord.exceptionAddress ?? null;
+	const exceptionCode =
+		debugInterface.exceptionInfo?.exceptionRecord.exceptionCode ?? null;
+	let anchorAddress: bigint | null = ip;
+	if (exceptionAddress !== null) {
+		try {
+			await debugInterface.read(exceptionAddress, MEMORY_PROBE_SIZE, 1);
+			anchorAddress = exceptionAddress;
+		} catch {
+			anchorAddress = ip;
+		}
+	}
+	return {
+		threadId,
+		threadContext: resolved.threadContext,
+		instructionPointer: ip,
+		anchorAddress,
+		exceptionAddress,
+		exceptionCode,
 	};
 };
 

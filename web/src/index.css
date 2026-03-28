@@ -350,6 +350,19 @@ Design language notes for future re-additions:
 		background: var(--color-bg2);
 	}
 
+	.dump-info-table tbody tr.is-clickable {
+		cursor: pointer;
+	}
+
+	.dump-info-table tbody tr.is-clickable:hover {
+		background: var(--color-bg2);
+	}
+
+	.dump-info-table tbody tr.is-selected {
+		background: color-mix(in srgb, var(--color-accent, #0a84ff) 15%, transparent);
+		font-weight: 500;
+	}
+
 	.dump-disassembly-table {
 		width: auto;
 		min-width: unset;
