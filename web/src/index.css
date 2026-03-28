@@ -642,9 +642,27 @@ Design language notes for future re-additions:
 	font-size: 12px;
 	line-height: 15px;
 	overflow: hidden;
-	white-space: pre;
 	cursor: pointer;
 	box-sizing: border-box;
+}
+
+.cfg-block * {
+	display: inline-block;
+}
+
+.cfg-block__line {
+	display: block;
+	user-select: text;
+	-webkit-user-select: text;
+}
+
+.cfg-block__term {
+	user-select: text;
+	-webkit-user-select: text;
+}
+
+.cfg-block__term--selected {
+	background: var(--color-avatar-bg);
 }
 
 .cfg-block--selected {

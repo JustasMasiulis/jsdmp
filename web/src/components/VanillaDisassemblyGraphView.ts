@@ -95,6 +95,7 @@ export class VanillaDisassemblyGraphView {
 	private manualAddress: bigint | null = null;
 	private addressError = "";
 	private selectedNodeId: string | null = null;
+	private selectedTerm: string | null = null;
 	private isDisposed = false;
 
 	private readonly root: HTMLElement;
@@ -109,6 +110,7 @@ export class VanillaDisassemblyGraphView {
 	private layoutCore: GraphLayoutCore | null = null;
 	private viewportElement: HTMLDivElement | null = null;
 	private blockElements = new Map<string, HTMLDivElement>();
+	private termElements = new Map<string, HTMLSpanElement[]>();
 	private edgeElements: SVGPolylineElement[] = [];
 	private edgeOwnership: Array<{ from: string; to: string }> = [];
 	private resizeObserver: ResizeObserver | null = null;
@@ -132,6 +134,7 @@ export class VanillaDisassemblyGraphView {
 			}
 		}
 		this.selectedNodeId = null;
+		this.selectedTerm = null;
 		this.clearAddressError();
 		this.saveState();
 		this.refreshView(true);
@@ -157,6 +160,7 @@ export class VanillaDisassemblyGraphView {
 		this.manualAddress = parsed;
 		this.followInstructionPointer = false;
 		this.selectedNodeId = null;
+		this.selectedTerm = null;
 		this.clearAddressError();
 		this.saveState();
 		this.refreshView(true);
@@ -165,12 +169,19 @@ export class VanillaDisassemblyGraphView {
 	private readonly onGraphHostClick = (event: MouseEvent) => {
 		if (this.isDragging) return;
 
-		const target = event.target as HTMLElement;
-		const blockDiv = target.closest<HTMLDivElement>("[data-block-id]");
+		const target = this.elementFromEventTarget(event.target);
+		const termSpan = target?.closest<HTMLSpanElement>("[data-term]") ?? null;
+		const blockDiv = target?.closest<HTMLDivElement>("[data-block-id]") ?? null;
 		const blockId = blockDiv?.dataset.blockId ?? null;
+		const nextSelectedNodeId = blockId;
+		const nextSelectedTerm =
+			termSpan?.dataset.term ?? (blockId ? this.selectedTerm : null);
 
-		const needsUpdate = this.selectedNodeId !== blockId;
-		this.selectedNodeId = blockId;
+		const needsUpdate =
+			this.selectedNodeId !== nextSelectedNodeId ||
+			this.selectedTerm !== nextSelectedTerm;
+		this.selectedNodeId = nextSelectedNodeId;
+		this.selectedTerm = nextSelectedTerm;
 
 		if (needsUpdate) {
 			this.syncStatus();
@@ -178,10 +189,24 @@ export class VanillaDisassemblyGraphView {
 		}
 	};
 
+	private readonly onGraphHostDoubleClick = (event: MouseEvent) => {
+		const target = this.elementFromEventTarget(event.target);
+		const termSpan = target?.closest<HTMLSpanElement>("[data-term]") ?? null;
+		const lineDiv = target?.closest<HTMLDivElement>(".cfg-block__line") ?? null;
+		const blockDiv = target?.closest<HTMLDivElement>("[data-block-id]") ?? null;
+		const selectionTarget = termSpan ?? lineDiv ?? blockDiv;
+		if (!selectionTarget) {
+			return;
+		}
+
+		event.preventDefault();
+		this.selectElementText(selectionTarget);
+	};
+
 	private readonly onPointerDown = (event: PointerEvent) => {
 		if (event.button !== 0) return;
-		const target = event.target as HTMLElement;
-		if (target.closest("[data-block-id]")) return;
+		const target = this.elementFromEventTarget(event.target);
+		if (target?.closest("[data-block-id]")) return;
 
 		this.isDragging = false;
 		this.dragStartX = event.clientX;
@@ -260,6 +285,7 @@ export class VanillaDisassemblyGraphView {
 		this.root.addEventListener("submit", this.onAddressSubmit);
 		this.followCheckbox.addEventListener("change", this.onFollowChange);
 		this.graphHost.addEventListener("click", this.onGraphHostClick);
+		this.graphHost.addEventListener("dblclick", this.onGraphHostDoubleClick);
 		this.graphHost.addEventListener("pointerdown", this.onPointerDown);
 		this.graphHost.addEventListener("wheel", this.onWheel, {
 			passive: false,
@@ -286,6 +312,7 @@ export class VanillaDisassemblyGraphView {
 		if (changed) {
 			this.graphResult = null;
 			this.selectedNodeId = null;
+			this.selectedTerm = null;
 			this.clearAddressError();
 		}
 		this.refreshView(true);
@@ -300,6 +327,7 @@ export class VanillaDisassemblyGraphView {
 		this.root.removeEventListener("submit", this.onAddressSubmit);
 		this.followCheckbox.removeEventListener("change", this.onFollowChange);
 		this.graphHost.removeEventListener("click", this.onGraphHostClick);
+		this.graphHost.removeEventListener("dblclick", this.onGraphHostDoubleClick);
 		this.graphHost.removeEventListener("pointerdown", this.onPointerDown);
 		this.graphHost.removeEventListener("wheel", this.onWheel);
 		this.resizeObserver?.disconnect();
@@ -406,9 +434,32 @@ export class VanillaDisassemblyGraphView {
 		this.viewportElement = null;
 
 		this.blockElements.clear();
+		this.termElements.clear();
 		this.edgeElements = [];
 		this.edgeOwnership = [];
 		this.graphHost.replaceChildren();
+	}
+
+	private elementFromEventTarget(target: EventTarget | null) {
+		if (target instanceof Element) {
+			return target;
+		}
+		if (target instanceof Node) {
+			return target.parentElement;
+		}
+		return null;
+	}
+
+	private selectElementText(element: Node) {
+		const selection = window.getSelection();
+		if (!selection) {
+			return;
+		}
+
+		const range = document.createRange();
+		range.selectNodeContents(element);
+		selection.removeAllRanges();
+		selection.addRange(range);
 	}
 
 	private syncInputWithAddress(address: bigint | null) {
@@ -441,6 +492,7 @@ export class VanillaDisassemblyGraphView {
 	private reloadGraph() {
 		const anchorAddress = this.currentAnchor();
 		this.selectedNodeId = null;
+		this.selectedTerm = null;
 		if (anchorAddress === null) {
 			this.graphResult = null;
 			this.disposeGraph();
@@ -515,6 +567,7 @@ export class VanillaDisassemblyGraphView {
 		viewport.append(svg, blockContainer);
 		this.graphHost.append(viewport);
 		this.applyViewportTransform();
+		this.updateSelectionStyles();
 	}
 
 	private addSvgArrowMarkers(svg: SVGSVGElement) {
@@ -640,6 +693,7 @@ export class VanillaDisassemblyGraphView {
 
 	private renderBlocks(container: HTMLElement, core: GraphLayoutCore) {
 		this.blockElements.clear();
+		this.termElements.clear();
 
 		for (const block of core.blocks) {
 			const div = document.createElement("div");
@@ -658,9 +712,50 @@ export class VanillaDisassemblyGraphView {
 				div.classList.add(`cfg-block--kind-${cfgNode.kind}`);
 			}
 
-			div.textContent = block.data.label;
+			this.renderBlockText(div, cfgNode, block.data.label);
 			container.append(div);
 			this.blockElements.set(block.data.id, div);
+		}
+	}
+
+	private renderBlockText(
+		container: HTMLElement,
+		node: CfgNode | null | undefined,
+		fallbackLabel: string,
+	) {
+		const lines = node?.lines;
+		if (!lines || lines.length === 0) {
+			container.textContent = fallbackLabel;
+			return;
+		}
+
+		for (const line of lines) {
+			const lineNode = document.createElement("div");
+			lineNode.className = "cfg-block__line";
+			if (line.segments.length === 0) {
+				lineNode.textContent = line.text;
+				container.append(lineNode);
+				continue;
+			}
+
+			for (const segment of line.segments) {
+				if (!segment.clickable || !segment.term) {
+					lineNode.append(segment.text);
+					continue;
+				}
+
+				const span = document.createElement("span");
+				span.className = "cfg-block__term";
+				span.dataset.term = segment.term;
+				span.textContent = segment.text;
+				lineNode.append(span);
+
+				const existing = this.termElements.get(segment.term) ?? [];
+				existing.push(span);
+				this.termElements.set(segment.term, existing);
+			}
+
+			container.append(lineNode);
 		}
 	}
 
@@ -689,11 +784,19 @@ export class VanillaDisassemblyGraphView {
 	}
 
 	private updateSelectionStyles() {
-		const selected = this.selectedNodeId;
+		const selectedNodeId = this.selectedNodeId;
+		const selectedTerm = this.selectedTerm;
 
 		for (const [id, div] of this.blockElements) {
-			const isSelected = id === selected;
+			const isSelected = id === selectedNodeId;
 			div.classList.toggle("cfg-block--selected", isSelected);
+		}
+
+		for (const [term, spans] of this.termElements) {
+			const isSelected = term === selectedTerm;
+			for (const span of spans) {
+				span.classList.toggle("cfg-block__term--selected", isSelected);
+			}
 		}
 	}
 
@@ -725,7 +828,10 @@ export class VanillaDisassemblyGraphView {
 		const selectedText = selected
 			? ` Selected ${selected.title} (${selected.instructions.length} instructions).`
 			: "";
-		this.statusNode.textContent = `${result.message} ${summary}.${selectedText}`;
+		const termText = this.selectedTerm
+			? ` Highlighting "${this.selectedTerm}" (${this.termMatchCount()} matches).`
+			: "";
+		this.statusNode.textContent = `${result.message} ${summary}.${selectedText}${termText}`;
 	}
 
 	private selectedBlock(): CfgNode | null {
@@ -738,6 +844,14 @@ export class VanillaDisassemblyGraphView {
 				(block) => block.id === this.selectedNodeId,
 			) ?? null
 		);
+	}
+
+	private termMatchCount() {
+		if (!this.selectedTerm) {
+			return 0;
+		}
+
+		return this.termElements.get(this.selectedTerm)?.length ?? 0;
 	}
 
 	private syncControlState() {

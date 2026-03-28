@@ -2,9 +2,12 @@ import { describe, expect, it } from "bun:test";
 import type { DisassemblyMemorySource } from "./debugDisassembly";
 import type { DisassembledControlFlow } from "./disassembly";
 import {
+	buildCfgInstructionLine,
+	buildCfgTextLinesFromLabel,
 	buildControlFlowGraph,
 	type CfgInstruction,
 	type CfgInstructionDecoder,
+	tokenizeCfgTextSegments,
 } from "./disassemblyGraph";
 
 type FakeRange = {
@@ -103,5 +106,64 @@ describe("buildControlFlowGraph", () => {
 		expect(result.status).toBe("missing_memory");
 		expect(result.blocks).toHaveLength(0);
 		expect(result.edges).toHaveLength(0);
+	});
+});
+
+describe("tokenizeCfgTextSegments", () => {
+	it("splits operands into literal tokens and separator text", () => {
+		const text = "qword ptr [rax+0x20], rbx";
+		const segments = tokenizeCfgTextSegments(text);
+
+		expect(segments.map((segment) => segment.text).join("")).toBe(text);
+		expect(
+			segments
+				.filter((segment) => segment.clickable)
+				.map((segment) => segment.term),
+		).toEqual(["qword", "ptr", "rax", "0x20", "rbx"]);
+		expect(
+			segments
+				.filter((segment) => !segment.clickable)
+				.map((segment) => segment.text),
+		).toEqual([" ", " [", "+", "], "]);
+	});
+});
+
+describe("buildCfgInstructionLine", () => {
+	it("preserves the rendered graph line while exposing clickable tokens", () => {
+		const line = buildCfgInstructionLine({
+			address: 0x401000n,
+			mnemonic: "mov",
+			operands: "qword ptr [rax+0x20], rbx",
+		});
+
+		expect(line.text).toBe(
+			"0000000000401000  mov qword ptr [rax+0x20], rbx",
+		);
+		expect(
+			line.segments
+				.filter((segment) => segment.clickable)
+				.map((segment) => segment.term),
+		).toEqual(["0000000000401000", "mov", "qword", "ptr", "rax", "0x20", "rbx"]);
+	});
+});
+
+describe("buildCfgTextLinesFromLabel", () => {
+	it("tokenizes synthetic labels without changing the visible text", () => {
+		const lines = buildCfgTextLinesFromLabel("missing memory\n0000000000001000");
+
+		expect(lines).toHaveLength(2);
+		expect(lines.map((line) => line.text).join("\n")).toBe(
+			"missing memory\n0000000000001000",
+		);
+		expect(
+			lines[0]?.segments
+				.filter((segment) => segment.clickable)
+				.map((segment) => segment.term),
+		).toEqual(["missing", "memory"]);
+		expect(
+			lines[1]?.segments
+				.filter((segment) => segment.clickable)
+				.map((segment) => segment.term),
+		).toEqual(["0000000000001000"]);
 	});
 });

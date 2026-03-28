@@ -28,6 +28,17 @@ export type CfgInstruction = {
 	controlFlow: DisassembledControlFlow;
 };
 
+export type CfgTextSegment = {
+	text: string;
+	clickable: boolean;
+	term: string | null;
+};
+
+export type CfgTextLine = {
+	text: string;
+	segments: CfgTextSegment[];
+};
+
 export type CfgNode = {
 	id: string;
 	kind: CfgNodeKind;
@@ -36,6 +47,7 @@ export type CfgNode = {
 	endAddressExclusive: bigint | null;
 	instructions: CfgInstruction[];
 	title: string;
+	lines: CfgTextLine[];
 	label: string;
 	lineCount: number;
 };
@@ -96,6 +108,7 @@ export const CARD_PADDING_X = 16 + 2;
 export const CARD_PADDING_Y = 12 + 2;
 export const MIN_CARD_WIDTH = 156;
 export const MIN_CARD_HEIGHT = 38;
+const TEXT_TOKEN_PATTERN = /[A-Za-z0-9_]+/g;
 
 const fmtAddress = (value: bigint) =>
 	`${value.toString(16).toUpperCase().padStart(16, "0")}`;
@@ -111,6 +124,79 @@ const formatInstructionText = (
 	instruction.operands
 		? `${instruction.mnemonic} ${instruction.operands}`
 		: instruction.mnemonic;
+
+const joinTextSegments = (segments: readonly CfgTextSegment[]) =>
+	segments.map((segment) => segment.text).join("");
+
+const makeTextSegment = (
+	text: string,
+	clickable = false,
+	term: string | null = null,
+): CfgTextSegment => ({
+	text,
+	clickable,
+	term: clickable ? term ?? text : null,
+});
+
+export const tokenizeCfgTextSegments = (text: string): CfgTextSegment[] => {
+	if (!text) {
+		return [];
+	}
+
+	const segments: CfgTextSegment[] = [];
+	let lastIndex = 0;
+	for (const match of text.matchAll(TEXT_TOKEN_PATTERN)) {
+		const [token] = match;
+		const matchIndex = match.index ?? -1;
+		if (matchIndex < 0) {
+			continue;
+		}
+
+		if (matchIndex > lastIndex) {
+			segments.push(makeTextSegment(text.slice(lastIndex, matchIndex)));
+		}
+		segments.push(makeTextSegment(token, true));
+		lastIndex = matchIndex + token.length;
+	}
+
+	if (lastIndex < text.length) {
+		segments.push(makeTextSegment(text.slice(lastIndex)));
+	}
+
+	return segments;
+};
+
+export const buildCfgInstructionLine = (
+	instruction: Pick<CfgInstruction, "address" | "mnemonic" | "operands">,
+): CfgTextLine => {
+	const segments: CfgTextSegment[] = [
+		makeTextSegment(fmtAddress(instruction.address), true),
+		makeTextSegment("  "),
+		makeTextSegment(instruction.mnemonic, true),
+	];
+
+	if (instruction.operands) {
+		segments.push(makeTextSegment(" "));
+		segments.push(...tokenizeCfgTextSegments(instruction.operands));
+	}
+
+	return {
+		text: joinTextSegments(segments),
+		segments,
+	};
+};
+
+export const buildCfgTextLinesFromLabel = (label: string): CfgTextLine[] =>
+	label.split("\n").map((line) => ({
+		text: line,
+		segments: tokenizeCfgTextSegments(line),
+	}));
+
+const buildBlockLines = (instructions: CfgInstruction[]) =>
+	instructions.map((instruction) => buildCfgInstructionLine(instruction));
+
+const buildLabelFromLines = (lines: readonly CfgTextLine[]) =>
+	lines.map((line) => line.text).join("\n");
 
 const blockIdForAddress = (address: bigint) => `block:${address.toString(16)}`;
 
@@ -147,7 +233,7 @@ const makeNode = (
 	endAddressExclusive: bigint | null,
 	instructions: CfgInstruction[],
 	title: string,
-	label: string,
+	lines: CfgTextLine[],
 ): CfgNode => ({
 	id,
 	kind,
@@ -156,8 +242,9 @@ const makeNode = (
 	endAddressExclusive,
 	instructions,
 	title,
-	label,
-	lineCount: label.split("\n").length,
+	lines,
+	label: buildLabelFromLines(lines),
+	lineCount: lines.length,
 });
 
 const isBlockTerminator = (instruction: CfgInstruction) => {
@@ -170,14 +257,6 @@ const isBlockTerminator = (instruction: CfgInstruction) => {
 			return false;
 	}
 };
-
-const buildBlockLabel = (instructions: CfgInstruction[]) =>
-	[
-		...instructions.map(
-			(instruction) =>
-				`${fmtAddress(instruction.address)}  ${instruction.text}`,
-		),
-	].join("\n");
 
 const makeSyntheticSuccessor = (
 	edgeKind: CfgEdgeKind,
@@ -351,7 +430,7 @@ const buildBlock = (
 			endAddressExclusive,
 			instructions,
 			fmtAddress(startAddress),
-			buildBlockLabel(instructions),
+			buildBlockLines(instructions),
 		),
 		successors,
 	};
@@ -417,7 +496,7 @@ export const buildControlFlowGraph = (
 			address,
 			[],
 			title,
-			label,
+			buildCfgTextLinesFromLabel(label),
 		);
 		syntheticMap.set(id, node);
 		return node;
