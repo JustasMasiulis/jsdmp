@@ -47,10 +47,8 @@ const makeInstruction = (
 ): CfgInstruction => ({
 	address,
 	byteLength: 1,
-	bytesHex: "C3",
 	mnemonic: "ret",
 	operands: "",
-	text: "ret",
 	controlFlow,
 });
 
@@ -155,7 +153,7 @@ describe("buildCfgInstructionLine", () => {
 				.filter((segment) => segment.clickable)
 				.map((segment) => segment.syntaxKind),
 		).toEqual([
-			"number",
+			"plain",
 			"mnemonic",
 			"plain",
 			"plain",

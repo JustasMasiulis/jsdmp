@@ -70,7 +70,7 @@ const cfgResultToAnnotatedDescriptor = (
 		const dims = estimateNodeDimensions(block);
 		return {
 			id: block.id,
-			label: block.label,
+			label: block.lines.map((line) => line.text).join("\n"),
 			width: dims.width,
 			height: dims.height,
 		};
@@ -694,6 +694,9 @@ export class VanillaDisassemblyGraphView {
 	private renderBlocks(container: HTMLElement, core: GraphLayoutCore) {
 		this.blockElements.clear();
 		this.termElements.clear();
+		const nodesById = new Map(
+			(this.graphResult?.blocks ?? []).map((node) => [node.id, node]),
+		);
 
 		for (const block of core.blocks) {
 			const div = document.createElement("div");
@@ -704,10 +707,7 @@ export class VanillaDisassemblyGraphView {
 			div.style.width = `${block.data.width}px`;
 			div.style.height = `${block.data.height}px`;
 
-			// Find the CfgNode to get the kind
-			const cfgNode = this.graphResult?.blocks.find(
-				(b) => b.id === block.data.id,
-			);
+			const cfgNode = nodesById.get(block.data.id);
 			if (cfgNode && cfgNode.kind !== "block") {
 				div.classList.add(`cfg-block--kind-${cfgNode.kind}`);
 			}
@@ -826,10 +826,10 @@ export class VanillaDisassemblyGraphView {
 			return;
 		}
 
-		const summary = `${result.stats.blockCount} blocks, ${result.stats.edgeCount} edges, ${result.stats.instructionCount} instructions`;
+		const summary = `${result.stats.blockCount} blocks, ${result.stats.edgeCount} edges, ${result.stats.instructionCount} instr`;
 		const selected = this.selectedBlock();
 		const selectedText = selected
-			? ` Selected ${selected.title} (${selected.instructions.length} instructions).`
+			? ` Selected ${selected.title} (${selected.instructionCount} instr).`
 			: "";
 		const termText = this.selectedTerm
 			? ` Highlighting "${this.selectedTerm}" (${this.termMatchCount()} matches).`

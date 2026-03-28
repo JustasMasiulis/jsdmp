@@ -5,10 +5,6 @@ import {
 	MAX_INSTRUCTION_LENGTH,
 } from "./disassembly";
 
-type Mutable<T> = {
-	-readonly [K in keyof T]: T[K];
-};
-
 export type CfgBuildStatus =
 	| "ok"
 	| "missing_memory"
@@ -21,10 +17,8 @@ export type CfgEdgeKind = "true" | "false" | "unconditional";
 export type CfgInstruction = {
 	address: bigint;
 	byteLength: number;
-	bytesHex: string;
 	mnemonic: string;
 	operands: string;
-	text: string;
 	controlFlow: DisassembledControlFlow;
 };
 
@@ -45,14 +39,9 @@ export type CfgTextLine = {
 export type CfgNode = {
 	id: string;
 	kind: CfgNodeKind;
-	discoveryIndex: number;
-	startAddress: bigint | null;
-	endAddressExclusive: bigint | null;
-	instructions: CfgInstruction[];
 	title: string;
+	instructionCount: number;
 	lines: CfgTextLine[];
-	label: string;
-	lineCount: number;
 };
 
 export type CfgEdge = {
@@ -89,14 +78,20 @@ export type CfgInstructionDecoder = (
 	address: bigint,
 ) => CfgInstruction | null;
 
+type SyntheticSuccessor = {
+	address: bigint;
+	key: string;
+	kind: Exclude<CfgNodeKind, "block">;
+};
+
 type PendingSuccessor = {
 	kind: CfgEdgeKind;
-	targetAddress: bigint | null;
-	syntheticKind: CfgNodeKind | null;
-	syntheticKey: string | null;
-	syntheticTitle: string | null;
-	syntheticLabel: string | null;
-	syntheticAddress: bigint | null;
+	target: bigint | SyntheticSuccessor;
+};
+
+type CfgBuildState = {
+	instructionCount: number;
+	truncated: boolean;
 };
 
 const DEFAULT_CFG_BUILD_OPTIONS: CfgBuildOptions = {
@@ -109,24 +104,10 @@ export const ESTIMATED_CHAR_WIDTH = 7;
 export const ESTIMATED_LINE_HEIGHT = 15;
 export const CARD_PADDING_X = 16 + 2;
 export const CARD_PADDING_Y = 12 + 2;
-export const MIN_CARD_WIDTH = 156;
-export const MIN_CARD_HEIGHT = 38;
 const TEXT_TOKEN_PATTERN = /[A-Za-z0-9_]+/g;
 
 const fmtAddress = (value: bigint) =>
-	`${value.toString(16).toUpperCase().padStart(16, "0")}`;
-
-const formatBytes = (bytes: Uint8Array) =>
-	[...bytes]
-		.map((value) => value.toString(16).toUpperCase().padStart(2, "0"))
-		.join(" ");
-
-const formatInstructionText = (
-	instruction: Pick<CfgInstruction, "mnemonic" | "operands">,
-) =>
-	instruction.operands
-		? `${instruction.mnemonic} ${instruction.operands}`
-		: instruction.mnemonic;
+	value.toString(16).toUpperCase().padStart(16, "0");
 
 const joinTextSegments = (segments: readonly CfgTextSegment[]) =>
 	segments.map((segment) => segment.text).join("");
@@ -135,9 +116,6 @@ const isNumericCfgToken = (token: string) =>
 	/^0x[0-9a-f]+$/i.test(token) ||
 	/^\d+$/.test(token) ||
 	/^(?=.*\d)[0-9a-f]+h?$/i.test(token);
-
-const classifyCfgTokenSyntax = (token: string): CfgTextSyntaxKind =>
-	isNumericCfgToken(token) ? "number" : "plain";
 
 const makeTextSegment = (
 	text: string,
@@ -150,6 +128,11 @@ const makeTextSegment = (
 	term: clickable ? (term ?? text) : null,
 	syntaxKind,
 });
+
+const blockIdForAddress = (address: bigint) => `block:${address.toString(16)}`;
+
+const syntheticNodeId = (kind: CfgNodeKind, key: string) =>
+	`synthetic:${kind}:${key}`;
 
 export const tokenizeCfgTextSegments = (text: string): CfgTextSegment[] => {
 	if (!text) {
@@ -169,7 +152,12 @@ export const tokenizeCfgTextSegments = (text: string): CfgTextSegment[] => {
 			segments.push(makeTextSegment(text.slice(lastIndex, matchIndex)));
 		}
 		segments.push(
-			makeTextSegment(token, true, null, classifyCfgTokenSyntax(token)),
+			makeTextSegment(
+				token,
+				true,
+				null,
+				isNumericCfgToken(token) ? "number" : "plain",
+			),
 		);
 		lastIndex = matchIndex + token.length;
 	}
@@ -186,17 +174,20 @@ export const buildCfgInstructionLine = (
 	mnemonicColumnWidth = instruction.mnemonic.length,
 ): CfgTextLine => {
 	const segments: CfgTextSegment[] = [
-		// while the adress is a number, we don't want to give it special highlighting
+		// Keep addresses searchable/clickable without giving them number styling.
 		makeTextSegment(fmtAddress(instruction.address), true, null, "plain"),
 		makeTextSegment("  "),
 		makeTextSegment(instruction.mnemonic, true, null, "mnemonic"),
 	];
 
 	if (instruction.operands) {
-		const paddedGap = " ".repeat(
-			Math.max(1, mnemonicColumnWidth - instruction.mnemonic.length + 1),
+		segments.push(
+			makeTextSegment(
+				" ".repeat(
+					Math.max(1, mnemonicColumnWidth - instruction.mnemonic.length + 1),
+				),
+			),
 		);
-		segments.push(makeTextSegment(paddedGap));
 		segments.push(...tokenizeCfgTextSegments(instruction.operands));
 	}
 
@@ -218,94 +209,43 @@ export const buildCfgInstructionLines = (
 		"address" | "mnemonic" | "operands"
 	>[],
 ) => {
-	const mnemonicColumnWidth = instructions.reduce((maxWidth, instruction) => {
-		return Math.max(maxWidth, instruction.mnemonic.length);
-	}, 0);
+	const mnemonicColumnWidth = instructions.reduce(
+		(maxWidth, instruction) => Math.max(maxWidth, instruction.mnemonic.length),
+		0,
+	);
 
 	return instructions.map((instruction) =>
 		buildCfgInstructionLine(instruction, mnemonicColumnWidth),
 	);
 };
 
-const buildLabelFromLines = (lines: readonly CfgTextLine[]) =>
-	lines.map((line) => line.text).join("\n");
-
-const blockIdForAddress = (address: bigint) => `block:${address.toString(16)}`;
-
-const syntheticNodeId = (kind: CfgNodeKind, key: string) =>
-	`synthetic:${kind}:${key}`;
-
-const mergeOptions = (options?: Partial<CfgBuildOptions>): CfgBuildOptions => ({
-	...DEFAULT_CFG_BUILD_OPTIONS,
-	...options,
-});
-
-const makeInstruction = (
-	address: bigint,
-	byteLength: number,
-	bytesHex: string,
-	mnemonic: string,
-	operands: string,
-	controlFlow: DisassembledControlFlow,
-): CfgInstruction => ({
-	address,
-	byteLength,
-	bytesHex,
-	mnemonic,
-	operands,
-	text: formatInstructionText({ mnemonic, operands }),
-	controlFlow,
-});
-
-const makeNode = (
-	kind: CfgNodeKind,
-	id: string,
-	discoveryIndex: number,
-	startAddress: bigint | null,
-	endAddressExclusive: bigint | null,
-	instructions: CfgInstruction[],
-	title: string,
-	lines: CfgTextLine[],
-): CfgNode => ({
-	id,
-	kind,
-	discoveryIndex,
-	startAddress,
-	endAddressExclusive,
-	instructions,
-	title,
-	lines,
-	label: buildLabelFromLines(lines),
-	lineCount: lines.length,
-});
-
-const isBlockTerminator = (instruction: CfgInstruction) => {
-	switch (instruction.controlFlow.kind) {
-		case "conditional_branch":
-		case "unconditional_branch":
-		case "return":
-			return true;
-		default:
-			return false;
-	}
-};
-
 const makeSyntheticSuccessor = (
 	edgeKind: CfgEdgeKind,
-	kind: CfgNodeKind,
-	key: string,
-	title: string,
-	label: string,
-	address: bigint | null,
+	kind: Exclude<CfgNodeKind, "block">,
+	address: bigint,
 ): PendingSuccessor => ({
 	kind: edgeKind,
-	targetAddress: null,
-	syntheticKind: kind,
-	syntheticKey: key,
-	syntheticTitle: title,
-	syntheticLabel: label,
-	syntheticAddress: address,
+	target: {
+		address,
+		key: fmtAddress(address),
+		kind,
+	},
 });
+
+const buildSyntheticNode = (
+	kind: Exclude<CfgNodeKind, "block">,
+	key: string,
+	address: bigint,
+): CfgNode => {
+	const title = kind === "missing_memory" ? "missing memory" : "decode error";
+	return {
+		id: syntheticNodeId(kind, key),
+		kind,
+		title,
+		instructionCount: 0,
+		lines: buildCfgTextLinesFromLabel(`${title}\n${fmtAddress(address)}`),
+	};
+};
 
 export const decodeInstructionForCfg: CfgInstructionDecoder = (
 	source,
@@ -321,14 +261,13 @@ export const decodeInstructionForCfg: CfgInstructionDecoder = (
 		return null;
 	}
 
-	return makeInstruction(
+	return {
 		address,
-		decoded.length,
-		formatBytes(decoded.bytes),
-		decoded.mnemonic,
-		decoded.operands,
-		decoded.controlFlow,
-	);
+		byteLength: decoded.length,
+		mnemonic: decoded.mnemonic,
+		operands: decoded.operands,
+		controlFlow: decoded.controlFlow,
+	};
 };
 
 const buildBlock = (
@@ -336,108 +275,68 @@ const buildBlock = (
 	startAddress: bigint,
 	decoder: CfgInstructionDecoder,
 	knownBlockStarts: Set<bigint>,
-	instructionCounter: Mutable<{ value: number }>,
+	state: CfgBuildState,
 	options: CfgBuildOptions,
-	markTruncated: () => void,
 ): { block: CfgNode | null; successors: PendingSuccessor[] } => {
 	const instructions: CfgInstruction[] = [];
 	const successors: PendingSuccessor[] = [];
 	let cursor = startAddress;
 
-	while (true) {
-		if (instructionCounter.value >= options.maxInstructions) {
-			markTruncated();
+	blockLoop: while (true) {
+		if (state.instructionCount >= options.maxInstructions) {
+			state.truncated = true;
 			break;
 		}
 
 		if (instructions.length > 0 && knownBlockStarts.has(cursor)) {
-			successors.push({
-				kind: "unconditional",
-				targetAddress: cursor,
-				syntheticKind: null,
-				syntheticKey: null,
-				syntheticTitle: null,
-				syntheticLabel: null,
-				syntheticAddress: null,
-			});
+			successors.push({ kind: "unconditional", target: cursor });
 			break;
 		}
 
-		const decoded = decoder(source, cursor);
-		if (!decoded) {
+		const instruction = decoder(source, cursor);
+		if (!instruction) {
 			if (instructions.length === 0) {
 				return { block: null, successors };
 			}
 
 			successors.push(
-				makeSyntheticSuccessor(
-					"unconditional",
-					"decode_error",
-					`${fmtAddress(startAddress)}:${fmtAddress(cursor)}`,
-					"decode error",
-					`decode error\n${fmtAddress(cursor)}`,
-					cursor,
-				),
+				makeSyntheticSuccessor("unconditional", "decode_error", cursor),
 			);
 			break;
 		}
 
-		instructions.push(decoded);
-		instructionCounter.value += 1;
-		const nextAddress = cursor + BigInt(decoded.byteLength);
+		instructions.push(instruction);
+		state.instructionCount += 1;
+		const nextAddress = cursor + BigInt(instruction.byteLength);
 
-		if (isBlockTerminator(decoded)) {
-			const isConditional = decoded.controlFlow.kind === "conditional_branch";
-
-			if (decoded.controlFlow.directTargetAddress !== null) {
-				successors.push({
-					kind: isConditional ? "true" : "unconditional",
-					targetAddress: decoded.controlFlow.directTargetAddress,
-					syntheticKind: null,
-					syntheticKey: null,
-					syntheticTitle: null,
-					syntheticLabel: null,
-					syntheticAddress: null,
-				});
-			}
-
-			if (isConditional) {
-				if (source.findMemoryRangeAt(nextAddress)) {
+		switch (instruction.controlFlow.kind) {
+			case "conditional_branch":
+				if (instruction.controlFlow.directTargetAddress !== null) {
 					successors.push({
-						kind: "false",
-						targetAddress: nextAddress,
-						syntheticKind: null,
-						syntheticKey: null,
-						syntheticTitle: null,
-						syntheticLabel: null,
-						syntheticAddress: null,
+						kind: "true",
+						target: instruction.controlFlow.directTargetAddress,
 					});
-				} else {
-					successors.push(
-						makeSyntheticSuccessor(
-							"false",
-							"missing_memory",
-							`${fmtAddress(startAddress)}:${fmtAddress(nextAddress)}`,
-							"missing memory",
-							`missing memory\n${fmtAddress(nextAddress)}`,
-							nextAddress,
-						),
-					);
 				}
-			}
-			break;
+				successors.push(
+					source.findMemoryRangeAt(nextAddress)
+						? { kind: "false", target: nextAddress }
+						: makeSyntheticSuccessor("false", "missing_memory", nextAddress),
+				);
+				break blockLoop;
+			case "unconditional_branch":
+			case "return":
+				if (instruction.controlFlow.directTargetAddress !== null) {
+					successors.push({
+						kind: "unconditional",
+						target: instruction.controlFlow.directTargetAddress,
+					});
+				}
+				break blockLoop;
 		}
 
 		if (!source.findMemoryRangeAt(nextAddress)) {
 			successors.push(
-				makeSyntheticSuccessor(
-					"unconditional",
-					"missing_memory",
-					`${fmtAddress(startAddress)}:${fmtAddress(nextAddress)}`,
-					"missing memory",
-					`missing memory\n${fmtAddress(nextAddress)}`,
-					nextAddress,
-				),
+				makeSyntheticSuccessor("unconditional", "missing_memory", nextAddress),
 			);
 			break;
 		}
@@ -449,21 +348,14 @@ const buildBlock = (
 		return { block: null, successors };
 	}
 
-	const lastInstruction = instructions[instructions.length - 1];
-	const endAddressExclusive =
-		lastInstruction.address + BigInt(lastInstruction.byteLength);
-
 	return {
-		block: makeNode(
-			"block",
-			blockIdForAddress(startAddress),
-			0,
-			startAddress,
-			endAddressExclusive,
-			instructions,
-			fmtAddress(startAddress),
-			buildCfgInstructionLines(instructions),
-		),
+		block: {
+			id: blockIdForAddress(startAddress),
+			kind: "block",
+			title: fmtAddress(startAddress),
+			instructionCount: instructions.length,
+			lines: buildCfgInstructionLines(instructions),
+		},
 		successors,
 	};
 };
@@ -474,9 +366,8 @@ export const buildControlFlowGraph = (
 	options?: Partial<CfgBuildOptions>,
 	decoder: CfgInstructionDecoder = decodeInstructionForCfg,
 ): CfgBuildResult => {
-	const mergedOptions = mergeOptions(options);
-	const anchorMatch = source.findMemoryRangeAt(anchorAddress);
-	if (!anchorMatch) {
+	const mergedOptions = { ...DEFAULT_CFG_BUILD_OPTIONS, ...options };
+	if (!source.findMemoryRangeAt(anchorAddress)) {
 		return {
 			status: "missing_memory",
 			message: `Address ${fmtAddress(anchorAddress)} is not present in dump memory.`,
@@ -492,27 +383,20 @@ export const buildControlFlowGraph = (
 		};
 	}
 
-	const knownBlockStarts = new Set<bigint>();
-	const pendingStarts: bigint[] = [];
+	const pendingStarts = [anchorAddress];
+	const knownBlockStarts = new Set(pendingStarts);
+	const nodes: CfgNode[] = [];
 	const blockMap = new Map<string, CfgNode>();
 	const syntheticMap = new Map<string, CfgNode>();
 	const aliasMap = new Map<string, string>();
 	const edgeMap = new Map<string, CfgEdge>();
-	const instructionCounter = { value: 0 };
-	let discoveryIndex = 0;
-	let truncated = false;
+	const state: CfgBuildState = { instructionCount: 0, truncated: false };
 	let anchorDecodeFailed = false;
 
-	const markTruncated = () => {
-		truncated = true;
-	};
-
 	const ensureSyntheticNode = (
-		kind: CfgNodeKind,
+		kind: Exclude<CfgNodeKind, "block">,
 		key: string,
-		title: string,
-		label: string,
-		address: bigint | null,
+		address: bigint,
 	) => {
 		const id = syntheticNodeId(kind, key);
 		const existing = syntheticMap.get(id);
@@ -520,17 +404,9 @@ export const buildControlFlowGraph = (
 			return existing;
 		}
 
-		const node = makeNode(
-			kind,
-			id,
-			discoveryIndex++,
-			address,
-			address,
-			[],
-			title,
-			buildCfgTextLinesFromLabel(label),
-		);
+		const node = buildSyntheticNode(kind, key, address);
 		syntheticMap.set(id, node);
+		nodes.push(node);
 		return node;
 	};
 
@@ -546,27 +422,23 @@ export const buildControlFlowGraph = (
 
 	const addEdge = (from: string, to: string, kind: CfgEdgeKind) => {
 		if (edgeMap.size >= mergedOptions.maxEdges) {
-			markTruncated();
+			state.truncated = true;
 			return;
 		}
 
 		const id = `${from}->${to}:${kind}`;
-		if (edgeMap.has(id)) {
-			return;
+		if (!edgeMap.has(id)) {
+			edgeMap.set(id, { id, from, to, kind });
 		}
-
-		edgeMap.set(id, { id, from, to, kind });
 	};
-
-	enqueueStart(anchorAddress);
 
 	while (pendingStarts.length > 0) {
 		if (blockMap.size >= mergedOptions.maxBlocks) {
-			markTruncated();
+			state.truncated = true;
 			break;
 		}
-		if (instructionCounter.value >= mergedOptions.maxInstructions) {
-			markTruncated();
+		if (state.instructionCount >= mergedOptions.maxInstructions) {
+			state.truncated = true;
 			break;
 		}
 
@@ -580,18 +452,15 @@ export const buildControlFlowGraph = (
 			startAddress,
 			decoder,
 			knownBlockStarts,
-			instructionCounter,
+			state,
 			mergedOptions,
-			markTruncated,
 		);
 		const blockId = blockIdForAddress(startAddress);
 
 		if (!block) {
 			const errorNode = ensureSyntheticNode(
 				"decode_error",
-				`start:${fmtAddress(startAddress)}`,
-				"decode error",
-				`decode error\n${fmtAddress(startAddress)}`,
+				fmtAddress(startAddress),
 				startAddress,
 			);
 			aliasMap.set(blockId, errorNode.id);
@@ -601,54 +470,38 @@ export const buildControlFlowGraph = (
 			continue;
 		}
 
-		block.discoveryIndex = discoveryIndex++;
 		blockMap.set(block.id, block);
+		nodes.push(block);
 
 		for (const successor of successors) {
-			if (
-				successor.syntheticKind &&
-				successor.syntheticKey &&
-				successor.syntheticTitle &&
-				successor.syntheticLabel
-			) {
+			if (typeof successor.target !== "bigint") {
 				const node = ensureSyntheticNode(
-					successor.syntheticKind,
-					successor.syntheticKey,
-					successor.syntheticTitle,
-					successor.syntheticLabel,
-					successor.syntheticAddress,
+					successor.target.kind,
+					successor.target.key,
+					successor.target.address,
 				);
 				addEdge(block.id, node.id, successor.kind);
 				continue;
 			}
 
-			const targetAddress = successor.targetAddress;
-			if (targetAddress === null) {
-				continue;
-			}
-
+			const targetAddress = successor.target;
 			if (!source.findMemoryRangeAt(targetAddress)) {
 				const node = ensureSyntheticNode(
 					"missing_memory",
 					fmtAddress(targetAddress),
-					"missing memory",
-					`missing memory\n${fmtAddress(targetAddress)}`,
 					targetAddress,
 				);
 				addEdge(block.id, node.id, successor.kind);
 				continue;
 			}
 
-			const targetId = blockIdForAddress(targetAddress);
-			addEdge(block.id, targetId, successor.kind);
+			addEdge(block.id, blockIdForAddress(targetAddress), successor.kind);
 			enqueueStart(targetAddress);
 		}
 	}
 
-	const nodes = [...blockMap.values(), ...syntheticMap.values()].sort(
-		(a, b) => a.discoveryIndex - b.discoveryIndex,
-	);
 	const nodeIds = new Set(nodes.map((node) => node.id));
+	const resolvedEdgeIds = new Set<string>();
 	const resolvedEdges: CfgEdge[] = [];
 
 	for (const edge of edgeMap.values()) {
@@ -658,20 +511,25 @@ export const buildControlFlowGraph = (
 		}
 
 		const id = `${edge.from}->${targetId}:${edge.kind}`;
-		if (resolvedEdges.some((candidate) => candidate.id === id)) {
+		if (resolvedEdgeIds.has(id)) {
 			continue;
 		}
 
-		resolvedEdges.push({
-			...edge,
-			id,
-			to: targetId,
-		});
+		resolvedEdgeIds.add(id);
+		resolvedEdges.push(
+			targetId === edge.to
+				? edge
+				: {
+						...edge,
+						id,
+						to: targetId,
+					},
+		);
 	}
 
 	const status: CfgBuildStatus = anchorDecodeFailed
 		? "decode_error"
-		: truncated
+		: state.truncated
 			? "truncated"
 			: "ok";
 
@@ -691,27 +549,19 @@ export const buildControlFlowGraph = (
 		stats: {
 			blockCount: blockMap.size,
 			edgeCount: resolvedEdges.length,
-			instructionCount: instructionCounter.value,
-			truncated,
+			instructionCount: state.instructionCount,
+			truncated: state.truncated,
 		},
 	};
 };
 
-const sanitizeLineCount = (value: number) =>
-	Number.isFinite(value) && value > 0 ? value : 2;
-
 export const estimateNodeDimensions = (node: CfgNode) => {
-	const lines = node.label.split("\n");
-	const maxLineLength = lines.reduce((maxLength, line) => {
-		return Math.max(maxLength, line.length);
-	}, 0);
-	const height = Math.max(
-		MIN_CARD_HEIGHT,
-		CARD_PADDING_Y + sanitizeLineCount(node.lineCount) * ESTIMATED_LINE_HEIGHT,
+	const maxLineLength = node.lines.reduce(
+		(maxLength, line) => Math.max(maxLength, line.text.length),
+		0,
 	);
-	const width = Math.max(
-		MIN_CARD_WIDTH,
-		CARD_PADDING_X + maxLineLength * ESTIMATED_CHAR_WIDTH,
-	);
+	const height =
+		CARD_PADDING_Y + Math.max(node.lines.length, 2) * ESTIMATED_LINE_HEIGHT;
+	const width = CARD_PADDING_X + maxLineLength * ESTIMATED_CHAR_WIDTH;
 	return { width, height };
 };
