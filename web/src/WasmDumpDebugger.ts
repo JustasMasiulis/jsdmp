@@ -1,10 +1,9 @@
 import { DockviewDumpLayout } from "./components/DockviewDumpLayout";
-import type { ParsedDumpInfo } from "./lib/dumpInfo";
-import {
-	ALLOWED_DUMP_EXTENSIONS,
-	isSupportedDumpFile,
-	parseDumpFile,
-} from "./lib/dumpInfo";
+import { resolveDumpContext } from "./lib/context";
+import { setDebugInterface, setResolvedContext } from "./lib/debugState";
+import { ALLOWED_DUMP_EXTENSIONS, isSupportedDumpFile } from "./lib/dumpInfo";
+import { MiniDump } from "./lib/minidump";
+import { MinidumpDebugInterface } from "./lib/minidump_debug_interface";
 
 export function initWasmDumpDebugger(root: HTMLElement): void {
 	new WasmDumpDebugger(root);
@@ -129,10 +128,17 @@ class WasmDumpDebugger {
 		this.setParsing(true);
 		this.showDropzone(true);
 
-		let dumpInfo: ParsedDumpInfo;
+		let contextWarning: string | null;
 		try {
-			dumpInfo = await parseDumpFile(file);
+			const data = await file.arrayBuffer();
+			const debugInterface = new MinidumpDebugInterface(new MiniDump(data));
+			setDebugInterface(debugInterface);
+
+			const resolvedContext = await resolveDumpContext(debugInterface);
+			setResolvedContext(resolvedContext);
 		} catch (error) {
+			contextWarning = error instanceof Error ? error.message : String(error);
+
 			const message = error instanceof Error ? error.message : String(error);
 			this.setError(`Failed to parse dump file: ${message}`);
 			this.setParsing(false);
@@ -141,11 +147,11 @@ class WasmDumpDebugger {
 
 		this.setParsing(false);
 
-		if (dumpInfo.contextWarning) {
-			this.setWarning(dumpInfo.contextWarning);
+		if (contextWarning) {
+			this.setWarning(contextWarning);
 		}
 
-		this.mountLayout(dumpInfo);
+		this.mountLayout();
 	}
 
 	// ─── UI state ─────────────────────────────────────────────────────────────
@@ -168,9 +174,9 @@ class WasmDumpDebugger {
 		this.dropzone.hidden = !visible;
 	}
 
-	private mountLayout(dumpInfo: ParsedDumpInfo): void {
+	private mountLayout(): void {
 		this.layout?.dispose();
 		this.showDropzone(false);
-		this.layout = new DockviewDumpLayout(this.shell, dumpInfo);
+		this.layout = new DockviewDumpLayout(this.shell);
 	}
 }

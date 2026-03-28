@@ -4,7 +4,7 @@ import type {
 	DebugModule,
 	DebugUnloadedModule,
 } from "../lib/debug_interface";
-import type { ParsedDumpInfo } from "../lib/dumpInfo";
+import { DBG } from "../lib/debugState";
 import type { DumpSection } from "../lib/dumpSections";
 import {
 	fmtHex,
@@ -20,7 +20,6 @@ import {
 
 export type VanillaDumpSummaryOptions = {
 	container: HTMLElement;
-	dumpInfo: ParsedDumpInfo;
 	sections?: readonly DumpSection[];
 };
 
@@ -216,11 +215,8 @@ const mkTable = (
 
 // ─── section builders ─────────────────────────────────────────────────────────
 
-const buildSummarySection = (
-	dumpInfo: ParsedDumpInfo,
-	container: HTMLElement,
-): void => {
-	const di = dumpInfo.debugInterface;
+const buildSummarySection = (container: HTMLElement): void => {
+	const di = DBG;
 
 	const h2 = mkEl("h2", "dump-info-panel__title m0");
 	h2.textContent = "Dump Summary";
@@ -310,11 +306,8 @@ const buildSummarySection = (
 	}
 };
 
-const buildExceptionSection = (
-	dumpInfo: ParsedDumpInfo,
-	container: HTMLElement,
-): void => {
-	const ei = dumpInfo.debugInterface.exceptionInfo;
+const buildExceptionSection = (container: HTMLElement): void => {
+	const ei = DBG.exceptionInfo;
 	if (!ei) return;
 	container.append(mkRow("Exception Thread ID", String(ei.threadId)));
 	container.append(
@@ -343,11 +336,8 @@ const buildExceptionSection = (
 	);
 };
 
-const buildModulesSection = (
-	dumpInfo: ParsedDumpInfo,
-	container: HTMLElement,
-): void => {
-	const dm = dumpInfo.debugInterface.dm;
+const buildModulesSection = (container: HTMLElement): void => {
+	const dm = DBG.dm;
 	if (dm.modules.length > 0) {
 		container.append(
 			mkTable(
@@ -379,13 +369,8 @@ const buildModulesSection = (
 	}
 };
 
-const buildMemorySection = (
-	dumpInfo: ParsedDumpInfo,
-	container: HTMLElement,
-): void => {
-	const summary = summarizeMemoryList(
-		dumpInfo.debugInterface.dm.memoryRanges ?? [],
-	);
+const buildMemorySection = (container: HTMLElement): void => {
+	const summary = summarizeMemoryList(DBG.dm.memoryRanges ?? []);
 	container.append(
 		mkRow("Memory Ranges", summary ? String(summary.rangeCount) : "0"),
 	);
@@ -412,21 +397,17 @@ export class VanillaDumpSummary {
 		this.panel.setAttribute("aria-label", "Dump details");
 		options.container.append(this.panel);
 
-		this.render(options.dumpInfo, options.sections);
+		this.render(options.sections);
 	}
 
-	private render(
-		dumpInfo: ParsedDumpInfo,
-		sections: readonly DumpSection[] | undefined,
-	): void {
+	private render(sections: readonly DumpSection[] | undefined): void {
 		const hasSection = (s: DumpSection) => sections?.includes(s) ?? true;
-		const di = dumpInfo.debugInterface;
 
-		if (hasSection("summary")) buildSummarySection(dumpInfo, this.panel);
-		if (hasSection("exception") && di.exceptionInfo)
-			buildExceptionSection(dumpInfo, this.panel);
-		if (hasSection("modules")) buildModulesSection(dumpInfo, this.panel);
-		if (hasSection("memory")) buildMemorySection(dumpInfo, this.panel);
+		if (hasSection("summary")) buildSummarySection(this.panel);
+		if (hasSection("exception") && DBG.exceptionInfo)
+			buildExceptionSection(this.panel);
+		if (hasSection("modules")) buildModulesSection(this.panel);
+		if (hasSection("memory")) buildMemorySection(this.panel);
 	}
 
 	dispose(): void {

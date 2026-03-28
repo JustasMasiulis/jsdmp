@@ -6,7 +6,7 @@ import {
 	saveAddressPanelState,
 } from "../lib/addressPanelState";
 import type { DebugMemoryRange } from "../lib/debug_interface";
-import type { ParsedDumpInfo } from "../lib/dumpInfo";
+import { DBG, resolvedContext } from "../lib/debugState";
 import {
 	FixedRowVirtualTable,
 	type VirtualListingAdapter,
@@ -21,7 +21,6 @@ const MEMORY_PANEL_STATE_KEY = "wasm-dump-debugger:memory-panel-state:v1";
 
 type MemoryViewPanelOptions = {
 	container: HTMLElement;
-	dumpInfo: ParsedDumpInfo;
 	panelId: string;
 };
 
@@ -87,7 +86,6 @@ const getPanelStorageKey = (panelId: string) =>
 export class VanillaMemoryView {
 	private readonly panelId: string;
 	private readonly panelIndex: number;
-	private dumpInfo: ParsedDumpInfo;
 	private ranges: DebugMemoryRange[] = [];
 	private span: MemorySpan | null = null;
 	private totalRows = 0;
@@ -136,7 +134,6 @@ export class VanillaMemoryView {
 	constructor(options: MemoryViewPanelOptions) {
 		this.panelId = options.panelId;
 		this.panelIndex = parsePanelIndex(options.panelId);
-		this.dumpInfo = options.dumpInfo;
 		this.root = this.createRoot();
 		this.table = new FixedRowVirtualTable<MemoryRowState>({
 			adapter: this.createMemoryAdapter(),
@@ -158,19 +155,6 @@ export class VanillaMemoryView {
 		this.followCheckbox.addEventListener("change", this.onFollowChange);
 
 		this.restoreState();
-		this.recomputeRangeState();
-		this.ensureAddressState();
-		this.maybeFollowInstructionPointer();
-		this.syncControlState();
-		this.requestRender(true);
-	}
-
-	update(nextDumpInfo: ParsedDumpInfo) {
-		if (this.isDisposed) {
-			return;
-		}
-
-		this.dumpInfo = nextDumpInfo;
 		this.recomputeRangeState();
 		this.ensureAddressState();
 		this.maybeFollowInstructionPointer();
@@ -284,7 +268,7 @@ export class VanillaMemoryView {
 	}
 
 	private recomputeRangeState() {
-		this.ranges = this.dumpInfo.debugInterface.dm.memoryRanges;
+		this.ranges = DBG.dm.memoryRanges;
 		if (this.ranges.length === 0) {
 			this.span = null;
 			this.totalRows = 0;
@@ -333,7 +317,7 @@ export class VanillaMemoryView {
 	}
 
 	private instructionPointer() {
-		return this.dumpInfo.resolvedContext?.anchorAddress ?? null;
+		return resolvedContext?.anchorAddress ?? null;
 	}
 
 	private maybeFollowInstructionPointer() {
@@ -483,7 +467,7 @@ export class VanillaMemoryView {
 			}
 
 			try {
-				const bytes = await this.dumpInfo.debugInterface.read(address, 1);
+				const bytes = await DBG.read(address, 1);
 				const value = bytes[0];
 				hexParts[out] = fmtByte(value);
 				asciiParts[out] = toAscii(value);

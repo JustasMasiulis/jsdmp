@@ -1,11 +1,10 @@
 import { html, nothing, render } from "lit-html";
 import type { DebugThread } from "../lib/debug_interface";
-import type { ParsedDumpInfo } from "../lib/dumpInfo";
+import { DBG } from "../lib/debugState";
 import { fmtHex8, fmtHex16, fmtPriority } from "../lib/formatting";
 
 export type VanillaThreadsViewOptions = {
 	container: HTMLElement;
-	dumpInfo: ParsedDumpInfo;
 	panelId: string;
 	selectedThreadId: number;
 	onThreadSelect: (id: number) => void;
@@ -61,7 +60,7 @@ export class VanillaThreadsView {
 	private selectedThreadId: number;
 
 	constructor(private options: VanillaThreadsViewOptions) {
-		this.threads = options.dumpInfo.debugInterface.dm.threads;
+		this.threads = DBG.dm.threads;
 		this.rows = this.threads.map(threadToRow);
 		this.selectedThreadId = options.selectedThreadId;
 		this.doRender();

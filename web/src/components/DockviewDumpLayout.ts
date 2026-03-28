@@ -7,6 +7,7 @@ import {
 	type VisibilityEvent,
 } from "dockview-core";
 import { resolveContextForThread } from "../lib/context";
+import { DBG, resolvedContext, setResolvedContext } from "../lib/debugState";
 import {
 	addMemoryPanel,
 	applyDefaultLayout,
@@ -21,7 +22,6 @@ import {
 	saveLayout,
 	THREADS_COMPONENT,
 } from "../lib/dockviewLayout";
-import type { ParsedDumpInfo } from "../lib/dumpInfo";
 import { VanillaDisassemblyGraphView } from "./VanillaDisassemblyGraphView";
 import { VanillaDisassemblyView } from "./VanillaDisassemblyView";
 import { VanillaDumpSummary } from "./VanillaDumpSummary";
@@ -36,11 +36,8 @@ export class DockviewDumpLayout {
 	private graphPanels = new Set<VanillaDisassemblyGraphView>();
 	private toolbar: HTMLElement;
 
-	constructor(
-		private container: HTMLElement,
-		private dumpInfo: ParsedDumpInfo,
-	) {
-		this.selectedThreadId = dumpInfo.debugInterface.dm.currentThreadId;
+	constructor(private container: HTMLElement) {
+		this.selectedThreadId = DBG.dm.currentThreadId;
 
 		const shell = document.createElement("section");
 		shell.className = "dump-dockview-shell";
@@ -88,16 +85,10 @@ export class DockviewDumpLayout {
 		this.selectedThreadId = threadId;
 		for (const p of this.threadsPanels) p.setSelectedThreadId(threadId);
 
-		const newContext = await resolveContextForThread(
-			this.dumpInfo.debugInterface,
-			threadId,
-		);
-		const newDumpInfo: ParsedDumpInfo = {
-			...this.dumpInfo,
-			resolvedContext: newContext ?? this.dumpInfo.resolvedContext,
-		};
-		for (const v of this.disassemblyPanels) v.update(newDumpInfo);
-		for (const v of this.graphPanels) v.update(newDumpInfo);
+		const newContext = await resolveContextForThread(DBG, threadId);
+		setResolvedContext(newContext ?? resolvedContext);
+		for (const v of this.disassemblyPanels) v.update();
+		for (const v of this.graphPanels) v.update();
 	};
 
 	// ─── panel factory ────────────────────────────────────────────────────────
@@ -113,7 +104,6 @@ export class DockviewDumpLayout {
 			case DISASSEMBLY_COMPONENT: {
 				const view = new VanillaDisassemblyView({
 					container: el,
-					dumpInfo: this.dumpInfo,
 					panelId: options.id,
 				});
 				this.disassemblyPanels.add(view);
@@ -129,7 +119,6 @@ export class DockviewDumpLayout {
 			case DISASSEMBLY_GRAPH_COMPONENT: {
 				const view = new VanillaDisassemblyGraphView({
 					container: el,
-					dumpInfo: this.dumpInfo,
 					panelId: options.id,
 				});
 				this.graphPanels.add(view);
@@ -145,7 +134,6 @@ export class DockviewDumpLayout {
 			case MEMORY_COMPONENT: {
 				const view = new VanillaMemoryView({
 					container: el,
-					dumpInfo: this.dumpInfo,
 					panelId: options.id,
 				});
 				return {
@@ -157,7 +145,6 @@ export class DockviewDumpLayout {
 			case THREADS_COMPONENT: {
 				const view = new VanillaThreadsView({
 					container: el,
-					dumpInfo: this.dumpInfo,
 					panelId: options.id,
 					selectedThreadId: this.selectedThreadId,
 					onThreadSelect: this.onThreadSelect,
@@ -175,7 +162,6 @@ export class DockviewDumpLayout {
 			default: {
 				const summary = new VanillaDumpSummary({
 					container: el,
-					dumpInfo: this.dumpInfo,
 					sections: [getPanelSection(options.name)],
 				});
 				return {

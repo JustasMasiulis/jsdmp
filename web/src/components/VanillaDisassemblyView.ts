@@ -5,14 +5,13 @@ import {
 	parseHexAddress,
 	saveAddressPanelState,
 } from "../lib/addressPanelState";
-import type { ResolvedDumpContext } from "../lib/context";
 import {
 	buildDisassemblyListing,
 	type DebugDisassemblyListing,
 	loadNextDisassemblyLines,
 	loadPreviousDisassemblyLines,
 } from "../lib/debugDisassembly";
-import type { ParsedDumpInfo } from "../lib/dumpInfo";
+import { DBG, resolvedContext } from "../lib/debugState";
 import {
 	FixedRowVirtualTable,
 	type VirtualListingAdapter,
@@ -30,7 +29,6 @@ const DISASSEMBLY_PANEL_STATE_KEY =
 
 type DisassemblyViewPanelOptions = {
 	container: HTMLElement;
-	dumpInfo: ParsedDumpInfo;
 	panelId: string;
 };
 
@@ -63,8 +61,6 @@ const toDecodeErrorListing = (
 
 export class VanillaDisassemblyView {
 	private readonly panelId: string;
-	private dumpInfo: ParsedDumpInfo;
-	private resolvedContext: ResolvedDumpContext | null;
 	private listing: DebugDisassemblyListing | null = null;
 	private followInstructionPointer = true;
 	private manualAddress: bigint | null = null;
@@ -88,7 +84,7 @@ export class VanillaDisassemblyView {
 		const next = this.followCheckbox.checked;
 		this.followInstructionPointer = next;
 		if (!next && this.manualAddress === null) {
-			const followAddress = this.resolvedContext?.anchorAddress;
+			const followAddress = resolvedContext?.anchorAddress;
 			if (followAddress !== null && followAddress !== undefined) {
 				this.manualAddress = followAddress;
 			}
@@ -120,8 +116,6 @@ export class VanillaDisassemblyView {
 
 	constructor(options: DisassemblyViewPanelOptions) {
 		this.panelId = options.panelId;
-		this.dumpInfo = options.dumpInfo;
-		this.resolvedContext = options.dumpInfo.resolvedContext;
 		this.root = this.createRoot(options.panelId);
 		this.table = new FixedRowVirtualTable<DisassemblyRowState>({
 			adapter: this.createDisassemblyAdapter(),
@@ -147,20 +141,15 @@ export class VanillaDisassemblyView {
 		this.refreshView(true);
 	}
 
-	update(nextDumpInfo: ParsedDumpInfo) {
+	update() {
 		if (this.isDisposed) {
 			return;
 		}
 
-		const changed = nextDumpInfo !== this.dumpInfo;
-		this.dumpInfo = nextDumpInfo;
-		this.resolvedContext = nextDumpInfo.resolvedContext;
-		if (changed) {
-			this.listing = null;
-			this.isLoadingPrevious = false;
-			this.isLoadingNext = false;
-			this.clearAddressError();
-		}
+		this.listing = null;
+		this.isLoadingPrevious = false;
+		this.isLoadingNext = false;
+		this.clearAddressError();
 		this.refreshView(true);
 	}
 
@@ -299,7 +288,7 @@ export class VanillaDisassemblyView {
 
 	private currentAnchor() {
 		if (this.followInstructionPointer) {
-			return this.resolvedContext?.anchorAddress ?? null;
+			return resolvedContext?.anchorAddress ?? null;
 		}
 
 		if (this.manualAddress === null) {
@@ -326,7 +315,7 @@ export class VanillaDisassemblyView {
 		this.isLoadingNext = false;
 		this.isLoadingListing = true;
 
-		const context = this.resolvedContext;
+		const context = resolvedContext;
 		if (!context) {
 			this.listing = null;
 			this.isLoadingListing = false;
@@ -347,10 +336,7 @@ export class VanillaDisassemblyView {
 		}
 
 		try {
-			const nextListing = await buildDisassemblyListing(
-				this.dumpInfo.debugInterface,
-				anchorAddress,
-			);
+			const nextListing = await buildDisassemblyListing(DBG, anchorAddress);
 			if (this.isDisposed || token !== this.reloadToken) {
 				return;
 			}
@@ -451,10 +437,10 @@ export class VanillaDisassemblyView {
 		if (!this.followInstructionPointer && this.manualAddress !== null) {
 			return "Enter an address that exists in dump memory to view disassembly.";
 		}
-		if (this.resolvedContext) {
+		if (resolvedContext) {
 			if (
 				this.followInstructionPointer &&
-				this.resolvedContext.anchorAddress === null
+				resolvedContext.anchorAddress === null
 			) {
 				return "No instruction pointer available.";
 			}
@@ -500,7 +486,7 @@ export class VanillaDisassemblyView {
 			}
 
 			const previousLoad = await loadPreviousDisassemblyLines(
-				this.dumpInfo.debugInterface,
+				DBG,
 				beforeAddress,
 			);
 			currentListing.hasMorePrevious = previousLoad.hasMoreBefore;
@@ -545,10 +531,7 @@ export class VanillaDisassemblyView {
 				return;
 			}
 
-			const nextLoad = await loadNextDisassemblyLines(
-				this.dumpInfo.debugInterface,
-				startAddress,
-			);
+			const nextLoad = await loadNextDisassemblyLines(DBG, startAddress);
 			currentListing.hasMoreNext = nextLoad.hasMoreAfter;
 			if (nextLoad.lines.length === 0) {
 				return;

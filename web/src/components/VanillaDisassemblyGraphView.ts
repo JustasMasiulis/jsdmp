@@ -5,7 +5,7 @@ import {
 	parseHexAddress,
 	saveAddressPanelState,
 } from "../lib/addressPanelState";
-import type { ResolvedDumpContext } from "../lib/context";
+import { DBG, resolvedContext } from "../lib/debugState";
 import {
 	buildCfg2,
 	type CfgBuildResult,
@@ -13,7 +13,6 @@ import {
 	type CfgNode,
 	estimateNodeDimensions,
 } from "../lib/disassemblyGraph";
-import type { ParsedDumpInfo } from "../lib/dumpInfo";
 import {
 	type AnnotatedCfgDescriptor,
 	type AnnotatedNodeDescriptor,
@@ -39,7 +38,6 @@ const EDGE_ARROW_LINE_TRIM = EDGE_ARROW_MARKER_WIDTH - EDGE_ARROW_REF_X;
 
 type DisassemblyGraphViewPanelOptions = {
 	container: HTMLElement;
-	dumpInfo: ParsedDumpInfo;
 	panelId: string;
 };
 
@@ -89,8 +87,6 @@ const cfgResultToAnnotatedDescriptor = (
 
 export class VanillaDisassemblyGraphView implements IContentRenderer {
 	private readonly panelId: string;
-	private dumpInfo: ParsedDumpInfo;
-	private resolvedContext: ResolvedDumpContext | null;
 	private graphResult: CfgBuildResult | null = null;
 	private followInstructionPointer = true;
 	private manualAddress: bigint | null = null;
@@ -131,7 +127,7 @@ export class VanillaDisassemblyGraphView implements IContentRenderer {
 		const next = this.followCheckbox.checked;
 		this.followInstructionPointer = next;
 		if (!next && this.manualAddress === null) {
-			const followAddress = this.resolvedContext?.anchorAddress;
+			const followAddress = resolvedContext?.anchorAddress;
 			if (followAddress !== null && followAddress !== undefined) {
 				this.manualAddress = followAddress;
 			}
@@ -251,8 +247,6 @@ export class VanillaDisassemblyGraphView implements IContentRenderer {
 
 	constructor(options: DisassemblyGraphViewPanelOptions) {
 		this.panelId = options.panelId;
-		this.dumpInfo = options.dumpInfo;
-		this.resolvedContext = options.dumpInfo.resolvedContext;
 		this.root = this.createRoot(options.panelId);
 		const dom = this.createDomTree();
 		this.addressInput = dom.addressInput;
@@ -283,20 +277,15 @@ export class VanillaDisassemblyGraphView implements IContentRenderer {
 		this.refreshView(true);
 	}
 
-	update(nextDumpInfo: ParsedDumpInfo) {
+	update() {
 		if (this.isDisposed) {
 			return;
 		}
 
-		const changed = nextDumpInfo !== this.dumpInfo;
-		this.dumpInfo = nextDumpInfo;
-		this.resolvedContext = nextDumpInfo.resolvedContext;
-		if (changed) {
-			this.graphResult = null;
-			this.selectedNodeId = null;
-			this.selectedTerm = null;
-			this.clearAddressError();
-		}
+		this.graphResult = null;
+		this.selectedNodeId = null;
+		this.selectedTerm = null;
+		this.clearAddressError();
 		this.refreshView(true);
 	}
 
@@ -450,7 +439,7 @@ export class VanillaDisassemblyGraphView implements IContentRenderer {
 
 	private currentAnchor() {
 		if (this.followInstructionPointer) {
-			return this.resolvedContext?.anchorAddress ?? null;
+			return resolvedContext?.anchorAddress ?? null;
 		}
 
 		if (this.manualAddress === null) {
@@ -486,10 +475,7 @@ export class VanillaDisassemblyGraphView implements IContentRenderer {
 		}
 
 		try {
-			const nextGraph = await buildCfg2(
-				this.dumpInfo.debugInterface,
-				anchorAddress,
-			);
+			const nextGraph = await buildCfg2(DBG, anchorAddress);
 			if (this.isDisposed || token !== this.reloadToken) {
 				return;
 			}
@@ -884,10 +870,10 @@ export class VanillaDisassemblyGraphView implements IContentRenderer {
 		if (!this.followInstructionPointer && this.manualAddress !== null) {
 			return "Enter an address that exists in dump memory to view a graph.";
 		}
-		if (this.resolvedContext) {
+		if (resolvedContext) {
 			if (
 				this.followInstructionPointer &&
-				this.resolvedContext.anchorAddress === null
+				resolvedContext.anchorAddress === null
 			) {
 				return "No instruction pointer available.";
 			}
