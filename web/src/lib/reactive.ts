@@ -4,6 +4,10 @@ export class Signal<T> {
 	private listeners: SignalHandle<T>[] = [];
 	state: T;
 
+	constructor(initial: T) {
+		this.state = initial;
+	}
+
 	subscribe(listener: SignalListener<T>): SignalHandle<T> {
 		const handle = new SignalHandle(this, listener);
 		this.listeners.push(handle);
@@ -15,14 +19,19 @@ export class Signal<T> {
 	}
 
 	set(value: T): void {
+		if (value === this.state) return;
 		this.state = value;
+		this.notifyListeners();
+	}
+
+	private notifyListeners(): void {
 		this.listeners.forEach((handle) => {
 			handle.invoke();
 		});
 	}
 }
 
-class SignalHandle<T> {
+export class SignalHandle<T> {
 	private _signal: Signal<T>;
 	private _callback: SignalListener<T>;
 	private _pending: boolean = false;

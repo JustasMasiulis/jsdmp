@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { CONTEXT_AMD64, Context, resolveDumpContext } from "./context";
+import { CONTEXT_AMD64, Context } from "./cpu_context";
 import type {
 	MinidumpAssociatedThread,
 	MinidumpExceptionStream,
@@ -172,20 +172,21 @@ describe("MinidumpDebugInterface", () => {
 				},
 			],
 		});
-		const debugInterface = new MinidumpDebugInterface(source);
+		const di = new MinidumpDebugInterface(source);
 
-		expect(debugInterface.dm.currentThreadId).toBe(7);
-		expect(debugInterface.dm.currentContext).toBeNull();
-		expect(debugInterface.dm.threads[0]?.context).toBeInstanceOf(Context);
-		expect(await debugInterface.read(0x5000n, 3)).toEqual(
+		expect(di.currentThread.state?.id).toBe(7);
+		expect(di.currentContext.state).toBeInstanceOf(Context);
+		expect(di.threads.state[0]?.context).toBeInstanceOf(Context);
+		expect(di.threads.state[0]?.exception).toBeNull();
+		expect(await di.read(0x5000n, 3)).toEqual(
 			new Uint8Array([0x90, 0x90, 0xc3]),
 		);
-		expect(await debugInterface.read(0x5000n, 0x10, 1)).toEqual(
+		expect(await di.read(0x5000n, 0x10, 1)).toEqual(
 			new Uint8Array([0x90, 0x90, 0xc3]),
 		);
 	});
 
-	it("prefers exception contexts for current state and keeps concrete dump metadata", async () => {
+	it("prefers exception contexts for current state and keeps concrete dump metadata", () => {
 		const threadContextBytes = makeContextBytes(0x401000n);
 		const exceptionContextBytes = makeContextBytes(0x402000n);
 		const source = buildSource({
@@ -248,25 +249,49 @@ describe("MinidumpDebugInterface", () => {
 				},
 			],
 		});
-		const debugInterface = new MinidumpDebugInterface(source);
-		const resolvedContext = await resolveDumpContext(debugInterface);
+		const di = new MinidumpDebugInterface(source);
 
-		expect(debugInterface.dm.currentThreadId).toBe(11);
-		expect(debugInterface.dm.currentContext).toBeInstanceOf(Context);
-		expect(debugInterface.checksum).toBe(0x12345678);
-		expect(debugInterface.systemInfo?.processorArchitectureName).toBe("x64");
-		expect(debugInterface.miscInfo?.processId).toBe(1234);
-		expect(debugInterface.exceptionInfo?.exceptionRecord.exceptionCode).toBe(
-			0xc0000005,
-		);
-		expect(debugInterface.dm.modules[0]?.pdb).toEqual({
+		expect(di.currentThread.state?.id).toBe(11);
+		expect(di.currentContext.state).toBeInstanceOf(Context);
+		expect(di.currentContext.state?.ip).toBe(0x402000n);
+		expect(di.checksum).toBe(0x12345678);
+		expect(di.systemInfo?.processorArchitectureName).toBe("x64");
+		expect(di.miscInfo?.processId).toBe(1234);
+		expect(di.exceptionInfo?.exceptionRecord.exceptionCode).toBe(0xc0000005);
+		expect(di.modules.state[0]?.pdb).toEqual({
 			path: "example.pdb",
 			guid: "GUID",
 			age: 2,
 		});
-		expect(resolvedContext.threadId).toBe(11);
-		expect(resolvedContext.instructionPointer).toBe(0x402000n);
-		expect(resolvedContext.exceptionAddress).toBe(0x5000n);
-		expect(resolvedContext.anchorAddress).toBe(0x5000n);
+
+		const thread = di.threads.state[0];
+		expect(thread?.exception).not.toBeNull();
+		expect(thread?.exception?.code).toBe(0xc0000005);
+		expect(thread?.exception?.address).toBe(0x5000n);
+		expect(thread?.exception?.context).toBeInstanceOf(Context);
+		expect(thread?.exception?.context?.ip).toBe(0x402000n);
+	});
+
+	it("selectThread switches current thread and context", () => {
+		const thread1Context = makeContextBytes(0x401000n);
+		const thread2Context = makeContextBytes(0x501000n);
+		const source = buildSource({
+			associatedThreads: [
+				makeThread(1, makeLocation(0x1000)),
+				makeThread(2, makeLocation(0x2000)),
+			],
+			locationBytes: [
+				[0x1000, thread1Context],
+				[0x2000, thread2Context],
+			],
+		});
+		const di = new MinidumpDebugInterface(source);
+
+		expect(di.currentThread.state?.id).toBe(1);
+		expect(di.currentContext.state?.ip).toBe(0x401000n);
+
+		di.selectThread(di.threads.state[1]);
+		expect(di.currentThread.state?.id).toBe(2);
+		expect(di.currentContext.state?.ip).toBe(0x501000n);
 	});
 });

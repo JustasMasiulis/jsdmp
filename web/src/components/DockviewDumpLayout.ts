@@ -6,8 +6,6 @@ import {
 	themeLight,
 	type VisibilityEvent,
 } from "dockview-core";
-import { resolveContextForThread } from "../lib/context";
-import { DBG, resolvedContext, setResolvedContext } from "../lib/debugState";
 import {
 	addMemoryPanel,
 	applyDefaultLayout,
@@ -30,15 +28,9 @@ import { VanillaThreadsView } from "./VanillaThreadsView";
 
 export class DockviewDumpLayout {
 	private dockview: DockviewApi;
-	private selectedThreadId: number;
-	private threadsPanels = new Set<VanillaThreadsView>();
-	private disassemblyPanels = new Set<VanillaDisassemblyView>();
-	private graphPanels = new Set<VanillaDisassemblyGraphView>();
 	private toolbar: HTMLElement;
 
 	constructor(private container: HTMLElement) {
-		this.selectedThreadId = DBG.dm.currentThreadId;
-
 		const shell = document.createElement("section");
 		shell.className = "dump-dockview-shell";
 		shell.setAttribute("aria-label", "Docked dump details");
@@ -79,18 +71,6 @@ export class DockviewDumpLayout {
 		this.refreshToolbar();
 	}
 
-	// ─── thread switching ─────────────────────────────────────────────────────
-
-	private onThreadSelect = async (threadId: number): Promise<void> => {
-		this.selectedThreadId = threadId;
-		for (const p of this.threadsPanels) p.setSelectedThreadId(threadId);
-
-		const newContext = await resolveContextForThread(DBG, threadId);
-		setResolvedContext(newContext ?? resolvedContext);
-		for (const v of this.disassemblyPanels) v.update();
-		for (const v of this.graphPanels) v.update();
-	};
-
 	// ─── panel factory ────────────────────────────────────────────────────────
 
 	private createComponent = (options: {
@@ -106,14 +86,10 @@ export class DockviewDumpLayout {
 					container: el,
 					panelId: options.id,
 				});
-				this.disassemblyPanels.add(view);
 				return {
 					element: el,
 					init: () => {},
-					dispose: () => {
-						view.dispose();
-						this.disassemblyPanels.delete(view);
-					},
+					dispose: () => view.dispose(),
 				};
 			}
 			case DISASSEMBLY_GRAPH_COMPONENT: {
@@ -121,14 +97,10 @@ export class DockviewDumpLayout {
 					container: el,
 					panelId: options.id,
 				});
-				this.graphPanels.add(view);
 				return {
 					element: el,
 					init: () => {},
-					dispose: () => {
-						view.dispose();
-						this.graphPanels.delete(view);
-					},
+					dispose: () => view.dispose(),
 				};
 			}
 			case MEMORY_COMPONENT: {
@@ -146,17 +118,11 @@ export class DockviewDumpLayout {
 				const view = new VanillaThreadsView({
 					container: el,
 					panelId: options.id,
-					selectedThreadId: this.selectedThreadId,
-					onThreadSelect: this.onThreadSelect,
 				});
-				this.threadsPanels.add(view);
 				return {
 					element: el,
 					init: () => {},
-					dispose: () => {
-						view.dispose();
-						this.threadsPanels.delete(view);
-					},
+					dispose: () => view.dispose(),
 				};
 			}
 			default: {

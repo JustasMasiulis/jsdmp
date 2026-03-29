@@ -1,6 +1,5 @@
 import { DockviewDumpLayout } from "./components/DockviewDumpLayout";
-import { resolveDumpContext } from "./lib/context";
-import { setDebugInterface, setResolvedContext } from "./lib/debugState";
+import { setDBG } from "./lib/debugState";
 import { ALLOWED_DUMP_EXTENSIONS, isSupportedDumpFile } from "./lib/dumpInfo";
 import { MiniDump } from "./lib/minidump";
 import { MinidumpDebugInterface } from "./lib/minidump_debug_interface";
@@ -128,17 +127,10 @@ class WasmDumpDebugger {
 		this.setParsing(true);
 		this.showDropzone(true);
 
-		let contextWarning: string | null;
 		try {
 			const data = await file.arrayBuffer();
-			const debugInterface = new MinidumpDebugInterface(new MiniDump(data));
-			setDebugInterface(debugInterface);
-
-			const resolvedContext = await resolveDumpContext(debugInterface);
-			setResolvedContext(resolvedContext);
+			setDBG(new MinidumpDebugInterface(new MiniDump(data)));
 		} catch (error) {
-			contextWarning = error instanceof Error ? error.message : String(error);
-
 			const message = error instanceof Error ? error.message : String(error);
 			this.setError(`Failed to parse dump file: ${message}`);
 			this.setParsing(false);
@@ -146,11 +138,6 @@ class WasmDumpDebugger {
 		}
 
 		this.setParsing(false);
-
-		if (contextWarning) {
-			this.setWarning(contextWarning);
-		}
-
 		this.mountLayout();
 	}
 

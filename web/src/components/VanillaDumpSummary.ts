@@ -306,8 +306,9 @@ const buildExceptionSection = (container: HTMLElement): void => {
 };
 
 const buildModulesSection = (container: HTMLElement): void => {
-	const dm = DBG.dm;
-	if (dm.modules.length > 0) {
+	const modules = DBG.modules.state;
+	const unloadedModules = DBG.unloadedModules.state;
+	if (modules.length > 0) {
 		container.append(
 			mkTable(
 				[
@@ -320,22 +321,22 @@ const buildModulesSection = (container: HTMLElement): void => {
 					"GUID",
 					"Age",
 				],
-				buildModuleRows(dm.modules),
+				buildModuleRows(modules),
 			),
 		);
 	}
-	if (dm.unloadedModules.length > 0) {
+	if (unloadedModules.length > 0) {
 		container.append(
 			mkTable(
 				["Base", "Size", "Checksum", "TimeDateStamp", "Name"],
-				buildUnloadedModuleRows(dm.unloadedModules),
+				buildUnloadedModuleRows(unloadedModules),
 			),
 		);
 	}
 };
 
 const buildMemorySection = (container: HTMLElement): void => {
-	const summary = summarizeMemoryList(DBG.dm.memoryRanges ?? []);
+	const summary = summarizeMemoryList(DBG.memoryRanges.state);
 	container.append(
 		mkRow("Memory Ranges", summary ? String(summary.rangeCount) : "0"),
 	);

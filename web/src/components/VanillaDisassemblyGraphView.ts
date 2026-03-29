@@ -5,7 +5,8 @@ import {
 	parseHexAddress,
 	saveAddressPanelState,
 } from "../lib/addressPanelState";
-import { DBG, resolvedContext } from "../lib/debugState";
+import type { Context } from "../lib/cpu_context";
+import { DBG } from "../lib/debugState";
 import {
 	buildCfg2,
 	type CfgBuildResult,
@@ -20,6 +21,7 @@ import {
 	type EdgeDescriptor,
 	GraphLayoutCore,
 } from "../lib/graph-layout-core";
+import type { SignalHandle } from "../lib/reactive";
 
 const DISASSEMBLY_GRAPH_PANEL_STATE_KEY =
 	"wasm-dump-debugger:disassembly-graph-panel-state:v1";
@@ -87,6 +89,7 @@ const cfgResultToAnnotatedDescriptor = (
 
 export class VanillaDisassemblyGraphView implements IContentRenderer {
 	private readonly panelId: string;
+	private readonly contextHandle: SignalHandle<Context | null>;
 	private graphResult: CfgBuildResult | null = null;
 	private followInstructionPointer = true;
 	private manualAddress: bigint | null = null;
@@ -127,9 +130,9 @@ export class VanillaDisassemblyGraphView implements IContentRenderer {
 		const next = this.followCheckbox.checked;
 		this.followInstructionPointer = next;
 		if (!next && this.manualAddress === null) {
-			const followAddress = resolvedContext?.anchorAddress;
-			if (followAddress !== null && followAddress !== undefined) {
-				this.manualAddress = followAddress;
+			const ip = DBG.currentContext.state?.ip ?? null;
+			if (ip !== null) {
+				this.manualAddress = ip;
 			}
 		}
 		this.selectedNodeId = null;
@@ -273,11 +276,13 @@ export class VanillaDisassemblyGraphView implements IContentRenderer {
 			this.resizeObserver.observe(this.graphHost);
 		}
 
+		this.contextHandle = DBG.currentContext.subscribe(() => this.update());
+
 		this.restoreState();
 		this.refreshView(true);
 	}
 
-	update() {
+	private update() {
 		if (this.isDisposed) {
 			return;
 		}
@@ -295,6 +300,7 @@ export class VanillaDisassemblyGraphView implements IContentRenderer {
 		}
 
 		this.isDisposed = true;
+		this.contextHandle.dispose();
 		this.root.removeEventListener("submit", this.onAddressSubmit);
 		this.followCheckbox.removeEventListener("change", this.onFollowChange);
 		this.graphHost.removeEventListener("click", this.onGraphHostClick);
@@ -439,7 +445,7 @@ export class VanillaDisassemblyGraphView implements IContentRenderer {
 
 	private currentAnchor() {
 		if (this.followInstructionPointer) {
-			return resolvedContext?.anchorAddress ?? null;
+			return DBG.currentContext.state?.ip ?? null;
 		}
 
 		if (this.manualAddress === null) {
@@ -870,13 +876,8 @@ export class VanillaDisassemblyGraphView implements IContentRenderer {
 		if (!this.followInstructionPointer && this.manualAddress !== null) {
 			return "Enter an address that exists in dump memory to view a graph.";
 		}
-		if (resolvedContext) {
-			if (
-				this.followInstructionPointer &&
-				resolvedContext.anchorAddress === null
-			) {
-				return "No instruction pointer available.";
-			}
+		if (this.followInstructionPointer && DBG.currentContext.state?.ip == null) {
+			return "No instruction pointer available.";
 		}
 		return "Disassembly graph view is unavailable for this dump.";
 	}

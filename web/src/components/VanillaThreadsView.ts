@@ -2,12 +2,11 @@ import { html, nothing, render } from "lit-html";
 import type { DebugThread } from "../lib/debug_interface";
 import { DBG } from "../lib/debugState";
 import { fmtHex8, fmtHex16, fmtPriority } from "../lib/formatting";
+import type { SignalHandle } from "../lib/reactive";
 
 export type VanillaThreadsViewOptions = {
 	container: HTMLElement;
 	panelId: string;
-	selectedThreadId: number;
-	onThreadSelect: (id: number) => void;
 };
 
 const HEADERS = [
@@ -49,17 +48,17 @@ const threadToRow = (t: DebugThread): string[] => [
 export class VanillaThreadsView {
 	private threads: DebugThread[];
 	private rows: string[][];
-	private selectedThreadId: number;
+	private handle: SignalHandle<DebugThread | null>;
 
 	constructor(private options: VanillaThreadsViewOptions) {
-		this.threads = DBG.dm.threads;
+		this.threads = DBG.threads.state;
 		this.rows = this.threads.map(threadToRow);
-		this.selectedThreadId = options.selectedThreadId;
+		this.handle = DBG.currentThread.subscribe(() => this.doRender());
 		this.doRender();
 	}
 
 	private doRender(): void {
-		const { onThreadSelect } = this.options;
+		const selectedId = DBG.currentThread.state?.id;
 		render(
 			html`
 				<section class="dump-info-panel" aria-label="Threads">
@@ -81,8 +80,8 @@ export class VanillaThreadsView {
 										: this.threads.map(
 												(thread, i) => html`
 												<tr
-													class=${`is-clickable${thread.id === this.selectedThreadId ? " is-selected" : ""}`}
-													@click=${() => onThreadSelect(thread.id)}
+													class=${`is-clickable${thread.id === selectedId ? " is-selected" : ""}`}
+													@click=${() => DBG.selectThread(thread)}
 												>
 													${this.rows[i].map(
 														(cell) => html`<td><code>${cell}</code></td>`,
@@ -100,12 +99,8 @@ export class VanillaThreadsView {
 		);
 	}
 
-	setSelectedThreadId(id: number): void {
-		this.selectedThreadId = id;
-		this.doRender();
-	}
-
 	dispose(): void {
+		this.handle.dispose();
 		render(nothing, this.options.container);
 	}
 }

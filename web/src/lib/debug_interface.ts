@@ -1,10 +1,20 @@
 import type { Context } from "./cpu_context";
+import type { Signal } from "./reactive";
 
 export type Address = bigint;
 
 export type DebugMemoryRange = {
 	address: Address;
 	size: bigint;
+};
+
+export type DebugThreadException = {
+	code: number;
+	flags: number;
+	address: Address;
+	record: bigint;
+	parameters: bigint[];
+	context: Context | null;
 };
 
 export type DebugThread = {
@@ -17,6 +27,7 @@ export type DebugThread = {
 		address: Address;
 	};
 	context: Context | null;
+	exception: DebugThreadException | null;
 	dumpFlags: number;
 	dumpError: number;
 	exitStatus: number;
@@ -49,18 +60,14 @@ export type DebugUnloadedModule = {
 	path: string;
 };
 
-export type DebugDataModel = {
-	threads: DebugThread[];
-	modules: DebugModule[];
-	unloadedModules: DebugUnloadedModule[];
-	memoryRanges: DebugMemoryRange[];
-
-	currentThreadId: number;
-	currentContext: Context | null;
-};
-
 export type DebugInterface = {
-	readonly dm: DebugDataModel;
+	readonly threads: Signal<DebugThread[]>;
+	readonly modules: Signal<DebugModule[]>;
+	readonly unloadedModules: Signal<DebugUnloadedModule[]>;
+	readonly memoryRanges: Signal<DebugMemoryRange[]>;
+	readonly currentThread: Signal<DebugThread | null>;
+	readonly currentContext: Signal<Context | null>;
 
 	read(address: bigint, size: number, minSize?: number): Promise<Uint8Array>;
+	selectThread(thread: DebugThread): void;
 };

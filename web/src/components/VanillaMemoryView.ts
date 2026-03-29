@@ -5,8 +5,10 @@ import {
 	parseHexAddress,
 	saveAddressPanelState,
 } from "../lib/addressPanelState";
+import type { Context } from "../lib/cpu_context";
 import type { DebugMemoryRange } from "../lib/debug_interface";
-import { DBG, resolvedContext } from "../lib/debugState";
+import { DBG } from "../lib/debugState";
+import type { SignalHandle } from "../lib/reactive";
 import {
 	FixedRowVirtualTable,
 	type VirtualListingAdapter,
@@ -86,6 +88,7 @@ const getPanelStorageKey = (panelId: string) =>
 export class VanillaMemoryView {
 	private readonly panelId: string;
 	private readonly panelIndex: number;
+	private readonly contextHandle: SignalHandle<Context | null>;
 	private ranges: DebugMemoryRange[] = [];
 	private span: MemorySpan | null = null;
 	private totalRows = 0;
@@ -153,6 +156,9 @@ export class VanillaMemoryView {
 
 		this.root.addEventListener("submit", this.onAddressSubmit);
 		this.followCheckbox.addEventListener("change", this.onFollowChange);
+		this.contextHandle = DBG.currentContext.subscribe(() =>
+			this.maybeFollowInstructionPointer(),
+		);
 
 		this.restoreState();
 		this.recomputeRangeState();
@@ -168,6 +174,7 @@ export class VanillaMemoryView {
 		}
 
 		this.isDisposed = true;
+		this.contextHandle.dispose();
 		this.root.removeEventListener("submit", this.onAddressSubmit);
 		this.followCheckbox.removeEventListener("change", this.onFollowChange);
 		this.table.dispose();
@@ -268,7 +275,7 @@ export class VanillaMemoryView {
 	}
 
 	private recomputeRangeState() {
-		this.ranges = DBG.dm.memoryRanges;
+		this.ranges = DBG.memoryRanges.state;
 		if (this.ranges.length === 0) {
 			this.span = null;
 			this.totalRows = 0;
@@ -317,7 +324,7 @@ export class VanillaMemoryView {
 	}
 
 	private instructionPointer() {
-		return resolvedContext?.anchorAddress ?? null;
+		return DBG.currentContext.state?.ip ?? null;
 	}
 
 	private maybeFollowInstructionPointer() {

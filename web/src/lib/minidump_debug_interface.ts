@@ -1,10 +1,10 @@
 import { Context } from "./cpu_context";
 import type {
-	DebugDataModel,
 	DebugInterface,
 	DebugMemoryRange,
 	DebugModule,
 	DebugThread,
+	DebugThreadException,
 	DebugUnloadedModule,
 } from "./debug_interface";
 import {
@@ -18,6 +18,8 @@ import {
 	type MinidumpSystemInfo,
 	type MinidumpUnloadedModule,
 } from "./minidump";
+import { Signal } from "./reactive";
+import { assert } from "./utils";
 
 export type MinidumpDebugSystemInfo = MinidumpSystemInfo;
 export type MinidumpDebugMiscInfo = MinidumpMiscInfo;
@@ -117,6 +119,7 @@ const toDebugUnloadedModule = (
 const toDebugThread = (
 	thread: MinidumpAssociatedThread,
 	context: Context | null,
+	exception: DebugThreadException | null,
 ): DebugThread => ({
 	id: thread.threadId,
 	suspendCount: thread.suspendCount ?? 0,
@@ -127,6 +130,7 @@ const toDebugThread = (
 		address: thread.stack?.startOfMemoryRange ?? 0n,
 	},
 	context,
+	exception,
 	dumpFlags: thread.dumpFlags ?? 0,
 	dumpError: thread.dumpError ?? 0,
 	exitStatus: thread.exitStatus ?? 0,
@@ -142,7 +146,13 @@ export const getMinidumpStreamTypeName = (streamType: number) =>
 	MiniDumpStreamType[streamType] ?? `Unknown(${streamType})`;
 
 export class MinidumpDebugInterface implements DebugInterface {
-	readonly dm: DebugDataModel;
+	readonly threads: Signal<DebugThread[]>;
+	readonly modules: Signal<DebugModule[]>;
+	readonly unloadedModules: Signal<DebugUnloadedModule[]>;
+	readonly memoryRanges: Signal<DebugMemoryRange[]>;
+	readonly currentThread: Signal<DebugThread | null>;
+	readonly currentContext: Signal<Context | null>;
+
 	readonly checksum: number;
 	readonly timestamp: number;
 	readonly flags: bigint;
@@ -166,20 +176,37 @@ export class MinidumpDebugInterface implements DebugInterface {
 		this.systemInfo = source.systemInfo;
 		this.miscInfo = source.miscInfo;
 
-		const threads = source.associatedThreads.map((thread) =>
-			toDebugThread(thread, this.registerThreadContext(thread)),
-		);
-		const exceptionInfo = this.registerExceptionInfo(source.exceptionStream);
+		const processorArchitecture = source.systemInfo?.processorArchitecture ?? 0;
+		assert(processorArchitecture === 9, "Only x64 dumps are supported");
 
+		const exceptionInfo = this.registerExceptionInfo(source.exceptionStream);
 		this.exceptionInfo = exceptionInfo;
-		this.dm = {
-			threads,
-			modules: source.moduleList.map(toDebugModule),
-			unloadedModules: source.unloadedModuleList.map(toDebugUnloadedModule),
-			memoryRanges: source.memoryRanges.map(toDebugMemoryRange),
-			currentThreadId: this.selectCurrentThreadId(threads, exceptionInfo),
-			currentContext: this.selectCurrentContext(exceptionInfo),
-		};
+
+		const threads = source.associatedThreads.map((thread) => {
+			const threadContext = this.registerThreadContext(thread);
+			const exception =
+				exceptionInfo && thread.threadId === exceptionInfo.threadId
+					? this.buildThreadException(exceptionInfo)
+					: null;
+			return toDebugThread(thread, threadContext, exception);
+		});
+
+		const initialThread = this.selectCurrentThread(threads, exceptionInfo);
+		this.threads = new Signal(threads);
+		this.modules = new Signal(source.moduleList.map(toDebugModule));
+		this.unloadedModules = new Signal(
+			source.unloadedModuleList.map(toDebugUnloadedModule),
+		);
+		this.memoryRanges = new Signal(source.memoryRanges.map(toDebugMemoryRange));
+		this.currentThread = new Signal(initialThread);
+		this.currentContext = new Signal(
+			initialThread?.exception?.context ?? initialThread?.context ?? null,
+		);
+	}
+
+	selectThread(thread: DebugThread): void {
+		this.currentThread.set(thread);
+		this.currentContext.set(thread.exception?.context ?? thread.context);
 	}
 
 	async read(
@@ -205,6 +232,19 @@ export class MinidumpDebugInterface implements DebugInterface {
 		throw new Error(
 			`Unable to read ${requiredSize}-${size} byte range at 0x${address.toString(16).toUpperCase()}`,
 		);
+	}
+
+	private buildThreadException(
+		info: MinidumpDebugExceptionInfo,
+	): DebugThreadException {
+		return {
+			code: info.exceptionRecord.exceptionCode,
+			flags: info.exceptionRecord.exceptionFlags,
+			address: info.exceptionRecord.exceptionAddress,
+			record: info.exceptionRecord.exceptionRecord,
+			parameters: [...info.exceptionRecord.exceptionInformation],
+			context: info.context,
+		};
 	}
 
 	private registerThreadContext(
@@ -257,24 +297,19 @@ export class MinidumpDebugInterface implements DebugInterface {
 		};
 	}
 
-	private selectCurrentThreadId(
+	private selectCurrentThread(
 		threads: DebugThread[],
 		exceptionInfo: MinidumpDebugExceptionInfo | null,
-	) {
+	): DebugThread | null {
 		if (exceptionInfo?.threadId) {
-			return exceptionInfo.threadId;
+			const exceptionThread = threads.find(
+				(t) => t.id === exceptionInfo.threadId,
+			);
+			if (exceptionThread) return exceptionThread;
 		}
 
 		return (
-			threads.find((thread) => thread.context !== null)?.id ??
-			threads[0]?.id ??
-			0
+			threads.find((thread) => thread.context !== null) ?? threads[0] ?? null
 		);
-	}
-
-	private selectCurrentContext(
-		exceptionInfo: MinidumpDebugExceptionInfo | null,
-	): Context | null {
-		return exceptionInfo?.context ?? null;
 	}
 }
