@@ -5,7 +5,8 @@
       "WebSearch",
       "Bash(find /d/web-dmp -name *.test.ts -o -name *.spec.ts -o -name README*)",
       "Bash(ls -la /d/web-dmp/*.json)",
-      "Bash(xargs grep:*)"
+      "Bash(xargs grep:*)",
+      "Bash(bun test:*)"
     ]
   }
 }

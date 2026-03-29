@@ -1,9 +1,7 @@
+import { Context } from "./cpu_context";
 import type {
-	Address,
-	DebugCodeViewInfo,
 	DebugDataModel,
 	DebugInterface,
-	DebugLocation,
 	DebugMemoryRange,
 	DebugModule,
 	DebugThread,
@@ -13,6 +11,7 @@ import {
 	type MiniDump,
 	MiniDumpStreamType,
 	type MinidumpAssociatedThread,
+	type MinidumpCodeViewInfo,
 	type MinidumpExceptionStream,
 	type MinidumpMiscInfo,
 	type MinidumpModule,
@@ -22,6 +21,11 @@ import {
 
 export type MinidumpDebugSystemInfo = MinidumpSystemInfo;
 export type MinidumpDebugMiscInfo = MinidumpMiscInfo;
+
+type MinidumpLocation = {
+	size: number;
+	rva: number;
+};
 
 export type MinidumpDebugExceptionInfo = {
 	threadId: number;
@@ -33,8 +37,8 @@ export type MinidumpDebugExceptionInfo = {
 		numberParameters: number;
 		exceptionInformation: bigint[];
 	};
-	contextLocation: DebugLocation;
-	context: Address;
+	contextLocation: MinidumpLocation;
+	context: Context | null;
 };
 
 export type MinidumpDebugSource = Pick<
@@ -54,30 +58,14 @@ export type MinidumpDebugSource = Pick<
 	| "readMemoryAt"
 >;
 
-type SyntheticRange = {
-	address: Address;
-	bytes: Uint8Array;
-};
-
-const SYNTHETIC_CONTEXT_BASE = 1n << 64n;
-const SYNTHETIC_CONTEXT_ALIGNMENT = 0x100n;
-
-const EMPTY_LOCATION: DebugLocation = {
+const EMPTY_LOCATION: MinidumpLocation = {
 	size: 0,
 	rva: 0,
 };
 
-const alignSyntheticSize = (size: number) => {
-	const sizeBig = BigInt(Math.max(1, size));
-	const remainder = sizeBig % SYNTHETIC_CONTEXT_ALIGNMENT;
-	return remainder === 0n
-		? sizeBig
-		: sizeBig + (SYNTHETIC_CONTEXT_ALIGNMENT - remainder);
-};
-
-const toDebugLocation = (
+const toMinidumpLocation = (
 	location?: { dataSize: number; rva: number } | null,
-): DebugLocation =>
+): MinidumpLocation =>
 	location
 		? {
 				size: location.dataSize,
@@ -94,7 +82,7 @@ const toDebugMemoryRange = (range: {
 });
 
 const toDebugCodeViewPdb = (
-	codeViewInfo: DebugCodeViewInfo | null,
+	codeViewInfo: MinidumpCodeViewInfo | null,
 ): DebugModule["pdb"] => {
 	if (!codeViewInfo || codeViewInfo.format !== "RSDS") {
 		return undefined;
@@ -113,9 +101,6 @@ const toDebugModule = (module: MinidumpModule): DebugModule => ({
 	checksum: module.checkSum,
 	timeDateStamp: module.timeDateStamp,
 	path: module.moduleName,
-	codeViewRecord: toDebugLocation(module.cvRecord),
-	codeViewInfo: module.codeViewInfo,
-	miscRecord: toDebugLocation(module.miscRecord),
 	pdb: toDebugCodeViewPdb(module.codeViewInfo),
 });
 
@@ -131,7 +116,7 @@ const toDebugUnloadedModule = (
 
 const toDebugThread = (
 	thread: MinidumpAssociatedThread,
-	context: Address,
+	context: Context | null,
 ): DebugThread => ({
 	id: thread.threadId,
 	suspendCount: thread.suspendCount ?? 0,
@@ -140,10 +125,8 @@ const toDebugThread = (
 	teb: thread.teb ?? 0n,
 	stack: {
 		address: thread.stack?.startOfMemoryRange ?? 0n,
-		location: toDebugLocation(thread.stack?.location),
 	},
 	context,
-	contextLocation: toDebugLocation(thread.threadContext),
 	dumpFlags: thread.dumpFlags ?? 0,
 	dumpError: thread.dumpError ?? 0,
 	exitStatus: thread.exitStatus ?? 0,
@@ -170,8 +153,6 @@ export class MinidumpDebugInterface implements DebugInterface {
 	readonly exceptionInfo: MinidumpDebugExceptionInfo | null;
 
 	private readonly source: MinidumpDebugSource;
-	private readonly syntheticRanges: SyntheticRange[] = [];
-	private nextSyntheticAddress = SYNTHETIC_CONTEXT_BASE;
 
 	constructor(source: MinidumpDebugSource) {
 		this.source = source;
@@ -197,7 +178,7 @@ export class MinidumpDebugInterface implements DebugInterface {
 			unloadedModules: source.unloadedModuleList.map(toDebugUnloadedModule),
 			memoryRanges: source.memoryRanges.map(toDebugMemoryRange),
 			currentThreadId: this.selectCurrentThreadId(threads, exceptionInfo),
-			currentContext: this.selectCurrentContext(threads, exceptionInfo),
+			currentContext: this.selectCurrentContext(exceptionInfo),
 		};
 	}
 
@@ -216,11 +197,6 @@ export class MinidumpDebugInterface implements DebugInterface {
 			);
 		}
 
-		const syntheticBytes = this.readSynthetic(address, size, requiredSize);
-		if (syntheticBytes) {
-			return syntheticBytes;
-		}
-
 		const memoryBytes = this.source.readMemoryAt(address, size, requiredSize);
 		if (memoryBytes) {
 			return memoryBytes;
@@ -231,13 +207,20 @@ export class MinidumpDebugInterface implements DebugInterface {
 		);
 	}
 
-	private registerThreadContext(thread: MinidumpAssociatedThread): Address {
+	private registerThreadContext(
+		thread: MinidumpAssociatedThread,
+	): Context | null {
 		if (!thread.threadContext) {
-			return 0n;
+			return null;
 		}
 
 		const bytes = this.source.readLocationBytes(thread.threadContext);
-		return bytes ? this.registerSynthetic(bytes) : 0n;
+		if (!bytes) return null;
+		try {
+			return new Context(bytes);
+		} catch {
+			return null;
+		}
 	}
 
 	private registerExceptionInfo(
@@ -248,7 +231,14 @@ export class MinidumpDebugInterface implements DebugInterface {
 		}
 
 		const bytes = this.source.readLocationBytes(exceptionStream.threadContext);
-		const context = bytes ? this.registerSynthetic(bytes) : 0n;
+		let context: Context | null = null;
+		if (bytes) {
+			try {
+				context = new Context(bytes);
+			} catch {
+				context = null;
+			}
+		}
 
 		return {
 			threadId: exceptionStream.threadId,
@@ -262,44 +252,9 @@ export class MinidumpDebugInterface implements DebugInterface {
 					...exceptionStream.exceptionRecord.exceptionInformation,
 				],
 			},
-			contextLocation: toDebugLocation(exceptionStream.threadContext),
+			contextLocation: toMinidumpLocation(exceptionStream.threadContext),
 			context,
 		};
-	}
-
-	private registerSynthetic(bytes: Uint8Array): Address {
-		const address = this.nextSyntheticAddress;
-		this.syntheticRanges.push({
-			address,
-			bytes,
-		});
-		this.nextSyntheticAddress += alignSyntheticSize(bytes.byteLength);
-		return address;
-	}
-
-	private readSynthetic(
-		address: Address,
-		size: number,
-		minSize: number,
-	): Uint8Array | null {
-		for (const range of this.syntheticRanges) {
-			const rangeStart = range.address;
-			const rangeEnd = range.address + BigInt(range.bytes.byteLength);
-			if (address < rangeStart || address >= rangeEnd) {
-				continue;
-			}
-
-			const available = rangeEnd - address;
-			if (available < BigInt(minSize)) {
-				return null;
-			}
-
-			const offset = Number(address - rangeStart);
-			const byteCount = available < BigInt(size) ? Number(available) : size;
-			return range.bytes.slice(offset, offset + byteCount);
-		}
-
-		return null;
 	}
 
 	private selectCurrentThreadId(
@@ -311,22 +266,15 @@ export class MinidumpDebugInterface implements DebugInterface {
 		}
 
 		return (
-			threads.find((thread) => thread.context !== 0n)?.id ?? threads[0]?.id ?? 0
+			threads.find((thread) => thread.context !== null)?.id ??
+			threads[0]?.id ??
+			0
 		);
 	}
 
 	private selectCurrentContext(
-		threads: DebugThread[],
 		exceptionInfo: MinidumpDebugExceptionInfo | null,
-	) {
-		if (exceptionInfo?.context) {
-			return exceptionInfo.context;
-		}
-
-		const currentThread = threads.find(
-			(thread) =>
-				thread.id === this.selectCurrentThreadId(threads, exceptionInfo),
-		);
-		return currentThread?.context ? 0n : 0n;
+	): Context | null {
+		return exceptionInfo?.context ?? null;
 	}
 }

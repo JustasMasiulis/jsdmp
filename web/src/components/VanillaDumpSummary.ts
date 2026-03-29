@@ -1,5 +1,4 @@
 import type {
-	DebugCodeViewInfo,
 	DebugMemoryRange,
 	DebugModule,
 	DebugUnloadedModule,
@@ -64,47 +63,17 @@ const summarizeMemoryList = (
 	};
 };
 
-const buildCodeViewColumns = (
-	cvi: DebugCodeViewInfo | null,
-): [string, string, string, string] => {
-	if (!cvi) return [emptyCell, emptyCell, emptyCell, emptyCell];
-	switch (cvi.format) {
-		case "RSDS":
-			return ["RSDS", cvi.pdbFileName || emptyCell, cvi.guid, String(cvi.age)];
-		case "NB10":
-			return [
-				"NB10",
-				cvi.pdbFileName || emptyCell,
-				`${fmtHex(cvi.timestamp, 8)} @ ${fmtHex(cvi.offset, 8)}`,
-				String(cvi.age),
-			];
-		case "unknown":
-			return [cvi.signature, emptyCell, fmtHex(cvi.rawSignature, 8), emptyCell];
-		case "invalid":
-			return ["invalid", cvi.error, emptyCell, emptyCell];
-	}
-};
-
 const buildModuleRows = (modules: DebugModule[]): string[][] =>
-	modules.map((m) => {
-		const [cvFormat, cvPdb, cvIdentifier, cvAge] = buildCodeViewColumns(
-			m.codeViewInfo,
-		);
-		return [
-			fmtHex16(m.address),
-			fmtHex8(m.size),
-			fmtHex8(m.checksum),
-			fmtHex8(m.timeDateStamp),
-			m.path || emptyCell,
-			fmtHex8(m.codeViewRecord.size),
-			cvFormat,
-			cvPdb,
-			cvIdentifier,
-			cvAge,
-			fmtHex8(m.miscRecord.size),
-			fmtHex8(m.miscRecord.rva),
-		];
-	});
+	modules.map((m) => [
+		fmtHex16(m.address),
+		fmtHex8(m.size),
+		fmtHex8(m.checksum),
+		fmtHex8(m.timeDateStamp),
+		m.path || emptyCell,
+		m.pdb?.path || emptyCell,
+		m.pdb?.guid || emptyCell,
+		m.pdb ? String(m.pdb.age) : emptyCell,
+	]);
 
 const buildUnloadedModuleRows = (modules: DebugUnloadedModule[]): string[][] =>
 	modules.map((m) => [
@@ -347,13 +316,9 @@ const buildModulesSection = (container: HTMLElement): void => {
 					"Checksum",
 					"TimeDateStamp",
 					"Name",
-					"CV Size",
-					"CV Format",
-					"CV PDB",
-					"CV Identifier",
-					"CV Age",
-					"Misc Size",
-					"Misc RVA",
+					"PDB",
+					"GUID",
+					"Age",
 				],
 				buildModuleRows(dm.modules),
 			),

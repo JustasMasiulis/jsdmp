@@ -28,7 +28,7 @@ const makeSource = (segments: MemorySegment[]): DisassemblyMemorySource => ({
 			size: BigInt(segment.bytes.byteLength),
 		})),
 		currentThreadId: 0,
-		currentContext: 0n,
+		currentContext: null,
 	},
 	read: async (address, size, minSize) => {
 		const segment = segments.find((candidate) => {

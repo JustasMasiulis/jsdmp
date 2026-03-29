@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { CONTEXT_AMD64, resolveDumpContext } from "./context";
+import { CONTEXT_AMD64, Context, resolveDumpContext } from "./context";
 import type {
 	MinidumpAssociatedThread,
 	MinidumpExceptionStream,
@@ -160,7 +160,7 @@ const buildSource = (options: SourceOptions = {}): MinidumpDebugSource => {
 };
 
 describe("MinidumpDebugInterface", () => {
-	it("assigns synthetic addresses to saved thread contexts and reads them asynchronously", async () => {
+	it("stores thread context bytes directly and reads real memory asynchronously", async () => {
 		const threadContext = makeContextBytes(0x401000n);
 		const source = buildSource({
 			associatedThreads: [makeThread(7, makeLocation(0x1000))],
@@ -175,20 +175,14 @@ describe("MinidumpDebugInterface", () => {
 		const debugInterface = new MinidumpDebugInterface(source);
 
 		expect(debugInterface.dm.currentThreadId).toBe(7);
-		expect(debugInterface.dm.currentContext).toBe(0n);
-		expect(debugInterface.dm.threads[0]?.context).not.toBe(0n);
+		expect(debugInterface.dm.currentContext).toBeNull();
+		expect(debugInterface.dm.threads[0]?.context).toBeInstanceOf(Context);
 		expect(await debugInterface.read(0x5000n, 3)).toEqual(
 			new Uint8Array([0x90, 0x90, 0xc3]),
 		);
 		expect(await debugInterface.read(0x5000n, 0x10, 1)).toEqual(
 			new Uint8Array([0x90, 0x90, 0xc3]),
 		);
-
-		const contextBytes = await debugInterface.read(
-			debugInterface.dm.threads[0]!.context,
-			0x100,
-		);
-		expect(contextBytes).toEqual(threadContext);
 	});
 
 	it("prefers exception contexts for current state and keeps concrete dump metadata", async () => {
@@ -258,7 +252,7 @@ describe("MinidumpDebugInterface", () => {
 		const resolvedContext = await resolveDumpContext(debugInterface);
 
 		expect(debugInterface.dm.currentThreadId).toBe(11);
-		expect(debugInterface.dm.currentContext).not.toBe(0n);
+		expect(debugInterface.dm.currentContext).toBeInstanceOf(Context);
 		expect(debugInterface.checksum).toBe(0x12345678);
 		expect(debugInterface.systemInfo?.processorArchitectureName).toBe("x64");
 		expect(debugInterface.miscInfo?.processId).toBe(1234);

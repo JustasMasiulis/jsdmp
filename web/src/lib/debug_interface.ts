@@ -1,38 +1,11 @@
-export type Address = bigint;
+import type { Context } from "./cpu_context";
 
-export type DebugLocation = {
-	size: number;
-	rva: number;
-};
+export type Address = bigint;
 
 export type DebugMemoryRange = {
 	address: Address;
 	size: bigint;
 };
-
-export type DebugCodeViewInfo =
-	| {
-			format: "RSDS";
-			guid: string;
-			age: number;
-			pdbFileName: string;
-	  }
-	| {
-			format: "NB10";
-			offset: number;
-			timestamp: number;
-			age: number;
-			pdbFileName: string;
-	  }
-	| {
-			format: "unknown";
-			signature: string;
-			rawSignature: number;
-	  }
-	| {
-			format: "invalid";
-			error: string;
-	  };
 
 export type DebugThread = {
 	id: number;
@@ -42,10 +15,8 @@ export type DebugThread = {
 	teb: Address;
 	stack: {
 		address: Address;
-		location: DebugLocation;
 	};
-	context: Address;
-	contextLocation: DebugLocation;
+	context: Context | null;
 	dumpFlags: number;
 	dumpError: number;
 	exitStatus: number;
@@ -63,9 +34,6 @@ export type DebugModule = {
 	checksum: number;
 	timeDateStamp: number;
 	path: string;
-	codeViewRecord: DebugLocation;
-	codeViewInfo: DebugCodeViewInfo | null;
-	miscRecord: DebugLocation;
 	pdb?: {
 		path: string;
 		guid: string;
@@ -88,7 +56,7 @@ export type DebugDataModel = {
 	memoryRanges: DebugMemoryRange[];
 
 	currentThreadId: number;
-	currentContext: Address; // 0 if the context from current thread should be used
+	currentContext: Context | null;
 };
 
 export type DebugInterface = {

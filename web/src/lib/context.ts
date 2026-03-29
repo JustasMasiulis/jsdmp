@@ -1,8 +1,8 @@
+import type { Context } from "./cpu_context";
 import type { DebugInterface, DebugThread } from "./debug_interface";
-import { readU16, readU32, readU64 } from "./reader";
 import { assert } from "./utils";
 
-export const CONTEXT_AMD64 = 0x00100000;
+export { CONTEXT_AMD64, Context } from "./cpu_context";
 
 export type ResolvedContextStatus =
 	| "ok"
@@ -33,99 +33,25 @@ export type ContextResolvableDebugInterface = DebugInterface & {
 	} | null;
 };
 
-const AMD64_CONTEXT_MIN_SIZE = 0x100;
 const MEMORY_PROBE_SIZE = 0x10;
 
-export class Context {
-	private _data: DataView;
-
-	constructor(data: ArrayBuffer | ArrayBufferView) {
-		this._data =
-			data instanceof DataView
-				? data
-				: ArrayBuffer.isView(data)
-					? new DataView(data.buffer, data.byteOffset, data.byteLength)
-					: new DataView(data);
-
-		if ((this.context_flags & CONTEXT_AMD64) !== CONTEXT_AMD64) {
-			throw new Error("Invalid context flags");
-		}
-	}
-
-	get context_flags(): number {
-		return readU32(this._data, 0x30);
-	}
-
-	get flags(): number {
-		return readU32(this._data, 0x44);
-	}
-
-	get ip(): bigint {
-		return readU64(this._data, 0xf8);
-	}
-
-	get sp(): bigint {
-		return readU64(this._data, 0x98);
-	}
-
-	gpr(idx: number): bigint {
-		return readU64(this._data, 0x78 + idx * 8);
-	}
-
-	seg(idx: number): number {
-		return readU16(this._data, 0x38 + idx * 2);
-	}
-}
-
-const readContextFromAddress = async (
-	debugInterface: DebugInterface,
-	address: bigint,
-): Promise<Context | null> => {
-	if (address === 0n) {
-		return null;
-	}
-
-	try {
-		return new Context(
-			await debugInterface.read(address, AMD64_CONTEXT_MIN_SIZE),
-		);
-	} catch {
-		return null;
-	}
-};
-
-export const tryThreadContext = async (
-	debugInterface: DebugInterface,
+export const tryThreadContext = (
 	thread: DebugThread,
-): Promise<ResolvedThreadContext | null> => {
-	const threadContext = await readContextFromAddress(
-		debugInterface,
-		thread.context,
-	);
-	return threadContext
-		? {
-				threadId: thread.id,
-				threadContext,
-			}
-		: null;
+): ResolvedThreadContext | null => {
+	if (!thread.context) return null;
+	return { threadId: thread.id, threadContext: thread.context };
 };
 
-const resolveThreadContext = async (
+const resolveThreadContext = (
 	debugInterface: DebugInterface,
-): Promise<ResolvedThreadContext> => {
+): ResolvedThreadContext => {
 	const currentThreadId = debugInterface.dm.currentThreadId || null;
 
-	if (debugInterface.dm.currentContext !== 0n) {
-		const currentContext = await readContextFromAddress(
-			debugInterface,
-			debugInterface.dm.currentContext,
-		);
-		if (currentContext) {
-			return {
-				threadId: currentThreadId,
-				threadContext: currentContext,
-			};
-		}
+	if (debugInterface.dm.currentContext !== null) {
+		return {
+			threadId: currentThreadId,
+			threadContext: debugInterface.dm.currentContext,
+		};
 	}
 
 	if (currentThreadId !== null) {
@@ -133,7 +59,7 @@ const resolveThreadContext = async (
 			(thread) => thread.id === currentThreadId,
 		);
 		const resolvedCurrentThread = currentThread
-			? await tryThreadContext(debugInterface, currentThread)
+			? tryThreadContext(currentThread)
 			: null;
 		if (resolvedCurrentThread) {
 			return resolvedCurrentThread;
@@ -141,7 +67,7 @@ const resolveThreadContext = async (
 	}
 
 	for (const thread of debugInterface.dm.threads) {
-		const resolved = await tryThreadContext(debugInterface, thread);
+		const resolved = tryThreadContext(thread);
 		if (resolved) {
 			return resolved;
 		}
@@ -159,7 +85,7 @@ export const resolveContextForThread = async (
 ): Promise<ResolvedDumpContext | null> => {
 	const thread = debugInterface.dm.threads.find((t) => t.id === threadId);
 	if (!thread) return null;
-	const resolved = await tryThreadContext(debugInterface, thread);
+	const resolved = tryThreadContext(thread);
 	if (!resolved?.threadContext) return null;
 	const ip = resolved.threadContext.ip;
 	const exceptionAddress =
@@ -192,7 +118,7 @@ export const resolveDumpContext = async (
 		debugInterface.systemInfo?.processorArchitecture ?? 0;
 	assert(processorArchitecture === 9, "Only x64 dumps are supported");
 
-	const resolved = await resolveThreadContext(debugInterface);
+	const resolved = resolveThreadContext(debugInterface);
 
 	const exceptionCode =
 		debugInterface.exceptionInfo?.exceptionRecord.exceptionCode ?? null;
