@@ -33,108 +33,198 @@ function dv(buf: Uint8Array): DataView {
 
 export const UNW_FLAG_CHAININFO = 0x04;
 
-/**
- * Loaded .pdata: the entire RUNTIME_FUNCTION array read in one shot,
- * kept as a raw DataView for zero-copy binary search.
- */
+type PeSection = {
+	virtualAddress: number;
+	virtualSize: number;
+	rawDataOffset: number;
+	rawDataSize: number;
+};
+
 type PdataTable = {
 	view: DataView;
 	count: number;
 };
 
-const pdataCache = new Map<bigint, PdataTable | null>();
+type PeDirectory = {
+	address: number;
+	size: number;
+};
 
-async function loadPdata(
-	reader: MemoryReader,
-	moduleBase: bigint,
-): Promise<PdataTable | null> {
-	const cached = pdataCache.get(moduleBase);
-	if (cached !== undefined) return cached;
+const OFFSET_OPTIONAL_HEADER = 0x18;
+const EXCEPTION_DIRECTORY_INDEX = 3;
 
-	const result = await loadPdataUncached(reader, moduleBase);
-	pdataCache.set(moduleBase, result);
-	return result;
-}
+export class PeFile {
+	readonly headerBytes: Uint8Array;
+	readonly headers: DataView;
+	readonly sections: PeSection[];
+	readonly directories: PeDirectory[];
+	readonly sizeOfHeaders: number;
+	readonly offsetNth: number;
 
-async function loadPdataUncached(
-	reader: MemoryReader,
-	moduleBase: bigint,
-): Promise<PdataTable | null> {
-	// DOS header
-	const dosHeader = dv(await reader(moduleBase, 0x40));
-	if (dosHeader.getUint16(0, true) !== 0x5a4d) return null;
-	const eLfanew = dosHeader.getUint32(0x3c, true);
+	private pdata: PdataTable | null | undefined = undefined;
 
-	// PE signature
-	const peSigBuf = dv(await reader(moduleBase + BigInt(eLfanew), 4));
-	if (peSigBuf.getUint32(0, true) !== 0x00004550) return null;
+	constructor(headerBytes: Uint8Array) {
+		if (headerBytes.length < 64) throw new Error("PE DOS header too short");
 
-	// Optional header (PE32+ only)
-	const optBuf = dv(
-		await reader(moduleBase + BigInt(eLfanew + 24), 120),
-	);
-	if (optBuf.getUint16(0, true) !== 0x20b) return null;
+		this.headerBytes = headerBytes;
+		this.headers = dv(headerBytes);
 
-	// Exception directory: data directory index 3, at optional header offset 112
-	const excRva = optBuf.getUint32(112, true);
-	const excSize = optBuf.getUint32(116, true);
-	if (excRva === 0 || excSize === 0) return null;
+		if (this.headers.getUint16(0, true) !== 0x5a4d)
+			throw new Error("PE DOS header magic number mismatch");
 
-	// Read entire .pdata in one go
-	const raw = await reader(moduleBase + BigInt(excRva), excSize);
-	return {
-		view: dv(raw),
-		count: Math.floor(excSize / 12),
-	};
-}
+		this.offsetNth = this.headers.getUint32(0x3c, true);
+		if (this.offsetNth + 0x108 > headerBytes.length)
+			throw new Error("PE Optional header too short");
 
-/**
- * Binary-search the module's .pdata for the RUNTIME_FUNCTION covering `rva`.
- * The entire exception directory is read once per module and cached.
- */
-export async function findRuntimeFunction(
-	reader: MemoryReader,
-	moduleBase: bigint,
-	rva: number,
-): Promise<RuntimeFunction | null> {
-	const pdata = await loadPdata(reader, moduleBase);
-	if (!pdata) return null;
+		if (this.headers.getUint32(this.offsetNth, true) !== 0x00004550)
+			throw new Error("PE NT signature mismatch");
 
-	const { view, count } = pdata;
-	let lo = 0;
-	let hi = count - 1;
+		const fileHeaderOffset = this.offsetNth + 4;
+		const numberOfSections = this.headers.getUint16(
+			fileHeaderOffset + 0x02,
+			true,
+		);
+		const sizeOfOptionalHeader = this.headers.getUint16(
+			fileHeaderOffset + 0x10,
+			true,
+		);
 
-	while (lo <= hi) {
-		const mid = (lo + hi) >>> 1;
-		const off = mid * 12;
-		const beginAddr = view.getUint32(off, true);
-		const endAddr = view.getUint32(off + 4, true);
+		this.sizeOfHeaders = this.headers.getUint32(
+			this.offsetNth + OFFSET_OPTIONAL_HEADER + 0x3c,
+			true,
+		);
 
-		if (rva < beginAddr) {
-			hi = mid - 1;
-		} else if (rva >= endAddr) {
-			lo = mid + 1;
-		} else {
-			return {
-				beginAddress: beginAddr,
-				endAddress: endAddr,
-				unwindInfoAddress: view.getUint32(off + 8, true),
-			};
+		if (this.sizeOfHeaders > headerBytes.length)
+			throw new Error("PE size of headers too long");
+
+		const offsetDirectories = this.offsetNth + OFFSET_OPTIONAL_HEADER + 0x70;
+		const numDirectories = this.headers.getUint32(
+			offsetDirectories - 0x04,
+			true,
+		);
+
+		if (offsetDirectories + numDirectories * 0x08 > headerBytes.length)
+			throw new Error("PE directory table too long");
+
+		this.directories = [];
+		for (let i = 0; i < numDirectories; i++) {
+			const off = offsetDirectories + i * 0x08;
+			this.directories.push({
+				address: this.headers.getUint32(off, true),
+				size: this.headers.getUint32(off + 4, true),
+			});
+		}
+
+		const sectionTableOffset =
+			this.offsetNth + OFFSET_OPTIONAL_HEADER + sizeOfOptionalHeader;
+		if (sectionTableOffset + numberOfSections * 0x28 > headerBytes.length)
+			throw new Error("PE section table too long");
+
+		this.sections = [];
+		for (let i = 0; i < numberOfSections; i++) {
+			const off = sectionTableOffset + i * 0x28;
+			this.sections.push({
+				virtualSize: this.headers.getUint32(off + 8, true),
+				virtualAddress: this.headers.getUint32(off + 12, true),
+				rawDataSize: this.headers.getUint32(off + 16, true),
+				rawDataOffset: this.headers.getUint32(off + 20, true),
+			});
 		}
 	}
 
-	return null;
+	rvaToFileOffset(
+		rva: number,
+		size: number,
+	): { fileOffset: number; availableSize: number } | null {
+		const firstSectionRva =
+			this.sections.length > 0 ? this.sections[0].virtualAddress : 0;
+		if (rva < firstSectionRva) {
+			const available = Math.min(size, firstSectionRva - rva);
+			return { fileOffset: rva, availableSize: available };
+		}
+
+		for (const section of this.sections) {
+			if (
+				rva >= section.virtualAddress &&
+				rva < section.virtualAddress + section.virtualSize
+			) {
+				const offsetInSection = rva - section.virtualAddress;
+				if (offsetInSection >= section.rawDataSize) return null;
+				const fileOffset = section.rawDataOffset + offsetInSection;
+				const availableSize = Math.min(
+					size,
+					section.rawDataSize - offsetInSection,
+				);
+				return { fileOffset, availableSize };
+			}
+		}
+		return null;
+	}
+
+	readHeader(offset: number, size: number): Uint8Array | null {
+		if (offset + size <= this.headerBytes.length) {
+			return this.headerBytes.subarray(offset, offset + size);
+		}
+		return null;
+	}
+
+	private async loadPdata(
+		reader: MemoryReader,
+		moduleBase: bigint,
+	): Promise<PdataTable | null> {
+		if (this.pdata !== undefined) return this.pdata;
+
+		const exc = this.directories[EXCEPTION_DIRECTORY_INDEX];
+		if (!exc || exc.address === 0 || exc.size === 0) {
+			this.pdata = null;
+			return null;
+		}
+
+		const raw = await reader(moduleBase + BigInt(exc.address), exc.size);
+		this.pdata = { view: dv(raw), count: Math.floor(exc.size / 12) };
+		return this.pdata;
+	}
+
+	async findRuntimeFunction(
+		reader: MemoryReader,
+		moduleBase: bigint,
+		rva: number,
+	): Promise<RuntimeFunction | null> {
+		const pdata = await this.loadPdata(reader, moduleBase);
+		if (!pdata) return null;
+
+		const { view, count } = pdata;
+		let lo = 0;
+		let hi = count - 1;
+
+		while (lo <= hi) {
+			const mid = (lo + hi) >>> 1;
+			const off = mid * 12;
+			const beginAddr = view.getUint32(off, true);
+			const endAddr = view.getUint32(off + 4, true);
+
+			if (rva < beginAddr) {
+				hi = mid - 1;
+			} else if (rva >= endAddr) {
+				lo = mid + 1;
+			} else {
+				return {
+					beginAddress: beginAddr,
+					endAddress: endAddr,
+					unwindInfoAddress: view.getUint32(off + 8, true),
+				};
+			}
+		}
+
+		return null;
+	}
 }
 
-/**
- * Read and parse an UNWIND_INFO structure at the given RVA.
- */
 export async function readUnwindInfo(
 	reader: MemoryReader,
 	moduleBase: bigint,
 	rva: number,
 ): Promise<UnwindInfo | null> {
-	// Read the fixed header (4 bytes)
 	const hdrBuf = await reader(moduleBase + BigInt(rva), 4);
 	const byte0 = hdrBuf[0];
 	const version = byte0 & 0x07;
@@ -145,9 +235,7 @@ export async function readUnwindInfo(
 	const frameRegister = byte3 & 0x0f;
 	const frameOffset = (byte3 >> 4) & 0x0f;
 
-	// Read unwind codes: countOfUnwindCodes * 2 bytes, starting at offset 4
 	const codesSize = countOfUnwindCodes * 2;
-	// Also potentially need chained entry after codes (aligned to 4 bytes)
 	const alignedCodesSize =
 		codesSize + (codesSize % 4 === 0 ? 0 : 4 - (codesSize % 4));
 	const extraSize =
@@ -164,7 +252,6 @@ export async function readUnwindInfo(
 		const b1 = codeBuf[off + 1];
 		const unwindOp = b1 & 0x0f;
 		const opInfo = (b1 >> 4) & 0x0f;
-		// frameOffset is the entire 2-byte slot as uint16 LE
 		const frameOff = codeBuf[off] | (codeBuf[off + 1] << 8);
 		unwindCodes.push({ codeOffset, unwindOp, opInfo, frameOffset: frameOff });
 	}

@@ -19,6 +19,7 @@ import {
 	type MinidumpUnloadedModule,
 } from "./minidump";
 import { Signal } from "./reactive";
+import { readFromModuleImage } from "./symbolServer";
 import { assert } from "./utils";
 
 export type MinidumpDebugSystemInfo = MinidumpSystemInfo;
@@ -227,6 +228,18 @@ export class MinidumpDebugInterface implements DebugInterface {
 		const memoryBytes = this.source.readMemoryAt(address, size, requiredSize);
 		if (memoryBytes) {
 			return memoryBytes;
+		}
+
+		for (const mod of this.modules.state) {
+			const modEnd = mod.address + BigInt(mod.size);
+			if (address >= mod.address && address < modEnd) {
+				const rva = Number(address - mod.address);
+				const imageBytes = await readFromModuleImage(mod, rva, size);
+				if (imageBytes && imageBytes.length >= requiredSize) {
+					return imageBytes;
+				}
+				break;
+			}
 		}
 
 		throw new Error(

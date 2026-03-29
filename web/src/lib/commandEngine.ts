@@ -267,9 +267,7 @@ async function displayBytesCommand(
 		data = await dbg.read(address, count, 1);
 	} catch {
 		return {
-			lines: [
-				`Memory read failed at ${fmtHex(address, 16).toLowerCase()}`,
-			],
+			lines: [`Memory read failed at ${fmtHex(address, 16).toLowerCase()}`],
 			isError: true,
 		};
 	}
@@ -324,9 +322,7 @@ async function displayWordsCommand(
 		data = await dbg.read(address, totalBytes, 1);
 	} catch {
 		return {
-			lines: [
-				`Memory read failed at ${fmtHex(address, 16).toLowerCase()}`,
-			],
+			lines: [`Memory read failed at ${fmtHex(address, 16).toLowerCase()}`],
 			isError: true,
 		};
 	}

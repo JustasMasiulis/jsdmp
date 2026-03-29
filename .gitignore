@@ -4,3 +4,4 @@ build/
 web/node_modules/
 web/dist/
 .desloppify/
+.claude/

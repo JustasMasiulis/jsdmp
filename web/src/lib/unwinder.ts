@@ -1,13 +1,15 @@
 import type { Context } from "./cpu_context";
+import type { DebugModule } from "./debug_interface";
 import {
-	findRuntimeFunction,
 	type MemoryReader,
+	type PeFile,
 	type RuntimeFunction,
 	readUnwindInfo,
 	UNW_FLAG_CHAININFO,
 	type UnwindCode,
 	type UnwindInfo,
 } from "./pe";
+import { getModulePeFile } from "./symbolServer";
 import { basename } from "./utils";
 
 // --- Constants ---
@@ -533,10 +535,7 @@ export type StackFrame = {
 	offset: bigint;
 };
 
-function findModule(
-	ip: bigint,
-	modules: Array<{ address: bigint; size: number; path: string }>,
-): { address: bigint; size: number; path: string } | null {
+function findModule(ip: bigint, modules: DebugModule[]): DebugModule | null {
 	for (const m of modules) {
 		if (ip >= m.address && ip < m.address + BigInt(m.size)) {
 			return m;
@@ -552,12 +551,13 @@ export type WalkStackResult = {
 
 export async function walkStack(
 	reader: MemoryReader,
-	modules: Array<{ address: bigint; size: number; path: string }>,
+	modules: DebugModule[],
 	initialContext: UnwindContext,
 	maxFrames = 64,
 ): Promise<WalkStackResult> {
 	const frames: StackFrame[] = [];
 	const ctx: UnwindContext = { ...initialContext };
+	const peCache = new Map<bigint, PeFile | null>();
 
 	for (let i = 0; i < maxFrames; i++) {
 		if (ctx.rip === 0n) break;
@@ -576,7 +576,14 @@ export async function walkStack(
 		try {
 			if (mod) {
 				const rva = Number(ctx.rip - mod.address);
-				const entry = await findRuntimeFunction(reader, mod.address, rva);
+				let pe = peCache.get(mod.address);
+				if (pe === undefined) {
+					pe = await getModulePeFile(mod);
+					peCache.set(mod.address, pe);
+				}
+				const entry = pe
+					? await pe.findRuntimeFunction(reader, mod.address, rva)
+					: null;
 				if (entry) {
 					await virtualUnwind(reader, mod.address, ctx.rip, entry, ctx);
 				} else {
