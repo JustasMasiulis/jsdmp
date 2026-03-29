@@ -267,18 +267,6 @@ static int64_t pe_size_of_headers(const uint8_t* data, size_t len) {
     return static_cast<int64_t>(sizeOfHeaders);
 }
 
-// ---------------------------------------------------------------------------
-// Common handler: fetch module, load into memory, call response builder
-// ---------------------------------------------------------------------------
-
-using FileHandler = std::function<void(
-    uWS::HttpResponse<false>*,
-    uWS::Loop*,
-    const std::string& origin,
-    std::shared_ptr<std::atomic<bool>> aborted,
-    std::shared_ptr<std::vector<uint8_t>> file_data
-)>;
-
 static void send_error(uWS::HttpResponse<false>* res, uWS::Loop* loop,
                         const std::string& origin,
                         std::shared_ptr<std::atomic<bool>> aborted,
@@ -289,37 +277,6 @@ static void send_error(uWS::HttpResponse<false>* res, uWS::Loop* loop,
         res->writeStatus(status);
         res->end(body);
     });
-}
-
-static void handle_module_request(uWS::HttpResponse<false>* res,
-                                   const std::string& name,
-                                   const std::string& key,
-                                   FileHandler on_file) {
-    auto origin = std::string();
-    // origin is set below from req, but we need it captured.
-    auto aborted = std::make_shared<std::atomic<bool>>(false);
-    res->onAborted([aborted]() { aborted->store(true); });
-
-    auto fut = deduplicated_fetch(name, key);
-    auto map_key = name + "/" + key;
-    auto* loop = uWS::Loop::get();
-
-    std::thread([res, loop, fut, aborted, map_key,
-                 on_file = std::move(on_file), origin]() {
-        auto path = fut.get();
-        if (path.empty()) {
-            send_error(res, loop, origin, aborted,
-                       "502 Bad Gateway", "Failed to fetch symbol file");
-            return;
-        }
-        auto file_data = load_file_cached(map_key, path);
-        if (!file_data) {
-            send_error(res, loop, origin, aborted,
-                       "500 Internal Server Error", "Cannot read cached file");
-            return;
-        }
-        on_file(res, loop, origin, aborted, file_data);
-    }).detach();
 }
 
 // ---------------------------------------------------------------------------

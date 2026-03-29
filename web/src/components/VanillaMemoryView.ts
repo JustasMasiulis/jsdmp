@@ -1,6 +1,4 @@
 import {
-	formatHexAddress,
-	formatHexAddressValue,
 	loadAddressPanelState,
 	parseHexAddress,
 	saveAddressPanelState,
@@ -8,6 +6,7 @@ import {
 import type { Context } from "../lib/cpu_context";
 import type { DebugMemoryRange } from "../lib/debug_interface";
 import { DBG } from "../lib/debugState";
+import { fmtHex, fmtHex16 } from "../lib/formatting";
 import type { SignalHandle } from "../lib/reactive";
 import {
 	FixedRowVirtualTable,
@@ -39,9 +38,6 @@ type MemoryRowState = {
 	asciiParts: string[];
 	renderToken: number;
 };
-
-const fmtByte = (value: number) =>
-	value.toString(16).toUpperCase().padStart(2, "0");
 
 const toAscii = (value: number) =>
 	value >= 0x20 && value <= 0x7e ? String.fromCharCode(value) : ".";
@@ -360,7 +356,7 @@ export class VanillaMemoryView {
 		const storageKey = getPanelStorageKey(this.panelId);
 		saveAddressPanelState(storageKey, {
 			manualAddressHex:
-				this.manualAddress !== null ? formatHexAddress(this.manualAddress) : "",
+				this.manualAddress !== null ? `0x${fmtHex16(this.manualAddress)}` : "",
 			followInstructionPointer: this.followInstructionPointer,
 		});
 	}
@@ -371,7 +367,7 @@ export class VanillaMemoryView {
 			return;
 		}
 
-		this.addressInput.value = formatHexAddress(address);
+		this.addressInput.value = `0x${fmtHex16(address)}`;
 	}
 
 	private syncControlState() {
@@ -450,7 +446,7 @@ export class VanillaMemoryView {
 		const rowAddress = span.start + BigInt(rowIndex) * BigInt(BYTES_PER_ROW);
 		const token = row.renderToken + 1;
 		row.renderToken = token;
-		row.addressCode.textContent = formatHexAddressValue(rowAddress);
+		row.addressCode.textContent = fmtHex16(rowAddress);
 		row.hexCode.textContent = "";
 		row.asciiCode.textContent = "";
 		void this.fillRowAsync(row, rowAddress, span, token);
@@ -465,22 +461,29 @@ export class VanillaMemoryView {
 		const hexParts = new Array<string>(BYTES_PER_ROW);
 		const asciiParts = new Array<string>(BYTES_PER_ROW);
 
-		for (let out = 0; out < BYTES_PER_ROW; out += 1) {
-			const address = rowAddress + BigInt(out);
-			if (!isInSpan(address, span)) {
-				hexParts[out] = "??";
-				asciiParts[out] = "?";
-				continue;
-			}
+		const rowEnd = rowAddress + BigInt(BYTES_PER_ROW);
+		const spanStart =
+			span.start > rowAddress ? Number(span.start - rowAddress) : 0;
+		const spanEnd =
+			span.endExclusive < rowEnd
+				? Number(span.endExclusive - rowAddress)
+				: BYTES_PER_ROW;
 
+		hexParts.fill("??");
+		asciiParts.fill("?");
+
+		if (spanStart < spanEnd) {
+			const readAddr = rowAddress + BigInt(spanStart);
+			const readSize = spanEnd - spanStart;
 			try {
-				const bytes = await DBG.read(address, 1);
-				const value = bytes[0];
-				hexParts[out] = fmtByte(value);
-				asciiParts[out] = toAscii(value);
+				const bytes = await DBG.read(readAddr, readSize, 1);
+				for (let i = 0; i < bytes.length; i++) {
+					const value = bytes[i];
+					hexParts[spanStart + i] = fmtHex(value, 2);
+					asciiParts[spanStart + i] = toAscii(value);
+				}
 			} catch {
-				hexParts[out] = "??";
-				asciiParts[out] = "?";
+				// leave as ??
 			}
 		}
 

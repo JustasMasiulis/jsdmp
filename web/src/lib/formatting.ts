@@ -57,12 +57,6 @@ export function fmtOs(sys: MinidumpDebugSystemInfo): string {
 	return `Windows ${sys.majorVersion}.${sys.minorVersion} Version ${sys.buildNumber} MP (${sys.numberOfProcessors} procs) Free ${sys.processorArchitectureName}`;
 }
 
-export function fmtHexPrefix(value: number | bigint, padLength = 0): string {
-	const hex = value.toString(16).toUpperCase();
-	const padded = padLength > 0 ? hex.padStart(padLength, "0") : hex;
-	return `0x${padded}`;
-}
-
 export function fmtHex(value: number | bigint, padLength = 0): string {
 	const hex = value.toString(16).toUpperCase();
 	return padLength > 0 ? hex.padStart(padLength, "0") : hex;

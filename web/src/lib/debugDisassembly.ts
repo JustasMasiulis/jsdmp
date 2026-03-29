@@ -1,5 +1,6 @@
 import type { DebugInterface } from "./debug_interface";
 import { disassembleInstruction, MAX_INSTRUCTION_LENGTH } from "./disassembly";
+import { fmtHex, fmtHex16 } from "./formatting";
 import { maxU64 } from "./utils";
 
 const DISASSEMBLY_LOOKBACK_BYTES = 256;
@@ -50,17 +51,6 @@ type LoadedLine = {
 	line: DisassemblyLine;
 	nextAddress: bigint;
 };
-
-const fmtAddress = (value: bigint) =>
-	`0x${value.toString(16).toUpperCase().padStart(16, "0")}`;
-
-const formatBytes = (bytes: Uint8Array) =>
-	[...bytes]
-		.map((value) => value.toString(16).toUpperCase().padStart(2, "0"))
-		.join(" ");
-
-const formatDbOperand = (value: number) =>
-	`0x${value.toString(16).toUpperCase().padStart(2, "0")}`;
 
 const makeLine = (
 	address: bigint,
@@ -134,7 +124,7 @@ const decodeInstructionAt = async (
 		? {
 				address,
 				length: decoded.length,
-				bytesHex: formatBytes(decoded.bytes),
+				bytesHex: [...decoded.bytes].map((b) => fmtHex(b, 2)).join(" "),
 				mnemonic: decoded.mnemonic,
 				operands: decoded.operands,
 			}
@@ -178,9 +168,9 @@ const decodeLine = async (
 		line: makeLine(
 			address,
 			1,
-			formatBytes(fallback.subarray(0, 1)),
+			fmtHex(fallback[0], 2),
 			"db",
-			formatDbOperand(fallback[0]),
+			`0x${fmtHex(fallback[0], 2)}`,
 			isCurrent,
 		),
 		nextAddress: address + 1n,
@@ -349,14 +339,14 @@ export const buildDisassemblyListing = async (
 		) {
 			return makeListing(
 				"missing_memory",
-				`Address ${fmtAddress(anchorAddress)} is not present in dump memory.`,
+				`Address ${`0x${fmtHex16(anchorAddress)}`} is not present in dump memory.`,
 				anchorAddress,
 			);
 		}
 	} catch {
 		return makeListing(
 			"missing_memory",
-			`Address ${fmtAddress(anchorAddress)} is not present in dump memory.`,
+			`Address ${`0x${fmtHex16(anchorAddress)}`} is not present in dump memory.`,
 			anchorAddress,
 		);
 	}
@@ -367,14 +357,14 @@ export const buildDisassemblyListing = async (
 	if (lines.length <= previousLoad.lines.length) {
 		return makeListing(
 			"decode_error",
-			`Failed to decode bytes at ${fmtAddress(anchorAddress)}.`,
+			`Failed to decode bytes at ${`0x${fmtHex16(anchorAddress)}`}.`,
 			anchorAddress,
 		);
 	}
 
 	return makeListing(
 		"ok",
-		`Showing guessed disassembly around ${fmtAddress(anchorAddress)}.`,
+		`Showing guessed disassembly around ${`0x${fmtHex16(anchorAddress)}`}.`,
 		anchorAddress,
 		lines,
 		previousLoad.lines.length,

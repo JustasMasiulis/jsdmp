@@ -52,10 +52,6 @@ type CfgDescriptor_<ND> = {
 export type CfgDescriptor = CfgDescriptor_<NodeDescriptor>;
 export type AnnotatedCfgDescriptor = CfgDescriptor_<AnnotatedNodeDescriptor>;
 
-// function name -> cfg data
-export type CFGResult = Record<string, CfgDescriptor>;
-export type AnnotatedCFGResult = Record<string, AnnotatedCfgDescriptor>;
-
 // Much of the algorithm is inspired from
 // https://cutter.re/docs/api/widgets/classGraphGridLayout.html
 // Thanks to the cutter team for their great documentation!

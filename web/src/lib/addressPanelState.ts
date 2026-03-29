@@ -3,14 +3,6 @@ export type AddressPanelSavedState = {
 	followInstructionPointer?: boolean;
 };
 
-const HEX_ADDRESS_WIDTH = 16;
-
-export const formatHexAddressValue = (value: bigint): string =>
-	value.toString(16).toUpperCase().padStart(HEX_ADDRESS_WIDTH, "0");
-
-export const formatHexAddress = (value: bigint): string =>
-	`0x${formatHexAddressValue(value)}`;
-
 export const parseHexAddress = (value: string): bigint | null => {
 	const trimmed = value.trim();
 	if (!trimmed) {

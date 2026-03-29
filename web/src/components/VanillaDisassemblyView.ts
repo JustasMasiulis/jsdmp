@@ -1,6 +1,4 @@
 import {
-	formatHexAddress,
-	formatHexAddressValue,
 	loadAddressPanelState,
 	parseHexAddress,
 	saveAddressPanelState,
@@ -13,6 +11,7 @@ import {
 	loadPreviousDisassemblyLines,
 } from "../lib/debugDisassembly";
 import { DBG } from "../lib/debugState";
+import { fmtHex16 } from "../lib/formatting";
 import type { SignalHandle } from "../lib/reactive";
 import {
 	FixedRowVirtualTable,
@@ -282,13 +281,13 @@ export class VanillaDisassemblyView {
 		const storageKey = getPanelStorageKey(this.panelId);
 		saveAddressPanelState(storageKey, {
 			manualAddressHex:
-				this.manualAddress !== null ? formatHexAddress(this.manualAddress) : "",
+				this.manualAddress !== null ? `0x${fmtHex16(this.manualAddress)}` : "",
 			followInstructionPointer: this.followInstructionPointer,
 		});
 	}
 
 	private syncInputWithAddress(address: bigint | null) {
-		this.addressInput.value = address === null ? "" : formatHexAddress(address);
+		this.addressInput.value = address === null ? "" : `0x${fmtHex16(address)}`;
 	}
 
 	private currentAnchor() {
@@ -565,7 +564,7 @@ export class VanillaDisassemblyView {
 			return;
 		}
 
-		row.addressCode.textContent = formatHexAddressValue(line.address);
+		row.addressCode.textContent = fmtHex16(line.address);
 		row.bytesCode.textContent = line.bytesHex;
 		row.instructionCode.textContent = formatInstruction(line);
 	}

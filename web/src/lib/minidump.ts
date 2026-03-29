@@ -1,3 +1,5 @@
+import { fmtHex } from "./formatting";
+
 export enum MiniDumpStreamType {
 	UnusedStream = 0,
 	ReservedStream0 = 1,
@@ -1095,10 +1097,10 @@ export class MiniDump {
 
 		let suffix = "";
 		for (let i = 10; i < 16; i++) {
-			suffix += this.formatHex(view.getUint8(offset + i), 2);
+			suffix += fmtHex(view.getUint8(offset + i), 2);
 		}
 
-		return `${this.formatHex(data1, 8)}-${this.formatHex(data2, 4)}-${this.formatHex(data3, 4)}-${this.formatHex(data4_0, 2)}${this.formatHex(data4_1, 2)}-${suffix}`;
+		return `${fmtHex(data1, 8)}-${fmtHex(data2, 4)}-${fmtHex(data3, 4)}-${fmtHex(data4_0, 2)}${fmtHex(data4_1, 2)}-${suffix}`;
 	}
 
 	private readNullTerminatedAscii(view: DataView, offset: number): string {
@@ -1117,10 +1119,6 @@ export class MiniDump {
 			value += String.fromCharCode(bytes[i]);
 		}
 		return value;
-	}
-
-	private formatHex(value: number, width: number): string {
-		return value.toString(16).toUpperCase().padStart(width, "0");
 	}
 
 	private readMinidumpString(rva: number): string {

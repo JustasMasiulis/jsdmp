@@ -68,7 +68,6 @@ async function fetchPageFromServer(
 		const buffer = await response.arrayBuffer();
 		const data = new Uint8Array(buffer);
 		pageCache.set(pageKey, data);
-		touchPage(pageKey);
 		evictPages();
 		return data;
 	} catch {
@@ -94,12 +93,18 @@ async function cachedRead(
 		return page.subarray(off, Math.min(off + size, page.length));
 	}
 
+	const pagePromises: Promise<Uint8Array | null>[] = [];
+	for (let p = startPage; p <= endPage; p++) {
+		pagePromises.push(fetchPage(modCacheKey, mod, p));
+	}
+	const pages = await Promise.all(pagePromises);
+
 	const result = new Uint8Array(size);
 	let written = 0;
-	for (let p = startPage; p <= endPage; p++) {
-		const page = await fetchPage(modCacheKey, mod, p);
+	for (let i = 0; i < pages.length; i++) {
+		const page = pages[i];
 		if (!page) return null;
-		const pageStart = p * PAGE_SIZE;
+		const pageStart = (startPage + i) * PAGE_SIZE;
 		const srcOff = Math.max(fileOffset - pageStart, 0);
 		const srcEnd = Math.min(fileOffset + size - pageStart, page.length);
 		const chunk = page.subarray(srcOff, srcEnd);

@@ -4,6 +4,7 @@ import {
 	disassembleInstruction,
 	MAX_INSTRUCTION_LENGTH,
 } from "./disassembly";
+import { fmtHex16 } from "./formatting";
 
 export type CfgEdgeKind = "true" | "false" | "unconditional";
 
@@ -63,20 +64,11 @@ export type CfgBuildResult = {
 	stats: CfgBuildStats;
 };
 
-const _DEFAULT_CFG_BUILD_OPTIONS: CfgBuildOptions = {
-	maxBlocks: 50_000,
-	maxEdges: 200_000,
-	maxInstructions: 1_000_000,
-};
-
 export const ESTIMATED_CHAR_WIDTH = 7;
 export const ESTIMATED_LINE_HEIGHT = 15;
 export const CARD_PADDING_X = 16 + 2;
 export const CARD_PADDING_Y = 12 + 2;
 const TEXT_TOKEN_PATTERN = /[A-Za-z0-9_]+/g;
-
-const fmtAddress = (value: bigint) =>
-	value.toString(16).toUpperCase().padStart(16, "0");
 
 const joinTextSegments = (segments: readonly CfgTextSegment[]) =>
 	segments.map((segment) => segment.text).join("");
@@ -140,7 +132,7 @@ export const buildCfgInstructionLine = (
 	mnemonicColumnWidth = instruction.mnemonic.length,
 ): CfgTextLine => {
 	const segments: CfgTextSegment[] = [
-		makeTextSegment(fmtAddress(instruction.address), true, null, "plain"),
+		makeTextSegment(fmtHex16(instruction.address), true, null, "plain"),
 		makeTextSegment("  "),
 		makeTextSegment(instruction.mnemonic, true, null, "mnemonic"),
 	];
@@ -258,16 +250,12 @@ const buildBlock2 = async (
 
 	const lines = buildCfgInstructionLines(instructions);
 	if (error) {
-		lines.push(
-			...buildCfgTextLinesFromLabel(
-				error === "decode_error" ? "decode error" : "missing memory",
-			),
-		);
+		lines.push(...buildCfgTextLinesFromLabel(error));
 	}
 
 	blocks.set(blockAddr, {
 		id: blockIdForAddress(blockAddr),
-		title: fmtAddress(blockAddr),
+		title: fmtHex16(blockAddr),
 		instructionCount: instructions.length,
 		lines: lines,
 	});

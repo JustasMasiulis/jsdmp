@@ -1,6 +1,5 @@
 import type { IContentRenderer } from "dockview-core";
 import {
-	formatHexAddress,
 	loadAddressPanelState,
 	parseHexAddress,
 	saveAddressPanelState,
@@ -14,6 +13,7 @@ import {
 	type CfgNode,
 	estimateNodeDimensions,
 } from "../lib/disassemblyGraph";
+import { fmtHex16 } from "../lib/formatting";
 import {
 	type AnnotatedCfgDescriptor,
 	type AnnotatedNodeDescriptor,
@@ -401,7 +401,7 @@ export class VanillaDisassemblyGraphView implements IContentRenderer {
 		const storageKey = getPanelStorageKey(this.panelId);
 		saveAddressPanelState(storageKey, {
 			manualAddressHex:
-				this.manualAddress !== null ? formatHexAddress(this.manualAddress) : "",
+				this.manualAddress !== null ? `0x${fmtHex16(this.manualAddress)}` : "",
 			followInstructionPointer: this.followInstructionPointer,
 		});
 	}
@@ -440,7 +440,7 @@ export class VanillaDisassemblyGraphView implements IContentRenderer {
 	}
 
 	private syncInputWithAddress(address: bigint | null) {
-		this.addressInput.value = address === null ? "" : formatHexAddress(address);
+		this.addressInput.value = address === null ? "" : `0x${fmtHex16(address)}`;
 	}
 
 	private currentAnchor() {

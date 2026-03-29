@@ -334,14 +334,6 @@ function isInEpilogue(buf: Uint8Array): boolean {
 	return false;
 }
 
-function emulateEpilogueFromBuffer(
-	buf: Uint8Array,
-	ctx: UnwindContext,
-	reader: MemoryReader,
-): Promise<void> {
-	return emulateEpilogueCore(buf, ctx, reader);
-}
-
 async function emulateEpilogue(
 	reader: MemoryReader,
 	controlPc: bigint,
@@ -515,7 +507,7 @@ export async function virtualUnwind(
 			// Read instruction bytes once for both detection and emulation
 			const instrBuf = await reader(controlPc, 32);
 			if (isInEpilogue(instrBuf)) {
-				emulateEpilogueFromBuffer(instrBuf, ctx, reader);
+				await emulateEpilogueCore(instrBuf, ctx, reader);
 				return;
 			}
 		}

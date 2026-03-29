@@ -13,11 +13,7 @@ export function readCString(
 		end += 1;
 	}
 
-	const copyBuffer = new ArrayBuffer(end - start);
-	const copy = new Uint8Array(copyBuffer);
-	copy.set(new Uint8Array(memoryBytes.buffer, start, end - start));
-
-	return textDecoder.decode(copy);
+	return textDecoder.decode(memoryBytes.slice(start, end));
 }
 
 export function readU64(memory: DataView, offset: number): bigint {
