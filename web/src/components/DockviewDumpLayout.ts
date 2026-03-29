@@ -9,6 +9,7 @@ import {
 import {
 	addMemoryPanel,
 	applyDefaultLayout,
+	COMMAND_COMPONENT,
 	DISASSEMBLY_COMPONENT,
 	DISASSEMBLY_GRAPH_COMPONENT,
 	getPanelSection,
@@ -20,6 +21,7 @@ import {
 	saveLayout,
 	THREADS_COMPONENT,
 } from "../lib/dockviewLayout";
+import { VanillaCommandView } from "./VanillaCommandView";
 import { VanillaDisassemblyGraphView } from "./VanillaDisassemblyGraphView";
 import { VanillaDisassemblyView } from "./VanillaDisassemblyView";
 import { VanillaDumpSummary } from "./VanillaDumpSummary";
@@ -116,6 +118,17 @@ export class DockviewDumpLayout {
 			}
 			case THREADS_COMPONENT: {
 				const view = new VanillaThreadsView({
+					container: el,
+					panelId: options.id,
+				});
+				return {
+					element: el,
+					init: () => {},
+					dispose: () => view.dispose(),
+				};
+			}
+			case COMMAND_COMPONENT: {
+				const view = new VanillaCommandView({
 					container: el,
 					panelId: options.id,
 				});

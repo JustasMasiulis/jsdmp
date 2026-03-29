@@ -10,6 +10,7 @@ export const MEMORY_COMPONENT = "memory-view";
 export const DISASSEMBLY_COMPONENT = "disassembly";
 export const DISASSEMBLY_GRAPH_COMPONENT = "disassembly-graph";
 export const THREADS_COMPONENT = "threads";
+export const COMMAND_COMPONENT = "command";
 export const MEMORY_BASE_ID = "memory";
 
 type PanelSpec = {
@@ -61,6 +62,12 @@ export const PANEL_SPECS = [
 		component: MEMORY_COMPONENT,
 		section: "memory",
 		title: "Memory",
+	},
+	{
+		id: "command",
+		component: "command",
+		section: "command",
+		title: "Command",
 	},
 ] as const satisfies ReadonlyArray<PanelSpec>;
 
@@ -239,6 +246,10 @@ export const applyDefaultLayout = (dockview: DockviewApi) => {
 	addPanelIfMissing(dockview, "threads", {
 		direction: "right",
 		referencePanel: "modules",
+	});
+	addPanelIfMissing(dockview, "command", {
+		direction: "below",
+		referencePanel: "exception",
 	});
 	addPanelIfMissing(dockview, MEMORY_BASE_ID, {
 		direction: "within",

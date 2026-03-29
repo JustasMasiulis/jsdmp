@@ -6,7 +6,9 @@
       "Bash(find /d/web-dmp -name *.test.ts -o -name *.spec.ts -o -name README*)",
       "Bash(ls -la /d/web-dmp/*.json)",
       "Bash(xargs grep:*)",
-      "Bash(bun test:*)"
+      "Bash(bun test:*)",
+      "Bash(git -C D:/web-dmp diff --no-color --name-only)",
+      "Bash(git -C D:/web-dmp diff --no-color web/src/lib/dumpSections.ts)"
     ]
   }
 }

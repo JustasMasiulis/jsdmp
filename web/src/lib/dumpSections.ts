@@ -5,6 +5,7 @@ export const DUMP_SECTIONS = [
 	"modules",
 	"threads",
 	"memory",
+	"command",
 ] as const;
 
 export type DumpSection = (typeof DUMP_SECTIONS)[number];
