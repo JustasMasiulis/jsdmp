@@ -120,15 +120,19 @@ const decodeInstructionAt = async (
 	}
 
 	const decoded = disassembleInstruction(bytes, address);
-	return decoded
-		? {
-				address,
-				length: decoded.length,
-				bytesHex: [...decoded.bytes].map((b) => fmtHex(b, 2)).join(" "),
-				mnemonic: decoded.mnemonic,
-				operands: decoded.operands,
-			}
-		: null;
+	if (!decoded) return null;
+
+	const mnemonic = decoded.prefix
+		? `${decoded.prefix} ${decoded.mnemonic}`
+		: decoded.mnemonic;
+
+	return {
+		address,
+		length: decoded.length,
+		bytesHex: [...decoded.bytes].map((b) => fmtHex(b, 2)).join(" "),
+		mnemonic,
+		operands: decoded.operands,
+	};
 };
 
 const decodeLine = async (

@@ -348,9 +348,11 @@ async function unassembleCommand(
 		const hexBytes = Array.from(instr.bytes)
 			.map((b) => fmtHex(b, 2).toLowerCase())
 			.join("");
-		const mnemonic = instr.mnemonic.padEnd(8);
+		const prefixedMnemonic = instr.prefix
+			? `${instr.prefix} ${instr.mnemonic}`
+			: instr.mnemonic;
 		lines.push(
-			`${fmtHex(currentAddr, 16).toLowerCase()} ${hexBytes.padEnd(16)} ${mnemonic}${instr.operands}`,
+			`${fmtHex(currentAddr, 16).toLowerCase()} ${hexBytes.padEnd(16)} ${prefixedMnemonic.padEnd(8)} ${instr.operands}`,
 		);
 		currentAddr += BigInt(instr.length);
 	}

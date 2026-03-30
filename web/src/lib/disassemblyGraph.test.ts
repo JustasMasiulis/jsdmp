@@ -254,6 +254,7 @@ describe("buildCfgInstructionLine", () => {
 	it("preserves the rendered graph line while exposing clickable tokens", () => {
 		const line = buildCfgInstructionLine({
 			address: 0x401000n,
+			prefix: "",
 			mnemonic: "mov",
 			operands: "qword ptr [rax+0x20], rbx",
 		});
@@ -293,16 +294,19 @@ describe("buildCfgInstructionLines", () => {
 		const lines = buildCfgInstructionLines([
 			{
 				address: 0x401000n,
+				prefix: "",
 				mnemonic: "mov",
 				operands: "rax, rbx",
 			},
 			{
 				address: 0x401002n,
+				prefix: "",
 				mnemonic: "cmovne",
 				operands: "rcx, rdx",
 			},
 			{
 				address: 0x401004n,
+				prefix: "",
 				mnemonic: "ret",
 				operands: "",
 			},

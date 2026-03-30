@@ -114,12 +114,6 @@ async function cachedRead(
 	return result.subarray(0, written);
 }
 
-// ---------------------------------------------------------------------------
-// Module PeFile cache
-// ---------------------------------------------------------------------------
-
-const peFileCache = new Map<string, Promise<PeFile | null>>();
-
 let cachedServerUrl: string | null = null;
 
 export function getSymbolServerUrl(): string {
@@ -143,12 +137,15 @@ export function setSymbolServerUrl(url: string): void {
 }
 
 function moduleKey(mod: DebugModule): string {
-	const timestamp = mod.timeDateStamp
-		.toString(16)
-		.padStart(8, "0")
-		.toUpperCase();
-	const size = mod.size.toString(16);
-	return `${timestamp}${size}`;
+	if (!mod.key) {
+		const timestamp = mod.timeDateStamp
+			.toString(16)
+			.padStart(8, "0")
+			.toUpperCase();
+		const size = mod.size.toString(16);
+		mod.key = `${timestamp}${size}`;
+	}
+	return mod.key;
 }
 
 function moduleName(mod: DebugModule): string {
@@ -182,15 +179,13 @@ async function loadPeFile(mod: DebugModule): Promise<PeFile | null> {
 }
 
 export function getModulePeFile(mod: DebugModule): Promise<PeFile | null> {
-	const cacheKey = moduleCacheKey(mod);
-	const existing = peFileCache.get(cacheKey);
-	if (existing) return existing;
+	if (mod.pe !== undefined) return mod.pe;
 
 	const promise = loadPeFile(mod).catch((err) => {
-		peFileCache.delete(cacheKey);
+		mod.pe = undefined;
 		throw err;
 	});
-	peFileCache.set(cacheKey, promise);
+	mod.pe = promise;
 	return promise;
 }
 

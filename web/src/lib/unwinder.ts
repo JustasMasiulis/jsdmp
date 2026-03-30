@@ -2,7 +2,6 @@ import type { Context } from "./cpu_context";
 import { type DebugModule, findModuleForAddress } from "./debug_interface";
 import {
 	type MemoryReader,
-	type PeFile,
 	type RuntimeFunction,
 	readUnwindInfo,
 	UNW_FLAG_CHAININFO,
@@ -526,7 +525,6 @@ export async function walkStack(
 ): Promise<WalkStackResult> {
 	const frames: StackFrame[] = [];
 	const ctx = initialContext.clone();
-	const peCache = new Map<bigint, PeFile | null>();
 
 	for (let i = 0; i < maxFrames; i++) {
 		if (ctx.ip === 0n) break;
@@ -545,11 +543,7 @@ export async function walkStack(
 		try {
 			if (mod) {
 				const rva = Number(ctx.ip - mod.address);
-				let pe = peCache.get(mod.address);
-				if (pe === undefined) {
-					pe = await getModulePeFile(mod);
-					peCache.set(mod.address, pe);
-				}
+				const pe = await getModulePeFile(mod);
 				const entry = pe
 					? await pe.findRuntimeFunction(reader, mod.address, rva)
 					: null;

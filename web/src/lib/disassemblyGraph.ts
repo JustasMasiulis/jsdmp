@@ -5,12 +5,14 @@ import {
 	MAX_INSTRUCTION_LENGTH,
 } from "./disassembly";
 import { fmtHex16 } from "./formatting";
+import { ZydisMnemonic } from "./mnemonic";
 
 export type CfgEdgeKind = "true" | "false" | "unconditional";
 
 export type CfgInstruction = {
 	address: bigint;
 	byteLength: number;
+	prefix: string;
 	mnemonic: string;
 	operands: string;
 	controlFlow: DisassembledControlFlow;
@@ -127,21 +129,48 @@ export const tokenizeCfgTextSegments = (text: string): CfgTextSegment[] => {
 	return segments;
 };
 
+const mnemonicColumnWidth = (
+	instruction: Pick<CfgInstruction, "prefix" | "mnemonic">,
+) => {
+	const prefixLen = instruction.prefix ? instruction.prefix.length + 1 : 0;
+	return prefixLen + instruction.mnemonic.length;
+};
+
 export const buildCfgInstructionLine = (
-	instruction: Pick<CfgInstruction, "address" | "mnemonic" | "operands">,
-	mnemonicColumnWidth = instruction.mnemonic.length,
+	instruction: Pick<
+		CfgInstruction,
+		"address" | "prefix" | "mnemonic" | "operands"
+	>,
+	columnWidth = mnemonicColumnWidth(instruction),
 ): CfgTextLine => {
 	const segments: CfgTextSegment[] = [
 		makeTextSegment(fmtHex16(instruction.address), true, null, "plain"),
 		makeTextSegment("  "),
-		makeTextSegment(instruction.mnemonic, true, null, "mnemonic"),
 	];
+
+	if (instruction.prefix) {
+		segments.push(
+			makeTextSegment(
+				instruction.prefix + " ",
+				true,
+				null,
+				"mnemonic",
+			),
+		);
+	}
+
+	segments.push(
+		makeTextSegment(instruction.mnemonic, true, null, "mnemonic"),
+	);
 
 	if (instruction.operands) {
 		segments.push(
 			makeTextSegment(
 				" ".repeat(
-					Math.max(1, mnemonicColumnWidth - instruction.mnemonic.length + 1),
+					Math.max(
+						1,
+						columnWidth - mnemonicColumnWidth(instruction) + 1,
+					),
 				),
 			),
 		);
@@ -163,16 +192,17 @@ export const buildCfgTextLinesFromLabel = (label: string): CfgTextLine[] =>
 export const buildCfgInstructionLines = (
 	instructions: readonly Pick<
 		CfgInstruction,
-		"address" | "mnemonic" | "operands"
+		"address" | "prefix" | "mnemonic" | "operands"
 	>[],
 ) => {
-	const mnemonicColumnWidth = instructions.reduce(
-		(maxWidth, instruction) => Math.max(maxWidth, instruction.mnemonic.length),
+	const maxColumnWidth = instructions.reduce(
+		(maxWidth, instruction) =>
+			Math.max(maxWidth, mnemonicColumnWidth(instruction)),
 		0,
 	);
 
 	return instructions.map((instruction) =>
-		buildCfgInstructionLine(instruction, mnemonicColumnWidth),
+		buildCfgInstructionLine(instruction, maxColumnWidth),
 	);
 };
 
@@ -211,6 +241,7 @@ const buildBlock2 = async (
 		instructions.push({
 			address: ip,
 			byteLength: decoded.length,
+			prefix: decoded.prefix,
 			mnemonic: decoded.mnemonic,
 			operands: decoded.operands,
 			controlFlow: decoded.controlFlow,
@@ -240,8 +271,10 @@ const buildBlock2 = async (
 				break loop;
 		}
 
-		// treat INT3 and UD2 as terminators.
-		if (decoded.mnemonic === "int3" || decoded.mnemonic === "ud2") {
+		if (
+			decoded.mnemonicId === ZydisMnemonic.ZYDIS_MNEMONIC_INT3 ||
+			decoded.mnemonicId === ZydisMnemonic.ZYDIS_MNEMONIC_UD2
+		) {
 			break;
 		}
 

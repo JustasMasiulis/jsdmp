@@ -1,4 +1,5 @@
 import type { Context } from "./cpu_context";
+import type { PeFile } from "./pe";
 import type { Signal } from "./reactive";
 
 export type Address = bigint;
@@ -45,11 +46,13 @@ export type DebugModule = {
 	checksum: number;
 	timeDateStamp: number;
 	path: string;
+	key?: string;
 	pdb?: {
 		path: string;
 		guid: string;
 		age: number;
 	};
+	pe?: Promise<PeFile | null>;
 };
 
 export type DebugUnloadedModule = {
@@ -72,10 +75,9 @@ export type DebugInterface = {
 	selectThread(thread: DebugThread): void;
 };
 
-export function findModuleForAddress<T extends { address: bigint; size: number }>(
-	address: bigint,
-	modules: readonly T[],
-): T | null {
+export function findModuleForAddress<
+	T extends { address: bigint; size: number },
+>(address: bigint, modules: readonly T[]): T | null {
 	for (const mod of modules) {
 		if (address >= mod.address && address < mod.address + BigInt(mod.size)) {
 			return mod;
