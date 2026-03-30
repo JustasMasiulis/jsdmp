@@ -71,3 +71,15 @@ export type DebugInterface = {
 	read(address: bigint, size: number, minSize?: number): Promise<Uint8Array>;
 	selectThread(thread: DebugThread): void;
 };
+
+export function findModuleForAddress<T extends { address: bigint; size: number }>(
+	address: bigint,
+	modules: readonly T[],
+): T | null {
+	for (const mod of modules) {
+		if (address >= mod.address && address < mod.address + BigInt(mod.size)) {
+			return mod;
+		}
+	}
+	return null;
+}

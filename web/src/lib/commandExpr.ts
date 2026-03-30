@@ -1,25 +1,10 @@
-import type { Context } from "./cpu_context";
+import { type Context, GPR_NAMES } from "./cpu_context";
 
-const REGISTER_MAP: Record<string, (ctx: Context) => bigint> = {
-	rax: (ctx) => ctx.gpr(0),
-	rcx: (ctx) => ctx.gpr(1),
-	rdx: (ctx) => ctx.gpr(2),
-	rbx: (ctx) => ctx.gpr(3),
-	rsp: (ctx) => ctx.gpr(4),
-	rbp: (ctx) => ctx.gpr(5),
-	rsi: (ctx) => ctx.gpr(6),
-	rdi: (ctx) => ctx.gpr(7),
-	r8: (ctx) => ctx.gpr(8),
-	r9: (ctx) => ctx.gpr(9),
-	r10: (ctx) => ctx.gpr(10),
-	r11: (ctx) => ctx.gpr(11),
-	r12: (ctx) => ctx.gpr(12),
-	r13: (ctx) => ctx.gpr(13),
-	r14: (ctx) => ctx.gpr(14),
-	r15: (ctx) => ctx.gpr(15),
-	rip: (ctx) => ctx.ip,
-	rflags: (ctx) => BigInt(ctx.flags),
-};
+const REGISTER_MAP: Record<string, (ctx: Context) => bigint> = Object.fromEntries([
+	...GPR_NAMES.map((name, idx) => [name, (ctx: Context) => ctx.gpr(idx)] as const),
+	["rip", (ctx: Context) => ctx.ip],
+	["rflags", (ctx: Context) => BigInt(ctx.flags)],
+]);
 
 class Parser {
 	private pos = 0;

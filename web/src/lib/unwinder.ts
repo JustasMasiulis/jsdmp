@@ -1,5 +1,5 @@
 import type { Context } from "./cpu_context";
-import type { DebugModule } from "./debug_interface";
+import { type DebugModule, findModuleForAddress } from "./debug_interface";
 import {
 	type MemoryReader,
 	type PeFile,
@@ -42,83 +42,21 @@ const RET_OP_2 = 0xc2;
 
 const UNWIND_OP_EXTRA_SLOT_TABLE = [0, 1, 0, 0, 1, 2, 1, 2, 1, 2, 0];
 
-// --- Mutable context ---
-
-export type UnwindContext = {
-	rip: bigint;
-	rsp: bigint;
-	rax: bigint;
-	rcx: bigint;
-	rdx: bigint;
-	rbx: bigint;
-	rbp: bigint;
-	rsi: bigint;
-	rdi: bigint;
-	r8: bigint;
-	r9: bigint;
-	r10: bigint;
-	r11: bigint;
-	r12: bigint;
-	r13: bigint;
-	r14: bigint;
-	r15: bigint;
-};
-
-const GPR_KEYS = [
-	"rax",
-	"rcx",
-	"rdx",
-	"rbx",
-	"rsp",
-	"rbp",
-	"rsi",
-	"rdi",
-	"r8",
-	"r9",
-	"r10",
-	"r11",
-	"r12",
-	"r13",
-	"r14",
-	"r15",
-] as const;
-
-function getGpr(ctx: UnwindContext, idx: number): bigint {
-	return ctx[GPR_KEYS[idx]];
-}
-
-function setGpr(ctx: UnwindContext, idx: number, val: bigint) {
-	(ctx as Record<string, bigint>)[GPR_KEYS[idx]] = val;
-}
-
-export function contextFromCpuContext(ctx: Context): UnwindContext {
-	return {
-		rip: ctx.ip,
-		rsp: ctx.sp,
-		rax: ctx.gpr(0),
-		rcx: ctx.gpr(1),
-		rdx: ctx.gpr(2),
-		rbx: ctx.gpr(3),
-		rbp: ctx.gpr(5),
-		rsi: ctx.gpr(6),
-		rdi: ctx.gpr(7),
-		r8: ctx.gpr(8),
-		r9: ctx.gpr(9),
-		r10: ctx.gpr(10),
-		r11: ctx.gpr(11),
-		r12: ctx.gpr(12),
-		r13: ctx.gpr(13),
-		r14: ctx.gpr(14),
-		r15: ctx.gpr(15),
-	};
-}
-
 // --- Helpers ---
 
 async function readQword(reader: MemoryReader, addr: bigint): Promise<bigint> {
 	const buf = await reader(addr, 8);
 	const view = new DataView(buf.buffer, buf.byteOffset, buf.byteLength);
 	return view.getBigUint64(0, true);
+}
+
+async function readOword(
+	reader: MemoryReader,
+	addr: bigint,
+): Promise<[bigint, bigint]> {
+	const buf = await reader(addr, 16);
+	const view = new DataView(buf.buffer, buf.byteOffset, buf.byteLength);
+	return [view.getBigUint64(0, true), view.getBigUint64(8, true)];
 }
 
 function unwindOpSlots(code: UnwindCode): number {
@@ -134,7 +72,7 @@ function slotU16(codes: UnwindCode[], idx: number): number {
 }
 
 function slotU32(codes: UnwindCode[], idx: number): number {
-	return (codes[idx + 1].frameOffset << 16) | codes[idx].frameOffset;
+	return ((codes[idx + 1].frameOffset << 16) | codes[idx].frameOffset) >>> 0;
 }
 
 // --- Prologue unwinding ---
@@ -144,7 +82,7 @@ async function unwindPrologue(
 	imageBase: bigint,
 	controlPc: bigint,
 	functionEntry: RuntimeFunction,
-	ctx: UnwindContext,
+	ctx: Context,
 	initialInfo?: UnwindInfo | null,
 ): Promise<void> {
 	let entry: RuntimeFunction | null = functionEntry;
@@ -161,13 +99,35 @@ async function unwindPrologue(
 
 		const prologOffset = Number(controlPc - imageBase) - entry.beginAddress;
 
-		// Determine frame base
+		// Determine frame base — mirrors the EstablisherFrame logic in the
+		// reference: when in the prolog, only use the frame register if
+		// UWOP_SET_FPREG has already been executed.
 		let frameBase: bigint;
-		if (info.frameRegister !== 0) {
+		if (info.frameRegister === 0) {
+			frameBase = ctx.sp;
+		} else if (
+			prologOffset >= info.sizeOfProlog ||
+			(info.flags & UNW_FLAG_CHAININFO) !== 0
+		) {
 			frameBase =
-				getGpr(ctx, info.frameRegister) - BigInt(info.frameOffset * 16);
+				ctx.gpr(info.frameRegister) - BigInt(info.frameOffset * 16);
 		} else {
-			frameBase = ctx.rsp;
+			// In prolog: scan for SET_FPREG to see if it's been executed
+			let setFpregOffset = -1;
+			let j = 0;
+			while (j < info.countOfUnwindCodes) {
+				if (info.unwindCodes[j].unwindOp === UWOP_SET_FPREG) {
+					setFpregOffset = info.unwindCodes[j].codeOffset;
+					break;
+				}
+				j += unwindOpSlots(info.unwindCodes[j]);
+			}
+			if (setFpregOffset >= 0 && prologOffset >= setFpregOffset) {
+				frameBase =
+					ctx.gpr(info.frameRegister) - BigInt(info.frameOffset * 16);
+			} else {
+				frameBase = ctx.sp;
+			}
 		}
 
 		let i = 0;
@@ -179,31 +139,30 @@ async function unwindPrologue(
 			if (prologOffset >= code.codeOffset) {
 				switch (code.unwindOp) {
 					case UWOP_PUSH_NONVOL:
-						setGpr(ctx, code.opInfo, await readQword(reader, ctx.rsp));
-						ctx.rsp += 8n;
+						ctx.setGpr(code.opInfo, await readQword(reader, ctx.sp));
+						ctx.sp += 8n;
 						break;
 
 					case UWOP_ALLOC_LARGE:
 						if (code.opInfo === 0) {
-							ctx.rsp += BigInt(slotU16(info.unwindCodes, i + 1) * 8);
+							ctx.sp += BigInt(slotU16(info.unwindCodes, i + 1) * 8);
 						} else {
-							ctx.rsp += BigInt(slotU32(info.unwindCodes, i + 1));
+							ctx.sp += BigInt(slotU32(info.unwindCodes, i + 1));
 						}
 						break;
 
 					case UWOP_ALLOC_SMALL:
-						ctx.rsp += BigInt(code.opInfo * 8 + 8);
+						ctx.sp += BigInt(code.opInfo * 8 + 8);
 						break;
 
 					case UWOP_SET_FPREG:
-						ctx.rsp =
-							getGpr(ctx, info.frameRegister) - BigInt(info.frameOffset * 16);
+						ctx.sp =
+							ctx.gpr(info.frameRegister) - BigInt(info.frameOffset * 16);
 						break;
 
 					case UWOP_SAVE_NONVOL: {
 						const offset = BigInt(slotU16(info.unwindCodes, i + 1) * 8);
-						setGpr(
-							ctx,
+						ctx.setGpr(
 							code.opInfo,
 							await readQword(reader, frameBase + offset),
 						);
@@ -212,8 +171,7 @@ async function unwindPrologue(
 
 					case UWOP_SAVE_NONVOL_FAR: {
 						const offset = BigInt(slotU32(info.unwindCodes, i + 1));
-						setGpr(
-							ctx,
+						ctx.setGpr(
 							code.opInfo,
 							await readQword(reader, frameBase + offset),
 						);
@@ -224,16 +182,33 @@ async function unwindPrologue(
 						// Version 2 epilog marker — skip
 						break;
 
-					case UWOP_SAVE_XMM128:
-					case UWOP_SAVE_XMM128_FAR:
-						// We don't track XMM registers
+					case UWOP_SAVE_XMM128: {
+						const offset = BigInt(
+							slotU16(info.unwindCodes, i + 1) * 16,
+						);
+						const [lo, hi] = await readOword(
+							reader,
+							frameBase + offset,
+						);
+						ctx.setXmm(code.opInfo, lo, hi);
 						break;
+					}
+
+					case UWOP_SAVE_XMM128_FAR: {
+						const offset = BigInt(slotU32(info.unwindCodes, i + 1));
+						const [lo, hi] = await readOword(
+							reader,
+							frameBase + offset,
+						);
+						ctx.setXmm(code.opInfo, lo, hi);
+						break;
+					}
 
 					case UWOP_PUSH_MACHFRAME: {
 						const hasPushError = code.opInfo !== 0;
-						const base = ctx.rsp + (hasPushError ? 8n : 0n);
-						ctx.rip = await readQword(reader, base);
-						ctx.rsp = await readQword(reader, base + 24n);
+						const base = ctx.sp + (hasPushError ? 8n : 0n);
+						ctx.ip = await readQword(reader, base);
+						ctx.sp = await readQword(reader, base + 24n);
 						return; // Machine frame sets RIP directly
 					}
 				}
@@ -253,13 +228,18 @@ async function unwindPrologue(
 	}
 
 	// Read return address from stack
-	ctx.rip = await readQword(reader, ctx.rsp);
-	ctx.rsp += 8n;
+	ctx.ip = await readQword(reader, ctx.sp);
+	ctx.sp += 8n;
 }
 
 // --- Epilogue detection and unwinding ---
 
-function isInEpilogue(buf: Uint8Array): boolean {
+function isInEpilogue(
+	buf: Uint8Array,
+	controlPcRva: number,
+	functionEntry: RuntimeFunction,
+	info: UnwindInfo,
+): boolean {
 	let i = 0;
 
 	// Check for add rsp, imm8 (48 83 c4 xx)
@@ -278,29 +258,29 @@ function isInEpilogue(buf: Uint8Array): boolean {
 	) {
 		i += 7;
 	}
-	// Check for lea rsp, [reg+disp8] or [reg+disp32]
-	else if (buf[i] === SIZE64_PREFIX && buf[i + 1] === LEA_OP) {
-		const modrm = buf[i + 2];
-		const reg = (modrm >> 3) & 0x07;
-		if (reg !== 4) return false; // must target RSP
-		const mod = (modrm >> 6) & 0x03;
-		if (mod === 1) {
-			i += 4; // disp8
-		} else if (mod === 2) {
-			i += 7; // disp32
-		} else {
-			return false;
+	// Check for lea rsp, disp[fp] — REX.W or REX.WB prefix
+	else if ((buf[i] & 0xfe) === SIZE64_PREFIX && buf[i + 1] === LEA_OP) {
+		const frameRegister =
+			((buf[i] & 0x1) << 3) | (buf[i + 2] & 0x07);
+		if (
+			frameRegister !== 0 &&
+			frameRegister === info.frameRegister
+		) {
+			if ((buf[i + 2] & 0xf8) === 0x60) {
+				i += 4; // disp8
+			} else if ((buf[i + 2] & 0xf8) === 0xa0) {
+				i += 7; // disp32
+			}
 		}
 	}
 
-	// Pop sequence: 0x58-0x5F or REX.B pop (41 58-5F)
+	// Pop sequence: any REX prefix + pop
 	while (i < buf.length) {
-		if (buf[i] >= POP_OP && buf[i] <= POP_OP + 7) {
+		if ((buf[i] & 0xf8) === POP_OP) {
 			i += 1;
 		} else if (
-			buf[i] === 0x41 &&
-			buf[i + 1] >= POP_OP &&
-			buf[i + 1] <= POP_OP + 7
+			(buf[i] & 0xf0) === 0x40 &&
+			(buf[i + 1] & 0xf8) === POP_OP
 		) {
 			i += 2;
 		} else {
@@ -310,25 +290,52 @@ function isInEpilogue(buf: Uint8Array): boolean {
 
 	if (i >= buf.length) return false;
 
-	// Must end with ret, ret imm16, jmp rel8, jmp rel32, or rex jmp [reg]
-	if (buf[i] === RET_OP || buf[i] === RET_OP_2) return true;
-	if (buf[i] === JMP_IMM8_OP || buf[i] === JMP_IMM32_OP) return true;
-	if (buf[i] === REPNE_PREFIX || buf[i] === REP_PREFIX) {
-		// rep ret
+	// REPNE prefix may precede control transfer
+	if (buf[i] === REPNE_PREFIX) {
 		i += 1;
-		if (buf[i] === RET_OP) return true;
 	}
-	// jmp [reg] (ff /4)
-	if (buf[i] === JMP_IND_OP) {
-		const modrm = buf[i + 1];
-		const reg = (modrm >> 3) & 0x07;
-		if (reg === 4) return true; // /4 = jmp
+
+	// ret / ret imm16
+	if (buf[i] === RET_OP || buf[i] === RET_OP_2) return true;
+	// rep ret
+	if (buf[i] === REP_PREFIX && buf[i + 1] === RET_OP) return true;
+
+	// jmp rel8 / jmp rel32 — must target outside this function
+	if (buf[i] === JMP_IMM8_OP || buf[i] === JMP_IMM32_OP) {
+		let branchTarget = controlPcRva + i;
+		if (buf[i] === JMP_IMM8_OP) {
+			const rel = buf[i + 1];
+			branchTarget += 2 + (rel > 127 ? rel - 256 : rel);
+		} else {
+			const view = new DataView(
+				buf.buffer,
+				buf.byteOffset,
+				buf.byteLength,
+			);
+			branchTarget += 5 + view.getInt32(i + 1, true);
+		}
+		if (
+			branchTarget < functionEntry.beginAddress ||
+			branchTarget >= functionEntry.endAddress
+		) {
+			return true;
+		}
+		if (branchTarget === functionEntry.beginAddress) {
+			return true;
+		}
+		return false;
 	}
-	// rex.w jmp [reg]
-	if (buf[i] === SIZE64_PREFIX && buf[i + 1] === JMP_IND_OP) {
-		const modrm = buf[i + 2];
-		const reg = (modrm >> 3) & 0x07;
-		if (reg === 4) return true;
+
+	// jmp [rip+disp32] (ff 25) — indirect jump to import
+	if (buf[i] === JMP_IND_OP && buf[i + 1] === 0x25) return true;
+
+	// rex jmp [reg] — (REX.W variants) ff /4
+	if (
+		(buf[i] & 0xf8) === SIZE64_PREFIX &&
+		buf[i + 1] === JMP_IND_OP &&
+		(buf[i + 2] & 0x38) === 0x20
+	) {
+		return true;
 	}
 
 	return false;
@@ -337,7 +344,7 @@ function isInEpilogue(buf: Uint8Array): boolean {
 async function emulateEpilogue(
 	reader: MemoryReader,
 	controlPc: bigint,
-	ctx: UnwindContext,
+	ctx: Context,
 ): Promise<void> {
 	const buf = await reader(controlPc, 32);
 	return emulateEpilogueCore(buf, ctx, reader);
@@ -345,86 +352,69 @@ async function emulateEpilogue(
 
 async function emulateEpilogueCore(
 	buf: Uint8Array,
-	ctx: UnwindContext,
+	ctx: Context,
 	reader: MemoryReader,
 ): Promise<void> {
 	const view = new DataView(buf.buffer, buf.byteOffset, buf.byteLength);
 	let i = 0;
 
-	// add rsp, imm8
-	if (
-		buf[i] === SIZE64_PREFIX &&
-		buf[i + 1] === ADD_IMM8_OP &&
-		buf[i + 2] === 0xc4
-	) {
-		ctx.rsp += BigInt(buf[i + 3]);
-		i += 4;
-	}
-	// add rsp, imm32
-	else if (
-		buf[i] === SIZE64_PREFIX &&
-		buf[i + 1] === ADD_IMM32_OP &&
-		buf[i + 2] === 0xc4
-	) {
-		ctx.rsp += BigInt(view.getUint32(i + 3, true));
-		i += 7;
-	}
-	// lea rsp, [reg+disp]
-	else if (buf[i] === SIZE64_PREFIX && buf[i + 1] === LEA_OP) {
-		const modrm = buf[i + 2];
-		const rm = modrm & 0x07;
-		const mod = (modrm >> 6) & 0x03;
-		// rm is the source register (with REX.B=0, this maps to GPR index directly)
-		const srcReg = rm; // no REX.B in the patterns we check
-		if (mod === 1) {
-			const disp = buf[i + 3];
-			const signedDisp = disp > 127 ? disp - 256 : disp;
-			ctx.rsp = getGpr(ctx, srcReg) + BigInt(signedDisp);
+	if ((buf[i] & 0xf8) === SIZE64_PREFIX) {
+		if (buf[i + 1] === ADD_IMM8_OP) {
+			// add rsp, imm8
+			ctx.sp += BigInt(buf[i + 3]);
 			i += 4;
-		} else if (mod === 2) {
-			const disp = view.getInt32(i + 3, true);
-			ctx.rsp = getGpr(ctx, srcReg) + BigInt(disp);
+		} else if (buf[i + 1] === ADD_IMM32_OP) {
+			// add rsp, imm32
+			const disp =
+				buf[i + 3] |
+				(buf[i + 4] << 8) |
+				(buf[i + 5] << 16) |
+				(buf[i + 6] << 24);
+			ctx.sp += BigInt(disp);
 			i += 7;
+		} else if (buf[i + 1] === LEA_OP) {
+			// lea rsp, disp[fp] — combine REX.B with rm for source register
+			const srcReg = ((buf[i] & 0x1) << 3) | (buf[i + 2] & 0x07);
+			if ((buf[i + 2] & 0xf8) === 0x60) {
+				const disp = buf[i + 3];
+				const signedDisp = disp > 127 ? disp - 256 : disp;
+				ctx.sp = ctx.gpr(srcReg) + BigInt(signedDisp);
+				i += 4;
+			} else if ((buf[i + 2] & 0xf8) === 0xa0) {
+				const disp =
+					buf[i + 3] |
+					(buf[i + 4] << 8) |
+					(buf[i + 5] << 16) |
+					(buf[i + 6] << 24);
+				ctx.sp = ctx.gpr(srcReg) + BigInt(disp);
+				i += 7;
+			}
 		}
 	}
 
-	// Pop sequence
+	// Pop sequence — accept any REX prefix
 	while (i < buf.length) {
-		if (buf[i] >= POP_OP && buf[i] <= POP_OP + 7) {
-			const reg = buf[i] - POP_OP;
-			setGpr(ctx, reg, await readQword(reader, ctx.rsp));
-			ctx.rsp += 8n;
+		if ((buf[i] & 0xf8) === POP_OP) {
+			const reg = buf[i] & 0x07;
+			ctx.setGpr(reg, await readQword(reader, ctx.sp));
+			ctx.sp += 8n;
 			i += 1;
 		} else if (
-			buf[i] === 0x41 &&
-			buf[i + 1] >= POP_OP &&
-			buf[i + 1] <= POP_OP + 7
+			(buf[i] & 0xf0) === 0x40 &&
+			(buf[i + 1] & 0xf8) === POP_OP
 		) {
-			const reg = buf[i + 1] - POP_OP + 8; // REX.B = +8
-			setGpr(ctx, reg, await readQword(reader, ctx.rsp));
-			ctx.rsp += 8n;
+			const reg = ((buf[i] & 1) << 3) | (buf[i + 1] & 0x07);
+			ctx.setGpr(reg, await readQword(reader, ctx.sp));
+			ctx.sp += 8n;
 			i += 2;
 		} else {
 			break;
 		}
 	}
 
-	// Return: read RIP from [RSP], advance RSP
-	if (buf[i] === RET_OP || buf[i] === RET_OP_2) {
-		ctx.rip = await readQword(reader, ctx.rsp);
-		ctx.rsp += 8n;
-		if (buf[i] === RET_OP_2) {
-			ctx.rsp += BigInt(view.getUint16(i + 1, true));
-		}
-	} else if (buf[i] === REP_PREFIX || buf[i] === REPNE_PREFIX) {
-		// rep ret
-		ctx.rip = await readQword(reader, ctx.rsp);
-		ctx.rsp += 8n;
-	} else {
-		// jmp variants — treat as tail call, read return address from stack
-		ctx.rip = await readQword(reader, ctx.rsp);
-		ctx.rsp += 8n;
-	}
+	// All terminal instructions emulate a return
+	ctx.ip = await readQword(reader, ctx.sp);
+	ctx.sp += 8n;
 }
 
 function isInEpilogueV2(
@@ -433,40 +423,34 @@ function isInEpilogueV2(
 	functionEntry: RuntimeFunction,
 	info: UnwindInfo,
 ): boolean {
-	const funcOffset = Number(controlPc - imageBase) - functionEntry.beginAddress;
+	if (info.countOfUnwindCodes === 0) return false;
 
-	// Scan for UWOP_EPILOG codes
-	let i = 0;
-	let firstEpilogOffset = -1;
-	while (i < info.countOfUnwindCodes) {
-		const code = info.unwindCodes[i];
-		if (code.unwindOp === UWOP_EPILOG) {
-			if (firstEpilogOffset < 0) {
-				// First UWOP_EPILOG: opInfo has flags, offset is in the code's data
-				const epilogSize = code.codeOffset;
-				if (code.opInfo & 0x01) {
-					// Epilog at end of function
-					const endOffset =
-						functionEntry.endAddress - functionEntry.beginAddress;
-					firstEpilogOffset = endOffset - epilogSize;
-					if (funcOffset >= firstEpilogOffset && funcOffset < endOffset) {
-						return true;
-					}
-				}
-			} else {
-				// Subsequent UWOP_EPILOG: offset from function start
-				const offset = (code.opInfo << 8) | code.codeOffset;
-				if (offset === 0) {
-					i += 1;
-					continue;
-				}
-				const epilogSize = info.unwindCodes[0].codeOffset;
-				if (funcOffset >= offset && funcOffset < offset + epilogSize) {
-					return true;
-				}
-			}
+	const firstCode = info.unwindCodes[0];
+	if (firstCode.unwindOp !== UWOP_EPILOG) return false;
+
+	const relativePc = Number(controlPc - imageBase);
+	const epilogSize = firstCode.codeOffset;
+
+	// First UWOP_EPILOG: if low bit of opInfo set, epilogue at function end
+	if (firstCode.opInfo & 0x01) {
+		const epilogStart = functionEntry.endAddress - epilogSize;
+		if (relativePc - epilogStart >= 0 && relativePc - epilogStart < epilogSize) {
+			return true;
 		}
-		i += 1;
+	}
+
+	// Subsequent UWOP_EPILOG codes: offset is distance from function end
+	for (let i = 1; i < info.countOfUnwindCodes; i++) {
+		const code = info.unwindCodes[i];
+		if (code.unwindOp !== UWOP_EPILOG) break;
+
+		const distFromEnd = (code.opInfo << 8) | code.codeOffset;
+		if (distFromEnd === 0) break;
+
+		const epilogStart = functionEntry.endAddress - distFromEnd;
+		if (relativePc - epilogStart >= 0 && relativePc - epilogStart < epilogSize) {
+			return true;
+		}
 	}
 
 	return false;
@@ -479,7 +463,7 @@ export async function virtualUnwind(
 	imageBase: bigint,
 	controlPc: bigint,
 	functionEntry: RuntimeFunction,
-	ctx: UnwindContext,
+	ctx: Context,
 ): Promise<void> {
 	const info = await readUnwindInfo(
 		reader,
@@ -488,8 +472,8 @@ export async function virtualUnwind(
 	);
 	if (!info) {
 		// Treat as leaf
-		ctx.rip = await readQword(reader, ctx.rsp);
-		ctx.rsp += 8n;
+		ctx.ip = await readQword(reader, ctx.sp);
+		ctx.sp += 8n;
 		return;
 	}
 
@@ -506,7 +490,8 @@ export async function virtualUnwind(
 		} else {
 			// Read instruction bytes once for both detection and emulation
 			const instrBuf = await reader(controlPc, 32);
-			if (isInEpilogue(instrBuf)) {
+			const controlPcRva = Number(controlPc - imageBase);
+			if (isInEpilogue(instrBuf, controlPcRva, functionEntry, info)) {
 				await emulateEpilogueCore(instrBuf, ctx, reader);
 				return;
 			}
@@ -527,14 +512,6 @@ export type StackFrame = {
 	offset: bigint;
 };
 
-function findModule(ip: bigint, modules: DebugModule[]): DebugModule | null {
-	for (const m of modules) {
-		if (ip >= m.address && ip < m.address + BigInt(m.size)) {
-			return m;
-		}
-	}
-	return null;
-}
 
 export type WalkStackResult = {
 	frames: StackFrame[];
@@ -544,30 +521,30 @@ export type WalkStackResult = {
 export async function walkStack(
 	reader: MemoryReader,
 	modules: DebugModule[],
-	initialContext: UnwindContext,
+	initialContext: Context,
 	maxFrames = 64,
 ): Promise<WalkStackResult> {
 	const frames: StackFrame[] = [];
-	const ctx: UnwindContext = { ...initialContext };
+	const ctx = initialContext.clone();
 	const peCache = new Map<bigint, PeFile | null>();
 
 	for (let i = 0; i < maxFrames; i++) {
-		if (ctx.rip === 0n) break;
+		if (ctx.ip === 0n) break;
 
-		const mod = findModule(ctx.rip, modules);
+		const mod = findModuleForAddress(ctx.ip, modules);
 		frames.push({
-			ip: ctx.rip,
-			sp: ctx.rsp,
+			ip: ctx.ip,
+			sp: ctx.sp,
 			moduleName: mod ? basename(mod.path) : "<unknown>",
 			moduleBase: mod?.address ?? 0n,
-			offset: mod ? ctx.rip - mod.address : ctx.rip,
+			offset: mod ? ctx.ip - mod.address : ctx.ip,
 		});
 
-		const prevRip = ctx.rip;
+		const prevRip = ctx.ip;
 
 		try {
 			if (mod) {
-				const rva = Number(ctx.rip - mod.address);
+				const rva = Number(ctx.ip - mod.address);
 				let pe = peCache.get(mod.address);
 				if (pe === undefined) {
 					pe = await getModulePeFile(mod);
@@ -577,21 +554,21 @@ export async function walkStack(
 					? await pe.findRuntimeFunction(reader, mod.address, rva)
 					: null;
 				if (entry) {
-					await virtualUnwind(reader, mod.address, ctx.rip, entry, ctx);
+					await virtualUnwind(reader, mod.address, ctx.ip, entry, ctx);
 				} else {
-					ctx.rip = await readQword(reader, ctx.rsp);
-					ctx.rsp += 8n;
+					ctx.ip = await readQword(reader, ctx.sp);
+					ctx.sp += 8n;
 				}
 			} else {
-				ctx.rip = await readQword(reader, ctx.rsp);
-				ctx.rsp += 8n;
+				ctx.ip = await readQword(reader, ctx.sp);
+				ctx.sp += 8n;
 			}
 		} catch (err) {
 			const msg = err instanceof Error ? err.message : String(err);
 			return { frames, error: msg };
 		}
 
-		if (ctx.rip === prevRip) break;
+		if (ctx.ip === prevRip) break;
 	}
 
 	return { frames };

@@ -1,5 +1,6 @@
 import { evaluateExpression } from "./commandExpr";
-import type { Context } from "./cpu_context";
+import { type Context, GPR_NAMES } from "./cpu_context";
+import { findModuleForAddress } from "./debug_interface";
 import { disassembleInstruction, MAX_INSTRUCTION_LENGTH } from "./disassembly";
 import { fmtHex, fmtHex16 } from "./formatting";
 import type { MinidumpDebugInterface } from "./minidump_debug_interface";
@@ -27,50 +28,16 @@ export type CommandEngine = {
 	getCommands: () => CommandHandler[];
 };
 
-function resolveModuleForAddress(
-	address: bigint,
-	modules: Array<{ address: bigint; size: number; path: string }>,
-): {
-	module: { address: bigint; size: number; path: string };
-	offset: bigint;
-} | null {
-	for (const mod of modules) {
-		if (address >= mod.address && address < mod.address + BigInt(mod.size)) {
-			return { module: mod, offset: address - mod.address };
-		}
-	}
-	return null;
-}
-
 function formatModuleOffset(
 	address: bigint,
-	modules: Array<{ address: bigint; size: number; path: string }>,
+	modules: readonly { address: bigint; size: number; path: string }[],
 ): string {
-	const resolved = resolveModuleForAddress(address, modules);
-	if (resolved) {
-		return `${basename(resolved.module.path)}+0x${resolved.offset.toString(16)}`;
+	const mod = findModuleForAddress(address, modules);
+	if (mod) {
+		return `${basename(mod.path)}+0x${(address - mod.address).toString(16)}`;
 	}
 	return fmtHex16(address);
 }
-
-const GPR_NAMES = [
-	"rax",
-	"rcx",
-	"rdx",
-	"rbx",
-	"rsp",
-	"rbp",
-	"rsi",
-	"rdi",
-	"r8",
-	"r9",
-	"r10",
-	"r11",
-	"r12",
-	"r13",
-	"r14",
-	"r15",
-];
 
 function registerCommand(dbg: MinidumpDebugInterface): Promise<CommandOutput> {
 	const ctx = dbg.currentContext.state;
@@ -167,15 +134,10 @@ async function stackCommand(
 	}
 
 	try {
-		const { walkStack, contextFromCpuContext } = await import("./unwinder");
+		const { walkStack } = await import("./unwinder");
 		const modules = dbg.modules.state;
 		const reader = (addr: bigint, size: number) => dbg.read(addr, size);
-		const result = await walkStack(
-			reader,
-			modules,
-			contextFromCpuContext(ctx),
-			64,
-		);
+		const result = await walkStack(reader, modules, ctx.clone(), 64);
 
 		const lines: string[] = [];
 		lines.push(" # Child-SP          RetAddr           Call Site");
@@ -426,16 +388,16 @@ function addressCommand(
 		}
 	}
 
-	const resolved = resolveModuleForAddress(address, modules);
-	const moduleName = resolved ? basename(resolved.module.path) : "<unknown>";
+	const mod = findModuleForAddress(address, modules);
+	const moduleName = mod ? basename(mod.path) : "<unknown>";
 
 	if (!found) {
 		return Promise.resolve({
 			lines: [
 				`Address ${fmtHex(address, 16).toLowerCase()} not found in any memory range`,
-				resolved ? `Module: ${moduleName}` : "",
+				mod ? `Module: ${moduleName}` : "",
 			].filter(Boolean),
-			isError: !resolved,
+			isError: !mod,
 		});
 	}
 

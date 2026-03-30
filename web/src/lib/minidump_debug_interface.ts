@@ -1,11 +1,12 @@
 import { Context } from "./cpu_context";
-import type {
-	DebugInterface,
-	DebugMemoryRange,
-	DebugModule,
-	DebugThread,
-	DebugThreadException,
-	DebugUnloadedModule,
+import {
+	type DebugInterface,
+	type DebugMemoryRange,
+	type DebugModule,
+	type DebugThread,
+	type DebugThreadException,
+	type DebugUnloadedModule,
+	findModuleForAddress,
 } from "./debug_interface";
 import {
 	type MiniDump,
@@ -230,15 +231,12 @@ export class MinidumpDebugInterface implements DebugInterface {
 			return memoryBytes;
 		}
 
-		for (const mod of this.modules.state) {
-			const modEnd = mod.address + BigInt(mod.size);
-			if (address >= mod.address && address < modEnd) {
-				const rva = Number(address - mod.address);
-				const imageBytes = await readFromModuleImage(mod, rva, size);
-				if (imageBytes && imageBytes.length >= requiredSize) {
-					return imageBytes;
-				}
-				break;
+		const mod = findModuleForAddress(address, this.modules.state);
+		if (mod) {
+			const rva = Number(address - mod.address);
+			const imageBytes = await readFromModuleImage(mod, rva, size);
+			if (imageBytes && imageBytes.length >= requiredSize) {
+				return imageBytes;
 			}
 		}
 
