@@ -199,8 +199,7 @@ export const buildCfgInstructionLines = (
 const buildBlock2 = async (
 	dbg: DebugInterface,
 	blockAddr: bigint,
-	blocks: Map<bigint, CfgNode>,
-	knownBlockStarts: Set<bigint>,
+	blocks: Map<bigint, CfgNode | null>,
 	addPendingBlock: (addr: bigint) => void,
 	addEdge: (to: bigint, kind: CfgEdgeKind) => void,
 ) => {
@@ -209,7 +208,7 @@ const buildBlock2 = async (
 
 	let error: string | null = null;
 	loop: while (true) {
-		if (instructions.length > 0 && knownBlockStarts.has(ip)) {
+		if (instructions.length > 0 && blocks.has(ip)) {
 			addEdge(ip, "unconditional");
 			break;
 		}
@@ -288,27 +287,22 @@ export const buildCfg2 = async (
 	dbg: DebugInterface,
 	entryAddress: bigint,
 ): Promise<CfgBuildResult> => {
-	const blocks = new Map<bigint, CfgNode>();
+	const blocks = new Map<bigint, CfgNode | null>();
 	const edges = new Map<string, CfgEdge>();
-	const pendingBlocks = new Set<bigint>([entryAddress]);
-	const knownBlockStarts = new Set<bigint>([entryAddress]);
+	const pendingBlocks: bigint[] = [entryAddress];
 
-	while (pendingBlocks.size > 0) {
-		// pop the first pending block
-		const addr = pendingBlocks.values().next().value;
-		pendingBlocks.delete(addr);
+	blocks.set(entryAddress, null);
+
+	while (pendingBlocks.length > 0) {
+		const addr = pendingBlocks.pop();
 
 		const addPendingBlock = (newBlockAddr: bigint) => {
-			if (
-				addr === newBlockAddr ||
-				blocks.has(newBlockAddr) ||
-				knownBlockStarts.has(newBlockAddr)
-			) {
+			if (addr === newBlockAddr || blocks.has(newBlockAddr)) {
 				return;
 			}
 
-			knownBlockStarts.add(newBlockAddr);
-			pendingBlocks.add(newBlockAddr);
+			blocks.set(newBlockAddr, null);
+			pendingBlocks.push(newBlockAddr);
 		};
 
 		const addEdge = (to: bigint, kind: CfgEdgeKind) => {
@@ -323,24 +317,19 @@ export const buildCfg2 = async (
 			}
 		};
 
-		await buildBlock2(
-			dbg,
-			addr,
-			blocks,
-			knownBlockStarts,
-			addPendingBlock,
-			addEdge,
-		);
+		await buildBlock2(dbg, addr, blocks, addPendingBlock, addEdge);
 	}
+
+	const allBlocks = Array.from(blocks.values()) as CfgNode[];
 
 	return {
 		anchorAddress: entryAddress,
-		blocks: Array.from(blocks.values()),
+		blocks: allBlocks,
 		edges: Array.from(edges.values()),
 		stats: {
-			blockCount: blocks.size,
+			blockCount: allBlocks.length,
 			edgeCount: edges.size,
-			instructionCount: Array.from(blocks.values()).reduce(
+			instructionCount: allBlocks.reduce(
 				(total, block) => total + block.instructionCount,
 				0,
 			),
