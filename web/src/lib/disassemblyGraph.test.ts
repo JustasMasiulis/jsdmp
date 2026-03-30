@@ -194,6 +194,132 @@ describe("buildCfg2", () => {
 		expect(result.blocks.find((b) => b.id === "block:1002")).toBeUndefined();
 	});
 
+	it("retroactively splits an already-committed block when a later branch targets its middle", async () => {
+		// Need a block fully committed before a mid-block target is discovered.
+		// Key insight: with LIFO, the LAST pushed address is popped FIRST.
+		// For conditional je: true target pushed first, fallthrough pushed second,
+		// so fallthrough is popped first.
+		//
+		// Layout:
+		// 0x1000: je 0x1010       (true → 0x1010, false/fallthrough → 0x1002)
+		// 0x1002: nop nop nop c3  (the block that must be split at 0x1004)
+		// ...padding...
+		// 0x1010: jmp 0x1004      (targets middle of 0x1002 block)
+		//
+		// LIFO trace:
+		//   pending: [0x1000]
+		//   pop 0x1000 → je 0x1010: push 0x1010 (true), push 0x1002 (false)
+		//   pending: [0x1010, 0x1002]
+		//   pop 0x1002 → nop, nop, nop, ret → committed with 4 instructions
+		//   instrToBlock: {0x1002→0x1002, 0x1003→0x1002, 0x1004→0x1002, 0x1005→0x1002}
+		//   pending: [0x1010]
+		//   pop 0x1010 → jmp 0x1004 → addPendingBlock(0x1004)
+		//     0x1004 NOT in blocks, but instrToBlock has 0x1004→0x1002
+		//     → must retroactively split block 0x1002 at 0x1004!
+
+		const entryAddress = 0x1000n;
+		// Build a byte buffer with padding between 0x1006 and 0x1010
+		const buf = new Uint8Array(0x12);
+		buf.set([0x74, 0x0e], 0x00); // 1000: je +0x0e → 0x1010
+		buf.set([0x90, 0x90, 0x90, 0xc3], 0x02); // 1002: nop nop nop ret
+		buf.set([0xcc, 0xcc, 0xcc, 0xcc, 0xcc, 0xcc, 0xcc, 0xcc, 0xcc, 0xcc], 0x06); // padding
+		buf.set([0xeb, 0xf2], 0x10); // 1010: jmp -0x0e → 0x1004
+
+		const result = await buildCfg2(
+			makeSource([{ start: entryAddress, bytes: buf }]),
+			entryAddress,
+		);
+
+		expect(result.blocks.map((b) => b.id).sort()).toEqual([
+			"block:1000",
+			"block:1002",
+			"block:1004",
+			"block:1010",
+		]);
+
+		const block1002 = result.blocks.find((b) => b.id === "block:1002");
+		expect(block1002?.instructionCount).toBe(2);
+		expect(block1002?.lines.map((l) => l.text)).toEqual([
+			"0000000000001002  nop",
+			"0000000000001003  nop",
+		]);
+
+		const block1004 = result.blocks.find((b) => b.id === "block:1004");
+		expect(block1004?.instructionCount).toBe(2);
+		expect(block1004?.lines.map((l) => l.text)).toEqual([
+			"0000000000001004  nop",
+			"0000000000001005  ret",
+		]);
+
+		// Head→tail fallthrough
+		expect(
+			result.edges.some(
+				(e) =>
+					e.from === "block:1002" &&
+					e.to === "block:1004" &&
+					e.kind === "unconditional",
+			),
+		).toBe(true);
+		// Jump into mid-block
+		expect(
+			result.edges.some(
+				(e) =>
+					e.from === "block:1010" &&
+					e.to === "block:1004" &&
+					e.kind === "unconditional",
+			),
+		).toBe(true);
+	});
+
+	it("splits when a backward branch targets the middle of its own block", async () => {
+		// Block branches backward into its own instruction range.
+		// The target is queued before the block is committed, so the split
+		// must happen at pop time.
+		//
+		// 0x1000: nop             (1 byte)
+		// 0x1001: nop             (1 byte)
+		// 0x1002: 75 fd  jne -3 → 0x1001  (backward conditional into own middle)
+		//
+		// Without pop-time split: block 0x1000 is committed as [nop,nop,jne],
+		// then 0x1001 is popped and re-decoded, creating overlap.
+		// With pop-time split: popping 0x1001 splits block 0x1000 into
+		// head [0x1000:nop] and tail [0x1001:nop, 0x1002:jne].
+
+		const entryAddress = 0x1000n;
+		const bytes = new Uint8Array([0x90, 0x90, 0x75, 0xfd]);
+		const result = await buildCfg2(
+			makeSource([{ start: entryAddress, bytes }]),
+			entryAddress,
+		);
+
+		expect(result.blocks.map((b) => b.id).sort()).toEqual([
+			"block:1000",
+			"block:1001",
+			"block:1004",
+		]);
+
+		const block1000 = result.blocks.find((b) => b.id === "block:1000");
+		expect(block1000?.instructionCount).toBe(1);
+
+		const block1001 = result.blocks.find((b) => b.id === "block:1001");
+		expect(block1001?.instructionCount).toBe(2);
+
+		expect(
+			result.edges.some(
+				(e) =>
+					e.from === "block:1000" &&
+					e.to === "block:1001" &&
+					e.kind === "unconditional",
+			),
+		).toBe(true);
+		expect(
+			result.edges.some(
+				(e) =>
+					e.from === "block:1001" && e.to === "block:1001" && e.kind === "true",
+			),
+		).toBe(true);
+	});
+
 	it("splits a fallthrough block before a previously discovered target", async () => {
 		const entryAddress = 0x1000n;
 		const result = await buildCfg2(
@@ -228,6 +354,101 @@ describe("buildCfg2", () => {
 					edge.kind === "unconditional",
 			),
 		).toBe(true);
+	});
+
+	it("no block has overlapping instructions with another block", async () => {
+		// Long straight-line block with multiple backward branches into
+		// different points in its middle. Entry falls through the whole
+		// thing; a later block sends branches back into it at two offsets.
+		//
+		// 0x1000: eb 10  jmp +16 → 0x1012
+		// 0x1002: 90     nop  \
+		// 0x1003: 90     nop   |
+		// 0x1004: 90     nop   | long block decoded as one unit
+		// 0x1005: 90     nop   | before any mid-targets are discovered
+		// 0x1006: 90     nop   |
+		// 0x1007: 90     nop   |
+		// 0x1008: 90     nop   |
+		// 0x1009: 90     nop   |
+		// 0x100a: 90     nop   |
+		// 0x100b: 90     nop   |
+		// 0x100c: 90     nop   |
+		// 0x100d: 90     nop   |
+		// 0x100e: 90     nop   |
+		// 0x100f: c3     ret  /
+		// 0x1010: cc     int3 (padding)
+		// 0x1011: cc     int3 (padding)
+		// 0x1012: 74 ee  je -18 → 0x1002 (true → start of long block)
+		// 0x1014: 74 f0  je -16 → 0x1006 (true → mid-block #1)
+		// 0x1016: eb ee  jmp -18 → 0x1006 (should dedup, not double-edge)
+		// Unreachable after jmp, but 0x100a is targeted below:
+		// 0x1018: eb f0  jmp -16 → 0x100a (mid-block #2, from different block)
+		//
+		// Because 0x1012 is a je, fallthrough is 0x1014. 0x1014 is also je,
+		// fallthrough is 0x1016. 0x1016 is jmp (no fallthrough).
+		// LIFO processing ensures long block at 0x1002 is built before
+		// the mid-block targets 0x1006 and 0x100a are discovered.
+		const entryAddress = 0x1000n;
+		const buf = new Uint8Array(0x1a);
+		buf.set([0xeb, 0x10], 0x00); // 1000: jmp → 0x1012
+		// 1002..100e: nops
+		for (let i = 0x02; i <= 0x0e; i++) buf[i] = 0x90;
+		buf[0x0f] = 0xc3; // 100f: ret
+		buf[0x10] = 0xcc; // 1010: int3
+		buf[0x11] = 0xcc; // 1011: int3
+		buf.set([0x74, 0xee], 0x12); // 1012: je → 0x1002
+		buf.set([0x74, 0xf0], 0x14); // 1014: je → 0x1006
+		buf.set([0xeb, 0xee], 0x16); // 1016: jmp → 0x1006
+		buf.set([0xeb, 0xf0], 0x18); // 1018: jmp → 0x100a
+		const bytes = buf;
+		const result = await buildCfg2(
+			makeSource([{ start: entryAddress, bytes }]),
+			entryAddress,
+		);
+
+		const blockAddresses = result.blocks.map((b) => ({
+			id: b.id,
+			addresses: b.lines
+				.filter((l) => /^[0-9a-f]{16}/.test(l.text))
+				.map((l) => l.text.slice(0, 16)),
+		}));
+
+		// Verify no instruction address appears in more than one block
+		const allAddresses = blockAddresses.flatMap((b) =>
+			b.addresses.map((a) => ({ block: b.id, address: a })),
+		);
+		const seen = new Map<string, string>();
+		for (const { block, address } of allAddresses) {
+			const existing = seen.get(address);
+			if (existing) {
+				throw new Error(`Address ${address} in both ${existing} and ${block}`);
+			}
+			seen.set(address, block);
+		}
+
+		// Verify no duplicate edges (same from+to pair)
+		const edgePairs = result.edges.map((e) => `${e.from}->${e.to}`);
+		const uniquePairs = new Set(edgePairs);
+		expect(edgePairs.length).toBe(uniquePairs.size);
+
+		// Verify every non-terminal block has at least one outgoing edge
+		const blockIds = new Set(result.blocks.map((b) => b.id));
+		const blocksWithOutgoing = new Set(result.edges.map((e) => e.from));
+		for (const block of result.blocks) {
+			const lastLine = block.lines[block.lines.length - 1];
+			const isTerminal =
+				lastLine &&
+				(/\bret\b/.test(lastLine.text) || /\bint3\b/.test(lastLine.text));
+			if (!isTerminal) {
+				expect(blocksWithOutgoing.has(block.id)).toBe(true);
+			}
+		}
+
+		// Verify all edge targets reference existing blocks
+		for (const edge of result.edges) {
+			expect(blockIds.has(edge.from)).toBe(true);
+			expect(blockIds.has(edge.to)).toBe(true);
+		}
 	});
 });
 

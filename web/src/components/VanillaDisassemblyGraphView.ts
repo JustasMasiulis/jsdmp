@@ -28,15 +28,24 @@ const DISASSEMBLY_GRAPH_PANEL_STATE_KEY =
 
 const SVG_NS = "http://www.w3.org/2000/svg";
 
+const escapeHtml = (text: string) =>
+	text.replace(/[&<>"]/g, (ch) =>
+		ch === "&" ? "&amp;" : ch === "<" ? "&lt;" : ch === ">" ? "&gt;" : "&quot;",
+	);
+
+const escapeAttr = (text: string) =>
+	text.replace(/[&"]/g, (ch) => (ch === "&" ? "&amp;" : "&quot;"));
+
 const MIN_ZOOM = 0.1;
 const MAX_ZOOM = 3.0;
-const ZOOM_FACTOR = 0.1;
 const FIT_PADDING = 64;
 const EDGE_ARROW_MARKER_WIDTH = 8;
 const EDGE_ARROW_MARKER_HEIGHT = 6;
 const EDGE_ARROW_REF_X = 0;
 const EDGE_ARROW_REF_Y = 3;
 const EDGE_ARROW_LINE_TRIM = EDGE_ARROW_MARKER_WIDTH - EDGE_ARROW_REF_X;
+const DETAIL_ZOOM_THRESHOLD = 0.2;
+const VIEWPORT_MARGIN = 200;
 
 type DisassemblyGraphViewPanelOptions = {
 	container: HTMLElement;
@@ -111,12 +120,18 @@ export class VanillaDisassemblyGraphView implements IContentRenderer {
 
 	private layoutCore: GraphLayoutCore | null = null;
 	private viewportElement: HTMLDivElement | null = null;
+	private blockContainer: HTMLDivElement | null = null;
 	private blockElements = new Map<string, HTMLDivElement>();
 	private termElements = new Map<string, HTMLSpanElement[]>();
+	private blockTermSpans = new Map<string, HTMLSpanElement[]>();
 	private edgeElements: SVGPolylineElement[] = [];
 	private edgeOwnership: Array<{ from: string; to: string }> = [];
 	private resizeObserver: ResizeObserver | null = null;
+	private nodesById = new Map<string, CfgNode>();
+	private lastShowDetail = false;
 
+	private hostWidth = 0;
+	private hostHeight = 0;
 	private panX = 0;
 	private panY = 0;
 	private zoom = 1;
@@ -238,7 +253,7 @@ export class VanillaDisassemblyGraphView implements IContentRenderer {
 		const direction = event.deltaY > 0 ? -1 : 1;
 		const newZoom = Math.min(
 			MAX_ZOOM,
-			Math.max(MIN_ZOOM, oldZoom * (1 + direction * ZOOM_FACTOR)),
+			Math.max(MIN_ZOOM, oldZoom * 1.15 ** direction),
 		);
 
 		// Zoom toward cursor: keep the point under the cursor fixed
@@ -270,7 +285,11 @@ export class VanillaDisassemblyGraphView implements IContentRenderer {
 			passive: false,
 		});
 		if (typeof ResizeObserver !== "undefined") {
-			this.resizeObserver = new ResizeObserver(() => {
+			this.resizeObserver = new ResizeObserver((entries) => {
+				for (const entry of entries) {
+					this.hostWidth = entry.contentRect.width;
+					this.hostHeight = entry.contentRect.height;
+				}
 				this.fitToView();
 			});
 			this.resizeObserver.observe(this.graphHost);
@@ -409,11 +428,17 @@ export class VanillaDisassemblyGraphView implements IContentRenderer {
 	private disposeGraph() {
 		this.layoutCore = null;
 		this.viewportElement = null;
+		this.blockContainer = null;
 
 		this.blockElements.clear();
 		this.termElements.clear();
+		this.blockTermSpans.clear();
+		this.nodesById.clear();
 		this.edgeElements = [];
 		this.edgeOwnership = [];
+		this.prevSelectedNodeId = null;
+		this.prevSelectedTerm = null;
+		this.lastShowDetail = false;
 		this.graphHost.replaceChildren();
 	}
 
@@ -519,9 +544,11 @@ export class VanillaDisassemblyGraphView implements IContentRenderer {
 
 		this.disposeGraph();
 		this.layoutCore = new GraphLayoutCore(descriptor, true, true);
+
 		this.graphHost.hidden = false;
+		this.hostWidth = this.graphHost.clientWidth;
+		this.hostHeight = this.graphHost.clientHeight;
 		this.renderGraph();
-		this.fitToView();
 		this.syncStatus();
 		this.syncControlState();
 	}
@@ -533,14 +560,12 @@ export class VanillaDisassemblyGraphView implements IContentRenderer {
 		const totalWidth = core.getWidth();
 		const totalHeight = core.getHeight();
 
-		// Viewport container
 		const viewport = document.createElement("div");
 		viewport.className = "cfg-viewport";
 		viewport.style.width = `${totalWidth}px`;
 		viewport.style.height = `${totalHeight}px`;
 		this.viewportElement = viewport;
 
-		// SVG edge layer
 		const svg = document.createElementNS(SVG_NS, "svg");
 		svg.classList.add("cfg-edges");
 		svg.setAttribute("width", String(totalWidth));
@@ -549,19 +574,20 @@ export class VanillaDisassemblyGraphView implements IContentRenderer {
 		this.addSvgArrowMarkers(svg);
 		this.renderEdges(svg, core);
 
-		// Block container (sits on top of SVG)
 		const blockContainer = document.createElement("div");
 		blockContainer.style.position = "absolute";
 		blockContainer.style.top = "0";
 		blockContainer.style.left = "0";
 		blockContainer.style.width = `${totalWidth}px`;
 		blockContainer.style.height = `${totalHeight}px`;
-		this.renderBlocks(blockContainer, core);
+		this.blockContainer = blockContainer;
+		this.nodesById = new Map(
+			(this.graphResult?.blocks ?? []).map((node) => [node.id, node]),
+		);
 
 		viewport.append(svg, blockContainer);
+		this.fitToView();
 		this.graphHost.append(viewport);
-		this.applyViewportTransform();
-		this.updateSelectionStyles();
 	}
 
 	private addSvgArrowMarkers(svg: SVGSVGElement) {
@@ -685,26 +711,89 @@ export class VanillaDisassemblyGraphView implements IContentRenderer {
 		}
 	}
 
-	private renderBlocks(container: HTMLElement, core: GraphLayoutCore) {
-		this.blockElements.clear();
-		this.termElements.clear();
-		const nodesById = new Map(
-			(this.graphResult?.blocks ?? []).map((node) => [node.id, node]),
-		);
+	private updateVisibleBlocks() {
+		const core = this.layoutCore;
+		const container = this.blockContainer;
+		if (!core || !container) return;
+
+		const showDetail = this.zoom >= DETAIL_ZOOM_THRESHOLD;
+		const detailChanged = showDetail !== this.lastShowDetail;
+		this.lastShowDetail = showDetail;
+
+		const left = (-this.panX - VIEWPORT_MARGIN) / this.zoom;
+		const top = (-this.panY - VIEWPORT_MARGIN) / this.zoom;
+		const right = (this.hostWidth - this.panX + VIEWPORT_MARGIN) / this.zoom;
+		const bottom = (this.hostHeight - this.panY + VIEWPORT_MARGIN) / this.zoom;
 
 		for (const block of core.blocks) {
-			const div = document.createElement("div");
-			div.className = "cfg-block";
-			div.dataset.blockId = block.data.id;
-			div.style.left = `${block.coordinates.x}px`;
-			div.style.top = `${block.coordinates.y}px`;
-			div.style.width = `${block.data.width}px`;
-			div.style.height = `${block.data.height}px`;
+			const id = block.data.id;
+			const bx = block.coordinates.x;
+			const by = block.coordinates.y;
+			const visible =
+				bx + block.data.width > left &&
+				bx < right &&
+				by + block.data.height > top &&
+				by < bottom;
 
-			const cfgNode = nodesById.get(block.data.id);
-			this.renderBlockText(div, cfgNode, block.data.label);
-			container.append(div);
-			this.blockElements.set(block.data.id, div);
+			const existing = this.blockElements.get(id);
+
+			if (visible && !existing) {
+				this.createBlockElement(block, container, showDetail);
+			} else if (!visible && existing) {
+				this.removeBlockElement(id, existing);
+			} else if (visible && existing && detailChanged) {
+				this.removeBlockElement(id, existing);
+				this.createBlockElement(block, container, showDetail);
+			}
+		}
+	}
+
+	private createBlockElement(
+		block: GraphLayoutCore["blocks"][number],
+		container: HTMLElement,
+		showDetail: boolean,
+	) {
+		const id = block.data.id;
+		const div = document.createElement("div");
+		div.className = "cfg-block";
+		div.dataset.blockId = id;
+		div.style.left = `${block.coordinates.x}px`;
+		div.style.top = `${block.coordinates.y}px`;
+		div.style.width = `${block.data.width}px`;
+		div.style.height = `${block.data.height}px`;
+
+		if (showDetail) {
+			const cfgNode = this.nodesById.get(id);
+			this.renderBlockText(div, cfgNode, block.data.label, id);
+		}
+
+		if (id === this.selectedNodeId) {
+			div.classList.add("cfg-block--selected");
+		}
+
+		container.append(div);
+		this.blockElements.set(id, div);
+	}
+
+	private removeBlockElement(id: string, div: HTMLDivElement) {
+		div.remove();
+		this.blockElements.delete(id);
+		const spans = this.blockTermSpans.get(id);
+		if (spans) {
+			for (const span of spans) {
+				const term = span.dataset.term;
+				if (!term) continue;
+				const arr = this.termElements.get(term);
+				if (arr) {
+					const idx = arr.indexOf(span);
+					if (idx !== -1) arr.splice(idx, 1);
+					if (arr.length === 0) this.termElements.delete(term);
+				}
+			}
+			this.blockTermSpans.delete(id);
+		}
+		if (id === this.prevSelectedNodeId) {
+			this.prevSelectedNodeId = null;
 		}
 	}
 
@@ -712,6 +801,7 @@ export class VanillaDisassemblyGraphView implements IContentRenderer {
 		container: HTMLElement,
 		node: CfgNode | null | undefined,
 		fallbackLabel: string,
+		blockId: string,
 	) {
 		const lines = node?.lines;
 		if (!lines || lines.length === 0) {
@@ -719,50 +809,72 @@ export class VanillaDisassemblyGraphView implements IContentRenderer {
 			return;
 		}
 
+		let hasTerms = false;
+		const parts: string[] = [];
 		for (const line of lines) {
-			const lineNode = document.createElement("div");
-			lineNode.className = "cfg-block__line";
 			if (line.segments.length === 0) {
-				lineNode.textContent = line.text;
-				container.append(lineNode);
+				parts.push('<div class="cfg-block__line">');
+				parts.push(escapeHtml(line.text));
+				parts.push("</div>");
 				continue;
 			}
-
+			parts.push('<div class="cfg-block__line">');
 			for (const segment of line.segments) {
 				if (!segment.clickable || !segment.term) {
-					lineNode.append(segment.text);
+					parts.push(escapeHtml(segment.text));
 					continue;
 				}
-
-				const span = document.createElement("span");
-				span.className = "cfg-block__term";
+				hasTerms = true;
+				parts.push('<span class="cfg-block__term');
 				if (segment.syntaxKind !== "plain") {
-					span.classList.add(`cfg-block__term--syntax-${segment.syntaxKind}`);
+					parts.push(" cfg-block__term--syntax-");
+					parts.push(segment.syntaxKind);
 				}
-				span.dataset.term = segment.term;
-				span.textContent = segment.text;
-				lineNode.append(span);
-
-				const existing = this.termElements.get(segment.term) ?? [];
-				existing.push(span);
-				this.termElements.set(segment.term, existing);
+				parts.push('" data-term="');
+				parts.push(escapeAttr(segment.term));
+				parts.push('">');
+				parts.push(escapeHtml(segment.text));
+				parts.push("</span>");
 			}
+			parts.push("</div>");
+		}
+		container.innerHTML = parts.join("");
 
-			container.append(lineNode);
+		if (hasTerms) {
+			const spans: HTMLSpanElement[] = [];
+			const selectedTerm = this.selectedTerm;
+			for (const span of container.querySelectorAll<HTMLSpanElement>(
+				".cfg-block__term",
+			)) {
+				const term = span.dataset.term;
+				if (!term) continue;
+				let existing = this.termElements.get(term);
+				if (existing === undefined) {
+					existing = [];
+					this.termElements.set(term, existing);
+				}
+				existing.push(span);
+				spans.push(span);
+				if (term === selectedTerm) {
+					span.classList.add("cfg-block__term--selected");
+				}
+			}
+			this.blockTermSpans.set(blockId, spans);
 		}
 	}
 
 	private applyViewportTransform() {
 		if (!this.viewportElement) return;
 		this.viewportElement.style.transform = `translate(${this.panX}px, ${this.panY}px) scale(${this.zoom})`;
+		this.updateVisibleBlocks();
 	}
 
 	private fitToView() {
 		const core = this.layoutCore;
 		if (!core || core.blocks.length === 0) return;
 
-		const hostWidth = this.graphHost.clientWidth;
-		const hostHeight = this.graphHost.clientHeight;
+		const hostWidth = this.hostWidth;
+		const hostHeight = this.hostHeight;
 		if (hostWidth <= 0 || hostHeight <= 0) return;
 
 		const layoutWidth = core.getWidth();
@@ -770,26 +882,51 @@ export class VanillaDisassemblyGraphView implements IContentRenderer {
 
 		const scaleX = (hostWidth - FIT_PADDING * 2) / layoutWidth;
 		const scaleY = (hostHeight - FIT_PADDING * 2) / layoutHeight;
-		this.zoom = Math.min(scaleX, scaleY, 1.0);
+		this.zoom = Math.max(MIN_ZOOM, Math.min(scaleX, scaleY, 1.0));
 		this.panX = (hostWidth - layoutWidth * this.zoom) / 2;
 		this.panY = (hostHeight - layoutHeight * this.zoom) / 2;
 		this.applyViewportTransform();
 	}
 
+	private prevSelectedNodeId: string | null = null;
+	private prevSelectedTerm: string | null = null;
+
 	private updateSelectionStyles() {
 		const selectedNodeId = this.selectedNodeId;
 		const selectedTerm = this.selectedTerm;
 
-		for (const [id, div] of this.blockElements) {
-			const isSelected = id === selectedNodeId;
-			div.classList.toggle("cfg-block--selected", isSelected);
+		if (this.prevSelectedNodeId !== selectedNodeId) {
+			if (this.prevSelectedNodeId !== null) {
+				this.blockElements
+					.get(this.prevSelectedNodeId)
+					?.classList.remove("cfg-block--selected");
+			}
+			if (selectedNodeId !== null) {
+				this.blockElements
+					.get(selectedNodeId)
+					?.classList.add("cfg-block--selected");
+			}
+			this.prevSelectedNodeId = selectedNodeId;
 		}
 
-		for (const [term, spans] of this.termElements) {
-			const isSelected = term === selectedTerm;
-			for (const span of spans) {
-				span.classList.toggle("cfg-block__term--selected", isSelected);
+		if (this.prevSelectedTerm !== selectedTerm) {
+			if (this.prevSelectedTerm !== null) {
+				const prevSpans = this.termElements.get(this.prevSelectedTerm);
+				if (prevSpans) {
+					for (const span of prevSpans) {
+						span.classList.remove("cfg-block__term--selected");
+					}
+				}
 			}
+			if (selectedTerm !== null) {
+				const nextSpans = this.termElements.get(selectedTerm);
+				if (nextSpans) {
+					for (const span of nextSpans) {
+						span.classList.add("cfg-block__term--selected");
+					}
+				}
+			}
+			this.prevSelectedTerm = selectedTerm;
 		}
 	}
 

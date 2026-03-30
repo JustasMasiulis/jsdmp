@@ -136,7 +136,7 @@ function hexPad(value: bigint, bits: number): string {
 	const mask = bits < 64 ? (1n << BigInt(bits)) - 1n : 0xffffffffffffffffn;
 	const masked = value & mask;
 	const digits = Math.max(2, Math.ceil(bits / 4));
-	return masked.toString(16).toUpperCase().padStart(digits, "0");
+	return "0x" + masked.toString(16).toUpperCase().padStart(digits, "0");
 }
 
 function formatSignedHex(value: bigint, bits: number): string {
@@ -145,9 +145,9 @@ function formatSignedHex(value: bigint, bits: number): string {
 	const masked = value & mask;
 	if (masked & signBit) {
 		const neg = (~masked & mask) + 1n;
-		return `-0x${neg.toString(16).toUpperCase()}`;
+		return "-0x" + neg.toString(16).toUpperCase();
 	}
-	return `0x${masked.toString(16).toUpperCase()}`;
+	return "0x" + masked.toString(16).toUpperCase();
 }
 
 function formatImm(
@@ -158,42 +158,42 @@ function formatImm(
 	if (op.isRelative) {
 		const target = runtimeAddress + BigInt(instrLength) + op.value;
 		const mask = (1n << 64n) - 1n;
-		return `0x${(target & mask).toString(16).toUpperCase()}`;
+		return "0x" + (target & mask).toString(16).toUpperCase();
 	}
 	if (op.isSigned) {
 		return formatSignedHex(op.value, op.size);
 	}
-	return `0x${hexPad(op.value, op.size)}`;
+	return hexPad(op.value, op.size);
 }
 
 function formatMem(op: DecodedOperandMem): string {
-	const parts: string[] = [];
+	let result = "";
 
 	const isAgen = op.memType === 1;
 	if (!isAgen) {
 		const qualifier = SIZE_QUALIFIERS[op.size];
-		if (qualifier) parts.push(qualifier, " ");
+		if (qualifier) result += qualifier + " ";
 	}
 
 	const segIdx = op.segment;
 	if (segIdx > 0 && segIdx !== defaultSegmentIndex(op.base)) {
-		parts.push(SEGMENT_NAMES[segIdx] ?? "", ":");
+		result += (SEGMENT_NAMES[segIdx] ?? "") + ":";
 	}
 
-	parts.push("[");
+	result += "[";
 
 	const hasBase = op.base !== ZydisRegister.NONE;
 	const hasIndex = op.index !== ZydisRegister.NONE;
 	let bracket = "";
 
 	if (hasBase) {
-		bracket += registerName(op.base);
+		bracket = registerName(op.base);
 	}
 
 	if (hasIndex) {
 		if (bracket.length > 0) bracket += "+";
 		const idxName = registerName(op.index);
-		bracket += op.scale > 1 ? `${idxName}*${op.scale}` : idxName;
+		bracket += op.scale > 1 ? idxName + "*" + op.scale : idxName;
 	}
 
 	if (op.hasDisplacement && op.displacement !== 0n) {
@@ -209,23 +209,25 @@ function formatMem(op: DecodedOperandMem): string {
 		}
 		const hexStr = absVal.toString(16).toUpperCase();
 		if (bracket.length > 0) {
-			bracket += isNeg ? `-0x${hexStr}` : `+0x${hexStr}`;
+			bracket += isNeg ? "-0x" + hexStr : "+0x" + hexStr;
 		} else {
-			bracket += isNeg ? `-0x${hexStr}` : `0x${hexStr}`;
+			bracket += isNeg ? "-0x" + hexStr : "0x" + hexStr;
 		}
 	} else if (!hasBase && !hasIndex) {
 		const disp = op.displacement & ((1n << 64n) - 1n);
-		bracket += `0x${disp.toString(16).toUpperCase()}`;
+		bracket += "0x" + disp.toString(16).toUpperCase();
 	}
 
-	parts.push(bracket);
-	parts.push("]");
-
-	return parts.join("");
+	return result + bracket + "]";
 }
 
 function formatPtr(op: DecodedOperandPtr): string {
-	return `0x${op.segment.toString(16).toUpperCase()}:0x${op.offset.toString(16).toUpperCase()}`;
+	return (
+		"0x" +
+		op.segment.toString(16).toUpperCase() +
+		":0x" +
+		op.offset.toString(16).toUpperCase()
+	);
 }
 
 function formatOperand(
@@ -246,16 +248,16 @@ function formatOperand(
 }
 
 function emitPrefixes(attributes: bigint): string {
-	const prefixes: string[] = [];
-	if (attributes & ATTRIB_HAS_XACQUIRE) prefixes.push("xacquire");
-	if (attributes & ATTRIB_HAS_XRELEASE) prefixes.push("xrelease");
-	if (attributes & ATTRIB_HAS_LOCK) prefixes.push("lock");
-	if (attributes & ATTRIB_HAS_REP) prefixes.push("rep");
-	if (attributes & ATTRIB_HAS_REPE) prefixes.push("repe");
-	if (attributes & ATTRIB_HAS_REPNE) prefixes.push("repne");
-	if (attributes & ATTRIB_HAS_BND) prefixes.push("bnd");
-	if (attributes & ATTRIB_HAS_NOTRACK) prefixes.push("notrack");
-	return prefixes.length > 0 ? `${prefixes.join(" ")} ` : "";
+	let result = "";
+	if (attributes & ATTRIB_HAS_XACQUIRE) result += "xacquire ";
+	if (attributes & ATTRIB_HAS_XRELEASE) result += "xrelease ";
+	if (attributes & ATTRIB_HAS_LOCK) result += "lock ";
+	if (attributes & ATTRIB_HAS_REP) result += "rep ";
+	if (attributes & ATTRIB_HAS_REPE) result += "repe ";
+	if (attributes & ATTRIB_HAS_REPNE) result += "repne ";
+	if (attributes & ATTRIB_HAS_BND) result += "bnd ";
+	if (attributes & ATTRIB_HAS_NOTRACK) result += "notrack ";
+	return result;
 }
 
 function emitAvxDecorators(header: DecodedInstructionHeader): string {
@@ -287,19 +289,33 @@ export function formatInstruction(
 	operands: DecodedOperand[],
 	runtimeAddress: bigint,
 ): string {
-	const prefix = emitPrefixes(header.attributes);
-	const mnemonic = mnemonicString(header.mnemonic);
+	let result =
+		emitPrefixes(header.attributes) + mnemonicString(header.mnemonic);
 
-	const opStrings: string[] = [];
-	for (let i = 0; i < header.operandCount && i < operands.length; i++) {
-		opStrings.push(formatOperand(operands[i], runtimeAddress, header.length));
-	}
-
-	let result = prefix + mnemonic;
-	if (opStrings.length > 0) {
-		result += ` ${opStrings.join(", ")}`;
+	const count = Math.min(header.operandCount, operands.length);
+	if (count > 0) {
+		result += " " + formatOperand(operands[0], runtimeAddress, header.length);
+		for (let i = 1; i < count; i++) {
+			result +=
+				", " + formatOperand(operands[i], runtimeAddress, header.length);
+		}
 	}
 	result += emitAvxDecorators(header);
 
+	return result;
+}
+
+export function formatInstructionOperands(
+	header: DecodedInstructionHeader,
+	operands: DecodedOperand[],
+	runtimeAddress: bigint,
+): string {
+	const count = Math.min(header.operandCount, operands.length);
+	if (count === 0) return emitAvxDecorators(header);
+	let result = formatOperand(operands[0], runtimeAddress, header.length);
+	for (let i = 1; i < count; i++) {
+		result += ", " + formatOperand(operands[i], runtimeAddress, header.length);
+	}
+	result += emitAvxDecorators(header);
 	return result;
 }

@@ -23,7 +23,6 @@
 // POSSIBILITY OF SUCH DAMAGE.
 
 import IntervalTree from "@flatten-js/interval-tree";
-import clone from "nanoclone";
 
 export type EdgeColor = "red" | "green" | "blue" | "grey";
 
@@ -129,6 +128,8 @@ type Block = {
 	treeParent: number | null;
 	row: number;
 	col: number;
+	pendingRowShift: number;
+	pendingColShift: number;
 	boundingBox: BoundingBox;
 	coordinates: Coordinate;
 	incidentEdgeCount: number;
@@ -187,12 +188,6 @@ type SegmentInfo = {
 
 const EDGE_SPACING = 10;
 
-function* zip<T>(a: T[], b: T[]) {
-	for (let i = 0; i < Math.min(a.length, b.length); i++) {
-		yield [a[i], b[i]] as [T, T];
-	}
-}
-
 function calculateTreePacking(
 	left: BoundingBox,
 	right: BoundingBox,
@@ -201,28 +196,28 @@ function calculateTreePacking(
 	if (!narrowLayout) {
 		return 0;
 	}
-	const offsets: number[] = [];
-	for (const [leftRow, rightRow] of zip(left.rows, right.rows)) {
-		const leftBound = leftRow.end;
-		const rightBound = rightRow.start;
-		let offset = 0;
-		offset -= left.width - leftBound;
-		offset -= rightBound;
-		offsets.push(offset);
+	const minLen = Math.min(left.rows.length, right.rows.length);
+	if (minLen === 0) return 0;
+	let maxOffset = left.rows[0].end - left.width - right.rows[0].start;
+	for (let i = 1; i < minLen; i++) {
+		const offset = left.rows[i].end - left.width - right.rows[i].start;
+		if (offset > maxOffset) {
+			maxOffset = offset;
+		}
 	}
-	return offsets.length === 0 ? 0 : offsets.reduce((a, b) => Math.min(a, b));
+	return maxOffset;
 }
 
 function combineRowBounds(left: RowBound[], right: RowBound[]) {
-	for (const [leftBound, rightBound] of zip(left, right)) {
-		leftBound.start = Math.min(leftBound.start, rightBound.start);
-		leftBound.end = Math.max(leftBound.end, rightBound.end);
+	const minLen = Math.min(left.length, right.length);
+	for (let i = 0; i < minLen; i++) {
+		left[i].start = Math.min(left[i].start, right[i].start);
+		left[i].end = Math.max(left[i].end, right[i].end);
 	}
-	if (left.length < right.length) {
-		return [...left, ...right.slice(left.length).map((bound) => clone(bound))];
-	} else {
-		return left;
+	for (let i = left.length; i < right.length; i++) {
+		left.push({ start: right[i].start, end: right[i].end });
 	}
+	return left;
 }
 
 export class GraphLayoutCore {
@@ -261,6 +256,8 @@ export class GraphLayoutCore {
 				treeParent: null,
 				row: 0,
 				col: 0,
+				pendingRowShift: 0,
+				pendingColShift: 0,
 				boundingBox: { width: 0, height: 0, rows: [] },
 				coordinates: { x: 0, y: 0 },
 				incidentEdgeCount: 0,
@@ -404,8 +401,32 @@ export class GraphLayoutCore {
 			rowBound.start += columnShift;
 			rowBound.end += columnShift;
 		}
-		for (const j of block.treeEdges) {
-			this.adjustSubtree(j, rowShift, columnShift);
+		block.pendingRowShift += rowShift;
+		block.pendingColShift += columnShift;
+	}
+
+	propagateShifts(root: number) {
+		const block = this.blocks[root];
+		const { pendingRowShift, pendingColShift } = block;
+		block.pendingRowShift = 0;
+		block.pendingColShift = 0;
+		if (pendingRowShift === 0 && pendingColShift === 0) {
+			for (const child of block.treeEdges) {
+				this.propagateShifts(child);
+			}
+			return;
+		}
+		for (const child of block.treeEdges) {
+			const childBlock = this.blocks[child];
+			childBlock.row += pendingRowShift;
+			childBlock.col += pendingColShift;
+			for (const rowBound of childBlock.boundingBox.rows) {
+				rowBound.start += pendingColShift;
+				rowBound.end += pendingColShift;
+			}
+			childBlock.pendingRowShift += pendingRowShift;
+			childBlock.pendingColShift += pendingColShift;
+			this.propagateShifts(child);
 		}
 	}
 
@@ -424,15 +445,18 @@ export class GraphLayoutCore {
 		} else if (block.treeEdges.length === 1) {
 			const childIndex = block.treeEdges[0];
 			const child = this.blocks[childIndex];
+			const childRows = child.boundingBox.rows;
+			const rows: RowBound[] = new Array(childRows.length + 1);
+			rows[0] = { start: child.col, end: child.col + 2 };
+			for (let i = 0; i < childRows.length; i++) {
+				rows[i + 1] = { start: childRows[i].start, end: childRows[i].end };
+			}
 			block.row = 0;
 			block.col = child.col;
 			block.boundingBox = {
 				width: child.boundingBox.width,
 				height: child.boundingBox.height + 1,
-				rows: [
-					{ start: child.col, end: child.col + 2 },
-					...child.boundingBox.rows.map((bound) => clone(bound)),
-				],
+				rows,
 			};
 			this.adjustSubtree(childIndex, 1, 0);
 		} else {
@@ -494,6 +518,21 @@ export class GraphLayoutCore {
 		for (const [i, tree] of trees) {
 			this.adjustSubtree(i, 0, offset);
 			offset += tree.boundingBox.width;
+		}
+		for (const [i] of trees) {
+			this.propagateShifts(i);
+		}
+		if (this.blocks.length > 0) {
+			const minCol = Math.min(...this.blocks.map((b) => b.col));
+			if (minCol < 0) {
+				for (const block of this.blocks) {
+					block.col -= minCol;
+					for (const rowBound of block.boundingBox.rows) {
+						rowBound.start -= minCol;
+						rowBound.end -= minCol;
+					}
+				}
+			}
 		}
 	}
 
@@ -562,16 +601,17 @@ export class GraphLayoutCore {
 		topRow: number,
 		blockedColumns: number[],
 	) {
-		const leftCandidate =
-			sourceColumn -
-			1 -
-			blockedColumns
-				.slice(0, sourceColumn)
-				.reverse()
-				.findIndex((v) => v < topRow);
+		const maxCol = blockedColumns.length - 1;
+		const leftIdx = blockedColumns
+			.slice(0, sourceColumn)
+			.reverse()
+			.findIndex((v) => v < topRow);
+		const leftCandidate = leftIdx === -1 ? 0 : sourceColumn - 1 - leftIdx;
+		const rightIdx = blockedColumns
+			.slice(sourceColumn)
+			.findIndex((v) => v < topRow);
 		const rightCandidate =
-			sourceColumn +
-			blockedColumns.slice(sourceColumn).findIndex((v) => v < topRow);
+			rightIdx === -1 ? maxCol : Math.min(sourceColumn + rightIdx, maxCol);
 		return [leftCandidate, rightCandidate];
 	}
 
@@ -581,14 +621,13 @@ export class GraphLayoutCore {
 		edge: Edge,
 		blockedColumns: number[],
 	) {
+		const maxCol = blockedColumns.length - 1;
 		const sourceColumn = source.col + 1;
 		const targetColumn = target.col + 1;
 		const topRow = Math.min(source.row + 1, target.row);
 		if (blockedColumns[sourceColumn] < topRow) {
-			// use column under source block if it isn't blocked
 			edge.mainColumn = sourceColumn;
 		} else if (blockedColumns[targetColumn] < topRow) {
-			// use column of the target if it isn't blocked
 			edge.mainColumn = targetColumn;
 		} else {
 			const [leftCandidate, rightCandidate] = this.closestUnblockedColumn(
@@ -596,18 +635,16 @@ export class GraphLayoutCore {
 				topRow,
 				blockedColumns,
 			);
-			// hamming distance
 			const distanceLeft =
 				Math.abs(sourceColumn - leftCandidate) +
 				Math.abs(targetColumn - leftCandidate);
 			const distanceRight =
 				Math.abs(sourceColumn - rightCandidate) +
 				Math.abs(targetColumn - rightCandidate);
-			// "figure 8" logic from cutter
-			// Takes a longer path that produces less crossing
 			if (target.row < source.row) {
 				if (
 					targetColumn < sourceColumn &&
+					sourceColumn + 1 <= maxCol &&
 					blockedColumns[sourceColumn + 1] < topRow &&
 					sourceColumn - targetColumn <= distanceLeft + 2
 				) {
@@ -616,6 +653,7 @@ export class GraphLayoutCore {
 				}
 				if (
 					targetColumn > sourceColumn &&
+					sourceColumn - 1 >= 0 &&
 					blockedColumns[sourceColumn - 1] < topRow &&
 					targetColumn - sourceColumn <= distanceRight + 2
 				) {
@@ -624,11 +662,6 @@ export class GraphLayoutCore {
 				}
 			}
 			if (distanceLeft === distanceRight) {
-				// Place true branches on the left
-				// TODO: Need to investigate further block placement stuff here
-				// TODO: Need to investigate further offset placement stuff for the start segments
-				// TODO: Could also try something considering if the left/right columns are adjacent and target
-				// is <= source
 				if (edge.color === "green") {
 					edge.mainColumn = leftCandidate;
 				} else {
@@ -1037,10 +1070,10 @@ export class GraphLayoutCore {
 
 	updateBlockDimensions() {
 		for (const block of this.blocks) {
-			// Update block width if it has a ton of incoming edges
 			block.data.width = Math.max(
 				block.data.width,
 				(block.incidentEdgeCount - 1) * EDGE_SPACING,
+				this.edgeColumns[block.col + 1].width,
 			);
 		}
 	}

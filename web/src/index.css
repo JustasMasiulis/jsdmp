@@ -226,9 +226,6 @@ Design language notes for future re-additions:
 		display: flex;
 		flex-direction: column;
 		min-height: 100dvh;
-		transition:
-			background-color 0.15s ease,
-			box-shadow 0.15s ease;
 	}
 
 	.wasm-debugger-shell.is-dragging {
@@ -359,7 +356,11 @@ Design language notes for future re-additions:
 	}
 
 	.dump-info-table tbody tr.is-selected {
-		background: color-mix(in srgb, var(--color-accent, #0a84ff) 15%, transparent);
+		background: color-mix(
+			in srgb,
+			var(--color-accent, #0a84ff) 15%,
+			transparent
+		);
 		font-weight: 500;
 	}
 

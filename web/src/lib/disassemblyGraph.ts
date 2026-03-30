@@ -196,19 +196,25 @@ export const buildCfgInstructionLines = (
 	);
 };
 
-const buildBlock2 = async (
+type BuiltBlock = {
+	address: bigint;
+	instructions: CfgInstruction[];
+	error: string | null;
+};
+
+const decodeBlock = async (
 	dbg: DebugInterface,
 	blockAddr: bigint,
-	blocks: Map<bigint, CfgNode | null>,
+	knownAddrs: Set<bigint>,
 	addPendingBlock: (addr: bigint) => void,
 	addEdge: (to: bigint, kind: CfgEdgeKind) => void,
-) => {
+): Promise<BuiltBlock> => {
 	const instructions: CfgInstruction[] = [];
 	let ip = blockAddr;
 
 	let error: string | null = null;
 	loop: while (true) {
-		if (instructions.length > 0 && blocks.has(ip)) {
+		if (instructions.length > 0 && knownAddrs.has(ip)) {
 			addEdge(ip, "unconditional");
 			break;
 		}
@@ -270,69 +276,203 @@ const buildBlock2 = async (
 		ip = nextIp;
 	}
 
-	const lines = buildCfgInstructionLines(instructions);
-	if (error) {
-		lines.push(...buildCfgTextLinesFromLabel(error));
+	return { address: blockAddr, instructions, error };
+};
+
+const makeNode = (block: BuiltBlock): CfgNode => {
+	const lines = buildCfgInstructionLines(block.instructions);
+	if (block.error) {
+		lines.push(...buildCfgTextLinesFromLabel(block.error));
+	}
+	return {
+		id: blockIdForAddress(block.address),
+		title: fmtHex16(block.address),
+		instructionCount: block.instructions.length,
+		lines,
+	};
+};
+
+const splitBlock = (
+	block: BuiltBlock,
+	splitAddr: bigint,
+): [BuiltBlock, BuiltBlock] | null => {
+	const splitIndex = block.instructions.findIndex(
+		(instr) => instr.address === splitAddr,
+	);
+	if (splitIndex <= 0) {
+		return null;
 	}
 
-	blocks.set(blockAddr, {
-		id: blockIdForAddress(blockAddr),
-		title: fmtHex16(blockAddr),
-		instructionCount: instructions.length,
-		lines: lines,
-	});
+	return [
+		{
+			address: block.address,
+			instructions: block.instructions.slice(0, splitIndex),
+			error: null,
+		},
+		{
+			address: splitAddr,
+			instructions: block.instructions.slice(splitIndex),
+			error: block.error,
+		},
+	];
 };
 
 export const buildCfg2 = async (
 	dbg: DebugInterface,
 	entryAddress: bigint,
 ): Promise<CfgBuildResult> => {
-	const blocks = new Map<bigint, CfgNode | null>();
-	const edges = new Map<string, CfgEdge>();
+	const builtBlocks = new Map<bigint, BuiltBlock>();
+	const knownAddrs = new Set<bigint>([entryAddress]);
 	const pendingBlocks: bigint[] = [entryAddress];
+	const instrToBlock = new Map<bigint, bigint>();
 
-	blocks.set(entryAddress, null);
+	// Edges stored as [fromAddr, toAddr, kind] — no string keys during traversal.
+	// Deduped by a Set of `${from},${to}` at the end.
+	const edgeTuples: [bigint, bigint, CfgEdgeKind][] = [];
+	// Index: blockAddr → indices into edgeTuples where that block is the source.
+	// Used by trySplit to rewire edges without scanning all edges.
+	const edgesBySource = new Map<bigint, number[]>();
+
+	const addEdgeTuple = (from: bigint, to: bigint, kind: CfgEdgeKind) => {
+		const idx = edgeTuples.length;
+		edgeTuples.push([from, to, kind]);
+		let list = edgesBySource.get(from);
+		if (!list) {
+			list = [];
+			edgesBySource.set(from, list);
+		}
+		list.push(idx);
+	};
+
+	const commitBlock = (built: BuiltBlock) => {
+		builtBlocks.set(built.address, built);
+		knownAddrs.add(built.address);
+		for (const instr of built.instructions) {
+			instrToBlock.set(instr.address, built.address);
+		}
+	};
+
+	const trySplit = (targetAddr: bigint): boolean => {
+		const ownerAddr = instrToBlock.get(targetAddr);
+		if (ownerAddr === undefined || ownerAddr === targetAddr) {
+			return false;
+		}
+
+		const existing = builtBlocks.get(ownerAddr);
+		if (!existing) {
+			return false;
+		}
+
+		const halves = splitBlock(existing, targetAddr);
+		if (!halves) {
+			return false;
+		}
+
+		const [head, tail] = halves;
+		commitBlock(head);
+		commitBlock(tail);
+
+		// Rewire: edges from ownerAddr now come from targetAddr (the tail)
+		const ownerEdges = edgesBySource.get(ownerAddr);
+		if (ownerEdges) {
+			const movedIndices: number[] = [];
+			for (const idx of ownerEdges) {
+				edgeTuples[idx][0] = targetAddr;
+				movedIndices.push(idx);
+			}
+			edgesBySource.delete(ownerAddr);
+			const tailList = edgesBySource.get(targetAddr);
+			if (tailList) {
+				tailList.push(...movedIndices);
+			} else {
+				edgesBySource.set(targetAddr, movedIndices);
+			}
+		}
+
+		// Add fallthrough edge from head to tail
+		addEdgeTuple(ownerAddr, targetAddr, "unconditional");
+
+		return true;
+	};
+
+	let currentAddr = 0n;
+
+	const addPendingBlock = (newBlockAddr: bigint) => {
+		if (currentAddr === newBlockAddr) {
+			return;
+		}
+
+		if (trySplit(newBlockAddr)) {
+			return;
+		}
+
+		if (knownAddrs.has(newBlockAddr)) {
+			return;
+		}
+
+		knownAddrs.add(newBlockAddr);
+		pendingBlocks.push(newBlockAddr);
+	};
+
+	const addEdge = (to: bigint, kind: CfgEdgeKind) => {
+		addEdgeTuple(currentAddr, to, kind);
+	};
 
 	while (pendingBlocks.length > 0) {
-		const addr = pendingBlocks.pop();
+		const addr = pendingBlocks.pop()!;
 
-		const addPendingBlock = (newBlockAddr: bigint) => {
-			if (addr === newBlockAddr || blocks.has(newBlockAddr)) {
-				return;
-			}
+		if (builtBlocks.has(addr)) {
+			continue;
+		}
 
-			blocks.set(newBlockAddr, null);
-			pendingBlocks.push(newBlockAddr);
-		};
+		if (trySplit(addr)) {
+			continue;
+		}
 
-		const addEdge = (to: bigint, kind: CfgEdgeKind) => {
-			const id = `${addr}->${to}:${kind}`;
-			if (!edges.has(id)) {
-				edges.set(id, {
-					id,
-					from: blockIdForAddress(addr),
-					to: blockIdForAddress(to),
-					kind,
-				});
-			}
-		};
+		currentAddr = addr;
 
-		await buildBlock2(dbg, addr, blocks, addPendingBlock, addEdge);
+		const built = await decodeBlock(
+			dbg,
+			addr,
+			knownAddrs,
+			addPendingBlock,
+			addEdge,
+		);
+
+		commitBlock(built);
 	}
 
-	const allBlocks = Array.from(blocks.values()) as CfgNode[];
+	// Deduplicate edges and build final output
+	const seenEdges = new Set<string>();
+	const finalEdges: CfgEdge[] = [];
+	for (const [from, to, kind] of edgeTuples) {
+		const key = `${from}->${to}`;
+		if (!seenEdges.has(key)) {
+			seenEdges.add(key);
+			finalEdges.push({
+				id: key,
+				from: blockIdForAddress(from),
+				to: blockIdForAddress(to),
+				kind,
+			});
+		}
+	}
+
+	const allBlocks: CfgNode[] = [];
+	let totalInstructions = 0;
+	for (const built of builtBlocks.values()) {
+		totalInstructions += built.instructions.length;
+		allBlocks.push(makeNode(built));
+	}
 
 	return {
 		anchorAddress: entryAddress,
 		blocks: allBlocks,
-		edges: Array.from(edges.values()),
+		edges: finalEdges,
 		stats: {
 			blockCount: allBlocks.length,
-			edgeCount: edges.size,
-			instructionCount: allBlocks.reduce(
-				(total, block) => total + block.instructionCount,
-				0,
-			),
+			edgeCount: finalEdges.length,
+			instructionCount: totalInstructions,
 			truncated: false,
 		},
 	};
@@ -343,8 +483,7 @@ export const estimateNodeDimensions = (node: CfgNode) => {
 		(maxLength, line) => Math.max(maxLength, line.text.length),
 		0,
 	);
-	const height =
-		CARD_PADDING_Y + Math.max(node.lines.length, 2) * ESTIMATED_LINE_HEIGHT;
+	const height = CARD_PADDING_Y + node.lines.length * ESTIMATED_LINE_HEIGHT;
 	const width = CARD_PADDING_X + maxLineLength * ESTIMATED_CHAR_WIDTH;
 	return { width, height };
 };

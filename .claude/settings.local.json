@@ -8,7 +8,7 @@
       "Bash(xargs grep:*)",
       "Bash(bun test:*)",
       "Bash(git -C D:/web-dmp diff --no-color --name-only)",
-      "Bash(git -C D:/web-dmp diff --no-color web/src/lib/dumpSections.ts)"
+      "Bash(bunx --bun tsc --noEmit --pretty)"
     ]
   }
 }

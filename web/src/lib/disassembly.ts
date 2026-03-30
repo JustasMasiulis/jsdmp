@@ -1,7 +1,7 @@
 import {
 	type DecodedInstructionHeader,
 	type DecodedOperand,
-	formatInstruction,
+	formatInstructionOperands,
 } from "./intelFormatter";
 import { readCString } from "./reader";
 import { WASM_EXPORTS, WASM_MEMORY } from "./wasm";
@@ -78,16 +78,19 @@ const toControlFlowKind = (value: number): DecodedControlFlowKind => {
 };
 
 const extractPrefix = (attributes: bigint): string => {
-	const parts: string[] = [];
-	if (attributes & ATTRIB_HAS_XACQUIRE) parts.push("xacquire");
-	if (attributes & ATTRIB_HAS_XRELEASE) parts.push("xrelease");
-	if (attributes & ATTRIB_HAS_LOCK) parts.push("lock");
-	if (attributes & ATTRIB_HAS_REP) parts.push("rep");
-	if (attributes & ATTRIB_HAS_REPE) parts.push("repe");
-	if (attributes & ATTRIB_HAS_REPNE) parts.push("repne");
-	if (attributes & ATTRIB_HAS_BND) parts.push("bnd");
-	if (attributes & ATTRIB_HAS_NOTRACK) parts.push("notrack");
-	return parts.join(" ");
+	let result = "";
+	if (attributes & ATTRIB_HAS_XACQUIRE)
+		result += (result ? " " : "") + "xacquire";
+	if (attributes & ATTRIB_HAS_XRELEASE)
+		result += (result ? " " : "") + "xrelease";
+	if (attributes & ATTRIB_HAS_LOCK) result += (result ? " " : "") + "lock";
+	if (attributes & ATTRIB_HAS_REP) result += (result ? " " : "") + "rep";
+	if (attributes & ATTRIB_HAS_REPE) result += (result ? " " : "") + "repe";
+	if (attributes & ATTRIB_HAS_REPNE) result += (result ? " " : "") + "repne";
+	if (attributes & ATTRIB_HAS_BND) result += (result ? " " : "") + "bnd";
+	if (attributes & ATTRIB_HAS_NOTRACK)
+		result += (result ? " " : "") + "notrack";
+	return result;
 };
 
 const readPackedHeader = (view: DataView): DecodedInstructionHeader => {
@@ -191,7 +194,6 @@ export const decodeInstruction = (
 		decodedOperands.push(readPackedOperand(view, 24 + i * 16));
 	}
 
-	const formatted = formatInstruction(header, decodedOperands, runtimeAddress);
 	const prefix = extractPrefix(header.attributes);
 	const mnemonicPtr = wasm.wasm_mnemonic_string(header.mnemonic);
 	const mnemonic = readCString(
@@ -199,12 +201,11 @@ export const decodeInstruction = (
 		mnemonicPtr,
 		48,
 	);
-
-	let operandsStr = "";
-	const mnemonicWithPrefix = prefix ? `${prefix} ${mnemonic}` : mnemonic;
-	if (formatted.startsWith(mnemonicWithPrefix)) {
-		operandsStr = formatted.slice(mnemonicWithPrefix.length).trim();
-	}
+	const operandsStr = formatInstructionOperands(
+		header,
+		decodedOperands,
+		runtimeAddress,
+	);
 
 	return {
 		length: header.length,
