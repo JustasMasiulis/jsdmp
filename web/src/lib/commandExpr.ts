@@ -1,10 +1,13 @@
 import { type Context, GPR_NAMES } from "./cpu_context";
 
-const REGISTER_MAP: Record<string, (ctx: Context) => bigint> = Object.fromEntries([
-	...GPR_NAMES.map((name, idx) => [name, (ctx: Context) => ctx.gpr(idx)] as const),
-	["rip", (ctx: Context) => ctx.ip],
-	["rflags", (ctx: Context) => BigInt(ctx.flags)],
-]);
+const REGISTER_MAP: Record<string, (ctx: Context) => bigint> =
+	Object.fromEntries([
+		...GPR_NAMES.map(
+			(name, idx) => [name, (ctx: Context) => ctx.gpr(idx)] as const,
+		),
+		["rip", (ctx: Context) => ctx.ip],
+		["rflags", (ctx: Context) => BigInt(ctx.flags)],
+	]);
 
 class Parser {
 	private pos = 0;

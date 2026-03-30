@@ -1,5 +1,9 @@
 import type { DebugInterface } from "./debug_interface";
-import { disassembleInstruction, MAX_INSTRUCTION_LENGTH } from "./disassembly";
+import {
+	decodeInstruction,
+	decodeInstructionLength,
+	MAX_INSTRUCTION_LENGTH,
+} from "./disassembly";
 import { fmtHex, fmtHex16 } from "./formatting";
 import { maxU64 } from "./utils";
 
@@ -39,7 +43,7 @@ export type NextDisassemblyLoadResult = {
 
 export type DisassemblyMemorySource = DebugInterface;
 
-type DecodedInstruction = {
+type DecodedLine = {
 	address: bigint;
 	length: number;
 	bytesHex: string;
@@ -106,7 +110,7 @@ const decodeInstructionAt = async (
 	source: DisassemblyMemorySource,
 	address: bigint,
 	maxBytes = MAX_INSTRUCTION_LENGTH,
-): Promise<DecodedInstruction | null> => {
+): Promise<DecodedLine | null> => {
 	const requestedSize = Math.max(
 		1,
 		Math.min(MAX_INSTRUCTION_LENGTH, Math.floor(maxBytes)),
@@ -119,7 +123,7 @@ const decodeInstructionAt = async (
 		return null;
 	}
 
-	const decoded = disassembleInstruction(bytes, address);
+	const decoded = decodeInstruction(bytes, address);
 	if (!decoded) return null;
 
 	const mnemonic = decoded.prefix
@@ -196,37 +200,37 @@ const buildPreviousGuessLines = async (
 		0n,
 		endAddress - BigInt(DISASSEMBLY_LOOKBACK_BYTES),
 	);
-	const bestChains = new Map<bigint, Promise<DecodedInstruction[]>>();
 
-	const bestChainEndingAt = (
-		candidateEnd: bigint,
-	): Promise<DecodedInstruction[]> => {
+	type LengthChain = { address: bigint; length: number }[];
+	const bestChains = new Map<bigint, Promise<LengthChain>>();
+
+	const bestChainEndingAt = (candidateEnd: bigint): Promise<LengthChain> => {
 		const cached = bestChains.get(candidateEnd);
-		if (cached) {
-			return cached;
-		}
+		if (cached) return cached;
 
 		const chainPromise = (async () => {
-			let best: DecodedInstruction[] = [];
+			let best: LengthChain = [];
 			const candidateStart = maxU64(
 				searchStart,
 				candidateEnd - BigInt(MAX_INSTRUCTION_LENGTH),
 			);
 
 			for (let start = candidateStart; start < candidateEnd; start += 1n) {
-				const instructionLength = Number(candidateEnd - start);
-				const decoded = await decodeInstructionAt(
-					source,
-					start,
-					instructionLength,
-				);
-				if (!decoded || decoded.length !== instructionLength) {
+				const span = Number(candidateEnd - start);
+
+				let bytes: Uint8Array;
+				try {
+					bytes = await source.read(start, span, span);
+				} catch {
 					continue;
 				}
 
+				const length = decodeInstructionLength(bytes);
+				if (length !== span) continue;
+
 				const prefix =
 					start > searchStart ? await bestChainEndingAt(start) : [];
-				const chain = [...prefix, decoded];
+				const chain = [...prefix, { address: start, length }];
 				const currentBestStart = best[0]?.address ?? null;
 				if (
 					chain.length > best.length ||
@@ -244,16 +248,25 @@ const buildPreviousGuessLines = async (
 		return chainPromise;
 	};
 
-	return (await bestChainEndingAt(endAddress)).map((decoded) =>
-		makeLine(
-			decoded.address,
-			decoded.length,
-			decoded.bytesHex,
-			decoded.mnemonic,
-			decoded.operands,
-			false,
-		),
-	);
+	const chain = await bestChainEndingAt(endAddress);
+
+	const lines: DisassemblyLine[] = [];
+	for (const entry of chain) {
+		const decoded = await decodeInstructionAt(source, entry.address);
+		if (decoded) {
+			lines.push(
+				makeLine(
+					decoded.address,
+					decoded.length,
+					decoded.bytesHex,
+					decoded.mnemonic,
+					decoded.operands,
+					false,
+				),
+			);
+		}
+	}
+	return lines;
 };
 
 const loadPreviousWindow = async (

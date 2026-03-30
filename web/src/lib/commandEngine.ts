@@ -1,7 +1,7 @@
 import { evaluateExpression } from "./commandExpr";
 import { type Context, GPR_NAMES } from "./cpu_context";
 import { findModuleForAddress } from "./debug_interface";
-import { disassembleInstruction, MAX_INSTRUCTION_LENGTH } from "./disassembly";
+import { decodeInstruction, MAX_INSTRUCTION_LENGTH } from "./disassembly";
 import { fmtHex, fmtHex16 } from "./formatting";
 import type { MinidumpDebugInterface } from "./minidump_debug_interface";
 import { basename } from "./utils";
@@ -339,7 +339,7 @@ async function unassembleCommand(
 			break;
 		}
 
-		const instr = disassembleInstruction(bytes, currentAddr);
+		const instr = decodeInstruction(bytes, currentAddr);
 		if (!instr) {
 			lines.push(`${fmtHex(currentAddr, 16).toLowerCase()} ??`);
 			break;

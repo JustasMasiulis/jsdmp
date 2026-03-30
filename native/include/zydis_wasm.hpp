@@ -5,8 +5,8 @@
 
 #include <Zydis/Zydis.h>
 
-inline ZydisDisassembledInstruction disassembled_instr;
 inline uint8_t disassembly_buffer[16];
+inline uint8_t decoded_buffer[104];
 
 enum WasmControlFlowKind : uint32_t {
   WASM_CONTROL_FLOW_NONE = 0,
@@ -19,38 +19,32 @@ enum WasmControlFlowKind : uint32_t {
   WASM_CONTROL_FLOW_SYSTEM = 7,
 };
 
-extern "C" [[clang::export_name("wasm_get_disassembled_instruction")]]
-ZydisDisassembledInstruction* wasm_get_disassembled_instruction();
+constinit inline ZydisDecoder g_decoder =  []() constexpr {
+  ZydisDecoder d;
+  constexpr ZyanU32 decoder_modes =
+    (1 << ZYDIS_DECODER_MODE_MPX) |
+    (1 << ZYDIS_DECODER_MODE_CET) |
+    (1 << ZYDIS_DECODER_MODE_LZCNT) |
+    (1 << ZYDIS_DECODER_MODE_TZCNT) |
+    (1 << ZYDIS_DECODER_MODE_CLDEMOTE) |
+    (1 << ZYDIS_DECODER_MODE_IPREFETCH);
+  d.decoder_mode = decoder_modes;
+  d.machine_mode = ZYDIS_MACHINE_MODE_LONG_64;
+  d.stack_width = ZYDIS_STACK_WIDTH_64;
+  return d;
+}();
 
 extern "C" [[clang::export_name("wasm_get_disassembly_buffer")]]
 uint8_t* wasm_get_disassembly_buffer();
 
-extern "C" [[clang::export_name("wasm_get_disassembled_text")]]
-const char* wasm_get_disassembled_text();
-
-extern "C" [[clang::export_name("wasm_get_disassembled_length")]]
-uint32_t wasm_get_disassembled_length();
-
-extern "C" [[clang::export_name("wasm_get_disassembled_mnemonic")]]
-uint32_t wasm_get_disassembled_mnemonic();
-
-extern "C" [[clang::export_name("wasm_get_disassembled_control_flow_kind")]]
-uint32_t wasm_get_disassembled_control_flow_kind();
-
-extern "C" [[clang::export_name("wasm_get_disassembled_has_direct_target")]]
-uint32_t wasm_get_disassembled_has_direct_target();
-
-extern "C" [[clang::export_name("wasm_get_disassembled_direct_target")]]
-uint64_t wasm_get_disassembled_direct_target();
-
-extern "C" [[clang::export_name("wasm_disassemble")]]
-int32_t wasm_disassemble(
-  uint32_t length,
-  uint64_t runtime_address
-);
-
-// Returns a pointer to a static Zydis mnemonic string.
 extern "C" [[clang::export_name("wasm_mnemonic_string")]]
-const char* wasm_mnemonic_string(
-  uint16_t mnemonic
-);
+const char* wasm_mnemonic_string(uint16_t mnemonic);
+
+extern "C" [[clang::export_name("wasm_decode_length")]]
+int32_t wasm_decode_length(uint32_t length);
+
+extern "C" [[clang::export_name("wasm_decode_full")]]
+int32_t wasm_decode_full(uint32_t length, uint64_t runtime_address);
+
+extern "C" [[clang::export_name("wasm_get_decoded_buffer")]]
+uint8_t* wasm_get_decoded_buffer();

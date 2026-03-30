@@ -1,9 +1,19 @@
+import {
+	type DecodedInstructionHeader,
+	type DecodedOperand,
+	formatInstruction,
+} from "./intelFormatter";
 import { readCString } from "./reader";
 import { WASM_EXPORTS, WASM_MEMORY } from "./wasm";
 
+export type {
+	DecodedInstructionHeader,
+	DecodedOperand,
+} from "./intelFormatter";
+
 export const MAX_INSTRUCTION_LENGTH = 15;
 
-export type DisassembledControlFlowKind =
+export type DecodedControlFlowKind =
 	| "none"
 	| "call"
 	| "conditional_branch"
@@ -13,14 +23,40 @@ export type DisassembledControlFlowKind =
 	| "syscall"
 	| "system";
 
-export type DisassembledControlFlow = {
-	kind: DisassembledControlFlowKind;
+export type DecodedControlFlow = {
+	kind: DecodedControlFlowKind;
 	directTargetAddress: bigint | null;
 };
 
-const textDecoder = new TextDecoder();
+export type DecodedInstruction = {
+	length: number;
+	bytes: Uint8Array;
+	mnemonicId: number;
+	controlFlow: DecodedControlFlow;
+	prefix: string;
+	mnemonic: string;
+	operands: string;
+	header: DecodedInstructionHeader;
+	decodedOperands: DecodedOperand[];
+};
 
-const toControlFlowKind = (value: number): DisassembledControlFlowKind => {
+const SIZE_INDEX_TABLE = [
+	0, 8, 16, 32, 64, 80, 128, 256, 512, 1024, 2048, 4096,
+];
+const WIDTH_TABLE = [16, 32, 64];
+const SCALE_TABLE = [1, 2, 4, 8];
+const AVX_VL_TABLE = [0, 128, 256, 512];
+
+const ATTRIB_HAS_LOCK = 1n << 27n;
+const ATTRIB_HAS_REP = 1n << 28n;
+const ATTRIB_HAS_REPE = 1n << 29n;
+const ATTRIB_HAS_REPNE = 1n << 30n;
+const ATTRIB_HAS_BND = 1n << 31n;
+const ATTRIB_HAS_XACQUIRE = 1n << 32n;
+const ATTRIB_HAS_XRELEASE = 1n << 33n;
+const ATTRIB_HAS_NOTRACK = 1n << 36n;
+
+const toControlFlowKind = (value: number): DecodedControlFlowKind => {
 	switch (value) {
 		case 1:
 			return "call";
@@ -41,163 +77,161 @@ const toControlFlowKind = (value: number): DisassembledControlFlowKind => {
 	}
 };
 
-const copyUntilNull = (
-	src: Uint8Array,
-	offset: number,
-	maxLength: number,
-): Uint8Array => {
-	const end = Math.min(offset + maxLength, src.byteLength);
-	let i = offset;
-	while (i < end && src[i] !== 0) i++;
-	return src.slice(offset, i);
+const extractPrefix = (attributes: bigint): string => {
+	const parts: string[] = [];
+	if (attributes & ATTRIB_HAS_XACQUIRE) parts.push("xacquire");
+	if (attributes & ATTRIB_HAS_XRELEASE) parts.push("xrelease");
+	if (attributes & ATTRIB_HAS_LOCK) parts.push("lock");
+	if (attributes & ATTRIB_HAS_REP) parts.push("rep");
+	if (attributes & ATTRIB_HAS_REPE) parts.push("repe");
+	if (attributes & ATTRIB_HAS_REPNE) parts.push("repne");
+	if (attributes & ATTRIB_HAS_BND) parts.push("bnd");
+	if (attributes & ATTRIB_HAS_NOTRACK) parts.push("notrack");
+	return parts.join(" ");
 };
 
-export class DisassembledInstruction {
-	readonly length: number;
-	readonly bytes: Uint8Array;
-	readonly mnemonicId: number;
-	readonly controlFlow: DisassembledControlFlow;
+const readPackedHeader = (view: DataView): DecodedInstructionHeader => {
+	const word0 = view.getUint32(0, true);
+	const word1 = view.getUint16(4, true);
+	const attributes = view.getBigUint64(8, true);
+	const directTarget = view.getBigUint64(16, true);
 
-	private _formattedBytes: Uint8Array | null;
-	private _mnemonicPtr: number;
-	private _prefix: string | undefined;
-	private _mnemonic: string | undefined;
-	private _operands: string | undefined;
+	return {
+		mnemonic: (word0 >>> 21) & 0x7ff,
+		length: (word0 >>> 17) & 0xf,
+		operandCount: (word0 >>> 14) & 0x7,
+		controlFlowKind: (word0 >>> 11) & 0x7,
+		hasDirectTarget: ((word0 >>> 10) & 1) !== 0,
+		encoding: (word0 >>> 7) & 0x7,
+		addressWidth: WIDTH_TABLE[(word0 >>> 5) & 0x3],
+		operandWidth: WIDTH_TABLE[(word0 >>> 3) & 0x3],
+		stackWidth: WIDTH_TABLE[(word0 >>> 1) & 0x3],
+		avxHasSae: (word0 & 1) !== 0,
+		attributes,
+		directTarget,
+		avxVectorLength: AVX_VL_TABLE[(word1 >>> 14) & 0x3],
+		avxMaskReg: (word1 >>> 11) & 0x7,
+		avxBroadcast: (word1 >>> 7) & 0xf,
+		avxRounding: (word1 >>> 5) & 0x3,
+		avxMaskMode: (word1 >>> 2) & 0x7,
+	};
+};
 
-	constructor(
-		length: number,
-		bytes: Uint8Array,
-		mnemonicId: number,
-		controlFlow: DisassembledControlFlow,
-		formattedBytes: Uint8Array,
-		mnemonicPtr: number,
-	) {
-		this.length = length;
-		this.bytes = bytes;
-		this.mnemonicId = mnemonicId;
-		this.controlFlow = controlFlow;
-		this._formattedBytes = formattedBytes;
-		this._mnemonicPtr = mnemonicPtr;
-	}
+const readPackedOperand = (view: DataView, offset: number): DecodedOperand => {
+	const word0 = view.getUint32(offset, true);
+	const type = (word0 >>> 30) & 0x3;
+	const size = SIZE_INDEX_TABLE[(word0 >>> 24) & 0xf];
 
-	get prefix(): string {
-		if (this._prefix === undefined) this._parse();
-		return this._prefix!;
-	}
-
-	get mnemonic(): string {
-		if (this._mnemonic === undefined) this._parse();
-		return this._mnemonic!;
-	}
-
-	get operands(): string {
-		if (this._operands === undefined) this._parse();
-		return this._operands!;
-	}
-
-	private _resolveMnemonic(): string {
-		const wasm = WASM_EXPORTS;
-		if (!wasm) return "";
-		return readCString(new Uint8Array(WASM_MEMORY.buffer), this._mnemonicPtr, 48);
-	}
-
-	private _parse(): void {
-		const formatted = this._formattedBytes
-			? textDecoder.decode(this._formattedBytes).trim()
-			: "";
-		this._formattedBytes = null;
-
-		const mnemonicStr = this._resolveMnemonic();
-
-		if (!formatted) {
-			this._prefix = "";
-			this._mnemonic = mnemonicStr || "???";
-			this._operands = "";
-			return;
+	switch (type) {
+		case 1:
+			return { type: 1, size, reg: view.getUint16(offset + 4, true) };
+		case 2: {
+			const memWord = view.getUint32(offset + 4, true);
+			return {
+				type: 2,
+				size,
+				base: (memWord >>> 23) & 0x1ff,
+				index: (memWord >>> 14) & 0x1ff,
+				scale: SCALE_TABLE[(memWord >>> 12) & 0x3],
+				hasDisplacement: ((memWord >>> 11) & 1) !== 0,
+				segment: (memWord >>> 8) & 0x7,
+				memType: (memWord >>> 6) & 0x3,
+				displacement: view.getBigInt64(offset + 8, true),
+			};
 		}
-
-		if (mnemonicStr) {
-			const idx = formatted.indexOf(mnemonicStr);
-			if (idx >= 0) {
-				this._prefix = formatted.slice(0, idx).trimEnd();
-				this._mnemonic = mnemonicStr;
-				this._operands = formatted
-					.slice(idx + mnemonicStr.length)
-					.trim();
-				return;
-			}
+		case 3:
+			return {
+				type: 3,
+				size,
+				segment: view.getUint16(offset + 4, true),
+				offset: view.getUint32(offset + 8, true),
+			};
+		case 4: {
+			const flags = view.getUint8(offset + 4);
+			return {
+				type: 4,
+				size,
+				isSigned: (flags & 2) !== 0,
+				isRelative: (flags & 1) !== 0,
+				value: view.getBigInt64(offset + 8, true),
+			};
 		}
-
-		const firstSpace = formatted.search(/\s/);
-		if (firstSpace < 0) {
-			this._prefix = "";
-			this._mnemonic = formatted;
-			this._operands = "";
-		} else {
-			this._prefix = "";
-			this._mnemonic = formatted.slice(0, firstSpace);
-			this._operands = formatted.slice(firstSpace).trim();
-		}
+		default:
+			return { type: 1, size: 0, reg: 0 };
 	}
-}
+};
 
-export const disassembleInstruction = (
+const capBytes = (bytes: Uint8Array): Uint8Array =>
+	bytes.byteLength > MAX_INSTRUCTION_LENGTH
+		? bytes.subarray(0, MAX_INSTRUCTION_LENGTH)
+		: bytes;
+
+export const decodeInstruction = (
 	bytes: Uint8Array,
 	runtimeAddress: bigint,
-): DisassembledInstruction | null => {
-	if (bytes.byteLength === 0) {
-		return null;
-	}
-
+): DecodedInstruction | null => {
+	if (bytes.byteLength === 0) return null;
 	const wasm = WASM_EXPORTS;
-	if (!wasm) {
-		return null;
-	}
+	if (!wasm) return null;
 
-	const candidateBytes =
-		bytes.byteLength > MAX_INSTRUCTION_LENGTH
-			? bytes.subarray(0, MAX_INSTRUCTION_LENGTH)
-			: bytes;
-
-	const disassemblyBufferPtr = wasm.wasm_get_disassembly_buffer();
-	const wasmBytes = new Uint8Array(WASM_MEMORY.buffer);
-	if (disassemblyBufferPtr + candidateBytes.byteLength > wasmBytes.byteLength) {
-		return null;
-	}
-	wasmBytes.set(candidateBytes, disassemblyBufferPtr);
-
-	const status = wasm.wasm_disassemble(
-		candidateBytes.byteLength,
-		runtimeAddress,
+	const candidateBytes = capBytes(bytes);
+	new Uint8Array(WASM_MEMORY.buffer).set(
+		candidateBytes,
+		wasm.disassembly_buffer,
 	);
 
-	if (status < 0) {
+	if (wasm.wasm_decode_full(candidateBytes.byteLength, runtimeAddress) < 0)
 		return null;
+
+	const view = new DataView(WASM_MEMORY.buffer, wasm.decoded_buffer, 104);
+	const header = readPackedHeader(view);
+
+	const decodedOperands: DecodedOperand[] = [];
+	for (let i = 0; i < header.operandCount; i++) {
+		decodedOperands.push(readPackedOperand(view, 24 + i * 16));
 	}
 
-	const length = wasm.wasm_get_disassembled_length();
-	const mnemonicId = wasm.wasm_get_disassembled_mnemonic();
-	const cfKind = toControlFlowKind(
-		wasm.wasm_get_disassembled_control_flow_kind(),
-	);
-	const hasDirectTarget =
-		wasm.wasm_get_disassembled_has_direct_target() !== 0;
-
-	const formattedPtr = wasm.wasm_get_disassembled_text();
-	const formattedBytes = copyUntilNull(wasmBytes, formattedPtr, 96);
-	const mnemonicPtr = wasm.wasm_mnemonic_string(mnemonicId);
-
-	return new DisassembledInstruction(
-		length,
-		candidateBytes.slice(0, length),
-		mnemonicId,
-		{
-			kind: cfKind,
-			directTargetAddress: hasDirectTarget
-				? wasm.wasm_get_disassembled_direct_target()
-				: null,
-		},
-		formattedBytes,
+	const formatted = formatInstruction(header, decodedOperands, runtimeAddress);
+	const prefix = extractPrefix(header.attributes);
+	const mnemonicPtr = wasm.wasm_mnemonic_string(header.mnemonic);
+	const mnemonic = readCString(
+		new Uint8Array(WASM_MEMORY.buffer),
 		mnemonicPtr,
+		48,
 	);
+
+	let operandsStr = "";
+	const mnemonicWithPrefix = prefix ? `${prefix} ${mnemonic}` : mnemonic;
+	if (formatted.startsWith(mnemonicWithPrefix)) {
+		operandsStr = formatted.slice(mnemonicWithPrefix.length).trim();
+	}
+
+	return {
+		length: header.length,
+		bytes: candidateBytes.slice(0, header.length),
+		mnemonicId: header.mnemonic,
+		controlFlow: {
+			kind: toControlFlowKind(header.controlFlowKind),
+			directTargetAddress: header.hasDirectTarget ? header.directTarget : null,
+		},
+		prefix,
+		mnemonic,
+		operands: operandsStr,
+		header,
+		decodedOperands,
+	};
+};
+
+export const decodeInstructionLength = (bytes: Uint8Array): number => {
+	if (bytes.byteLength === 0) return -1;
+	const wasm = WASM_EXPORTS;
+	if (!wasm) return -1;
+
+	const candidateBytes = capBytes(bytes);
+	new Uint8Array(WASM_MEMORY.buffer).set(
+		candidateBytes,
+		wasm.disassembly_buffer,
+	);
+
+	return wasm.wasm_decode_length(candidateBytes.byteLength);
 };

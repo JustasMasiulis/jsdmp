@@ -1,7 +1,7 @@
 import type { DebugInterface } from "./debug_interface";
 import {
-	type DisassembledControlFlow,
-	disassembleInstruction,
+	type DecodedControlFlow,
+	decodeInstruction,
 	MAX_INSTRUCTION_LENGTH,
 } from "./disassembly";
 import { fmtHex16 } from "./formatting";
@@ -15,7 +15,7 @@ export type CfgInstruction = {
 	prefix: string;
 	mnemonic: string;
 	operands: string;
-	controlFlow: DisassembledControlFlow;
+	controlFlow: DecodedControlFlow;
 };
 
 export type CfgTextSegment = {
@@ -150,27 +150,17 @@ export const buildCfgInstructionLine = (
 
 	if (instruction.prefix) {
 		segments.push(
-			makeTextSegment(
-				instruction.prefix + " ",
-				true,
-				null,
-				"mnemonic",
-			),
+			makeTextSegment(`${instruction.prefix} `, true, null, "mnemonic"),
 		);
 	}
 
-	segments.push(
-		makeTextSegment(instruction.mnemonic, true, null, "mnemonic"),
-	);
+	segments.push(makeTextSegment(instruction.mnemonic, true, null, "mnemonic"));
 
 	if (instruction.operands) {
 		segments.push(
 			makeTextSegment(
 				" ".repeat(
-					Math.max(
-						1,
-						columnWidth - mnemonicColumnWidth(instruction) + 1,
-					),
+					Math.max(1, columnWidth - mnemonicColumnWidth(instruction) + 1),
 				),
 			),
 		);
@@ -232,7 +222,7 @@ const buildBlock2 = async (
 			break;
 		}
 
-		const decoded = disassembleInstruction(bytes, ip);
+		const decoded = decodeInstruction(bytes, ip);
 		if (!decoded) {
 			error = "decode error";
 			break;

@@ -28,7 +28,7 @@ set(CMAKE_C_COMPILE_OPTIONS_MSVC_RUNTIME_LIBRARY_MultiThreadedDebugDLL		-D_DEBUG
 
 # add_link_options(-mwasm64 --no-entry --gc-sections --lto-O3 --strip-all --compress-relocations --import-memory --shared-memory --features=bulk-memory,atomics,memory64,nontrapping-fptoint,call-indirect-overlong,mutable-globals,reference-types,multivalue,sign-ext,bulk-memory-opt --max-memory=1048576)
 
-add_compile_options(--target=wasm32 --no-standard-libraries -nodefaultlibs -fms-extensions -flto=full -fno-exceptions -mbulk-memory -matomics)
+add_compile_options(--target=wasm32 --no-standard-libraries -nodefaultlibs -fms-extensions -flto=full -fno-exceptions -mbulk-memory -matomics -fno-threadsafe-statics)
 
 include(FetchContent)
 

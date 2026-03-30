@@ -108,8 +108,7 @@ async function unwindPrologue(
 			prologOffset >= info.sizeOfProlog ||
 			(info.flags & UNW_FLAG_CHAININFO) !== 0
 		) {
-			frameBase =
-				ctx.gpr(info.frameRegister) - BigInt(info.frameOffset * 16);
+			frameBase = ctx.gpr(info.frameRegister) - BigInt(info.frameOffset * 16);
 		} else {
 			// In prolog: scan for SET_FPREG to see if it's been executed
 			let setFpregOffset = -1;
@@ -122,8 +121,7 @@ async function unwindPrologue(
 				j += unwindOpSlots(info.unwindCodes[j]);
 			}
 			if (setFpregOffset >= 0 && prologOffset >= setFpregOffset) {
-				frameBase =
-					ctx.gpr(info.frameRegister) - BigInt(info.frameOffset * 16);
+				frameBase = ctx.gpr(info.frameRegister) - BigInt(info.frameOffset * 16);
 			} else {
 				frameBase = ctx.sp;
 			}
@@ -182,23 +180,15 @@ async function unwindPrologue(
 						break;
 
 					case UWOP_SAVE_XMM128: {
-						const offset = BigInt(
-							slotU16(info.unwindCodes, i + 1) * 16,
-						);
-						const [lo, hi] = await readOword(
-							reader,
-							frameBase + offset,
-						);
+						const offset = BigInt(slotU16(info.unwindCodes, i + 1) * 16);
+						const [lo, hi] = await readOword(reader, frameBase + offset);
 						ctx.setXmm(code.opInfo, lo, hi);
 						break;
 					}
 
 					case UWOP_SAVE_XMM128_FAR: {
 						const offset = BigInt(slotU32(info.unwindCodes, i + 1));
-						const [lo, hi] = await readOword(
-							reader,
-							frameBase + offset,
-						);
+						const [lo, hi] = await readOword(reader, frameBase + offset);
 						ctx.setXmm(code.opInfo, lo, hi);
 						break;
 					}
@@ -259,12 +249,8 @@ function isInEpilogue(
 	}
 	// Check for lea rsp, disp[fp] — REX.W or REX.WB prefix
 	else if ((buf[i] & 0xfe) === SIZE64_PREFIX && buf[i + 1] === LEA_OP) {
-		const frameRegister =
-			((buf[i] & 0x1) << 3) | (buf[i + 2] & 0x07);
-		if (
-			frameRegister !== 0 &&
-			frameRegister === info.frameRegister
-		) {
+		const frameRegister = ((buf[i] & 0x1) << 3) | (buf[i + 2] & 0x07);
+		if (frameRegister !== 0 && frameRegister === info.frameRegister) {
 			if ((buf[i + 2] & 0xf8) === 0x60) {
 				i += 4; // disp8
 			} else if ((buf[i + 2] & 0xf8) === 0xa0) {
@@ -277,10 +263,7 @@ function isInEpilogue(
 	while (i < buf.length) {
 		if ((buf[i] & 0xf8) === POP_OP) {
 			i += 1;
-		} else if (
-			(buf[i] & 0xf0) === 0x40 &&
-			(buf[i + 1] & 0xf8) === POP_OP
-		) {
+		} else if ((buf[i] & 0xf0) === 0x40 && (buf[i + 1] & 0xf8) === POP_OP) {
 			i += 2;
 		} else {
 			break;
@@ -306,11 +289,7 @@ function isInEpilogue(
 			const rel = buf[i + 1];
 			branchTarget += 2 + (rel > 127 ? rel - 256 : rel);
 		} else {
-			const view = new DataView(
-				buf.buffer,
-				buf.byteOffset,
-				buf.byteLength,
-			);
+			const view = new DataView(buf.buffer, buf.byteOffset, buf.byteLength);
 			branchTarget += 5 + view.getInt32(i + 1, true);
 		}
 		if (
@@ -354,7 +333,6 @@ async function emulateEpilogueCore(
 	ctx: Context,
 	reader: MemoryReader,
 ): Promise<void> {
-	const view = new DataView(buf.buffer, buf.byteOffset, buf.byteLength);
 	let i = 0;
 
 	if ((buf[i] & 0xf8) === SIZE64_PREFIX) {
@@ -398,10 +376,7 @@ async function emulateEpilogueCore(
 			ctx.setGpr(reg, await readQword(reader, ctx.sp));
 			ctx.sp += 8n;
 			i += 1;
-		} else if (
-			(buf[i] & 0xf0) === 0x40 &&
-			(buf[i + 1] & 0xf8) === POP_OP
-		) {
+		} else if ((buf[i] & 0xf0) === 0x40 && (buf[i + 1] & 0xf8) === POP_OP) {
 			const reg = ((buf[i] & 1) << 3) | (buf[i + 1] & 0x07);
 			ctx.setGpr(reg, await readQword(reader, ctx.sp));
 			ctx.sp += 8n;
@@ -433,7 +408,10 @@ function isInEpilogueV2(
 	// First UWOP_EPILOG: if low bit of opInfo set, epilogue at function end
 	if (firstCode.opInfo & 0x01) {
 		const epilogStart = functionEntry.endAddress - epilogSize;
-		if (relativePc - epilogStart >= 0 && relativePc - epilogStart < epilogSize) {
+		if (
+			relativePc - epilogStart >= 0 &&
+			relativePc - epilogStart < epilogSize
+		) {
 			return true;
 		}
 	}
@@ -447,7 +425,10 @@ function isInEpilogueV2(
 		if (distFromEnd === 0) break;
 
 		const epilogStart = functionEntry.endAddress - distFromEnd;
-		if (relativePc - epilogStart >= 0 && relativePc - epilogStart < epilogSize) {
+		if (
+			relativePc - epilogStart >= 0 &&
+			relativePc - epilogStart < epilogSize
+		) {
 			return true;
 		}
 	}
@@ -510,7 +491,6 @@ export type StackFrame = {
 	moduleBase: bigint;
 	offset: bigint;
 };
-
 
 export type WalkStackResult = {
 	frames: StackFrame[];

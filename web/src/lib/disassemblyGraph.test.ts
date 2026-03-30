@@ -59,7 +59,12 @@ beforeAll(async () => {
 		await wasmFile.arrayBuffer(),
 		{ env: { memory: WASM_MEMORY } },
 	);
-	__setWasmExportsForTesting(instance.exports as unknown as WasmExports);
+	const raw = instance.exports as Record<string, unknown>;
+	__setWasmExportsForTesting({
+		...raw,
+		decoded_buffer: (raw.wasm_get_decoded_buffer as () => number)(),
+		disassembly_buffer: (raw.wasm_get_disassembly_buffer as () => number)(),
+	} as unknown as WasmExports);
 });
 
 afterAll(() => {
