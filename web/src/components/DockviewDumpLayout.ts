@@ -22,7 +22,7 @@ import {
 	THREADS_COMPONENT,
 } from "../lib/dockviewLayout";
 import { VanillaCommandView } from "./VanillaCommandView";
-import { VanillaDisassemblyGraphView } from "./VanillaDisassemblyGraphView";
+import { SigmaDisassemblyGraphView } from "./SigmaDisassemblyGraphView";
 import { VanillaDisassemblyView } from "./VanillaDisassemblyView";
 import { VanillaDumpSummary } from "./VanillaDumpSummary";
 import { VanillaMemoryView } from "./VanillaMemoryView";
@@ -95,7 +95,7 @@ export class DockviewDumpLayout {
 				};
 			}
 			case DISASSEMBLY_GRAPH_COMPONENT: {
-				const view = new VanillaDisassemblyGraphView({
+				const view = new SigmaDisassemblyGraphView({
 					container: el,
 					panelId: options.id,
 				});

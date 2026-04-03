@@ -233,12 +233,20 @@ const decodeBlock = async (
 			break;
 		}
 
+		let operands = decoded.operands;
+		if (
+			!operands &&
+			decoded.controlFlow.directTargetAddress !== null
+		) {
+			operands = `0x${decoded.controlFlow.directTargetAddress.toString(16).toUpperCase()}`;
+		}
+
 		instructions.push({
 			address: ip,
 			byteLength: decoded.length,
 			prefix: decoded.prefix,
 			mnemonic: decoded.mnemonic,
-			operands: decoded.operands,
+			operands,
 			controlFlow: decoded.controlFlow,
 		});
 

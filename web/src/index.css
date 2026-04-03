@@ -689,6 +689,22 @@ Design language notes for future re-additions:
 	background: var(--color-avatar-bg);
 }
 
+.cfg-block--selection-layer {
+	cursor: text;
+}
+
+.cfg-block--selection-layer,
+.cfg-block--selection-layer .cfg-block__term--syntax-mnemonic,
+.cfg-block--selection-layer .cfg-block__term--syntax-number {
+	color: transparent;
+	font-weight: normal;
+}
+
+.cfg-block--selection-layer *::selection {
+	background: rgba(51, 102, 204, 0.3);
+	color: transparent;
+}
+
 .cfg-block--selected {
 	border-color: var(--color-sidebar-indicator);
 }

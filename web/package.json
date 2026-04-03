@@ -19,7 +19,10 @@
 	"dependencies": {
 		"@flatten-js/interval-tree": "^2.0.3",
 		"dockview-core": "^5.1.0",
+		"graphology": "^0.26.0",
+		"graphology-types": "^0.24.7",
 		"lit-html": "^3.3.2",
-		"nanoclone": "1.0.2"
+		"nanoclone": "1.0.2",
+		"sigma": "^3.0.2"
 	}
 }
