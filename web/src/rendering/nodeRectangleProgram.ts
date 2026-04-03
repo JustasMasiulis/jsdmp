@@ -1,6 +1,6 @@
 import { NodeProgram } from "sigma/rendering";
-import type { NodeDisplayData, RenderParams } from "sigma/types";
 import type { ProgramInfo } from "sigma/rendering/utils";
+import type { NodeDisplayData, RenderParams } from "sigma/types";
 import { floatColor } from "sigma/utils";
 
 const FLOAT = WebGLRenderingContext.FLOAT;
@@ -134,8 +134,7 @@ export default class NodeRectangleProgram extends NodeProgram<
 			(data as NodeDisplayData & { borderColor?: string }).borderColor ??
 				DEFAULT_BORDER_COLOR,
 		);
-		const w =
-			(data as NodeDisplayData & { width?: number }).width ?? data.size;
+		const w = (data as NodeDisplayData & { width?: number }).width ?? data.size;
 		const h =
 			(data as NodeDisplayData & { height?: number }).height ?? data.size;
 

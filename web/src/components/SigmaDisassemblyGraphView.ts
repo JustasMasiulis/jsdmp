@@ -1,5 +1,4 @@
 import type { IContentRenderer } from "dockview-core";
-import type Graph from "graphology";
 import Sigma from "sigma";
 import {
 	loadAddressPanelState,
@@ -92,7 +91,6 @@ export class SigmaDisassemblyGraphView implements IContentRenderer {
 	private readonly graphHost: HTMLDivElement;
 
 	private sigmaInstance: Sigma | null = null;
-	private graphologyGraph: Graph | null = null;
 	private edgeRenderer: EdgePolylineRenderer | null = null;
 	private textRenderer: BlockTextRenderer | null = null;
 	private selectionLayer: CfgSelectionLayer | null = null;
@@ -269,7 +267,6 @@ export class SigmaDisassemblyGraphView implements IContentRenderer {
 		this.edgeRenderer = null;
 		this.sigmaInstance?.kill();
 		this.sigmaInstance = null;
-		this.graphologyGraph = null;
 		this.graphHost.replaceChildren();
 	}
 
@@ -338,7 +335,6 @@ export class SigmaDisassemblyGraphView implements IContentRenderer {
 
 		const layoutCore = new GraphLayoutCore(descriptor, true, true);
 		const graph = buildGraphologyGraph(this.graphResult, layoutCore);
-		this.graphologyGraph = graph;
 
 		this.graphHost.hidden = false;
 

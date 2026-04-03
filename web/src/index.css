@@ -390,6 +390,15 @@ Design language notes for future re-additions:
 		background: color-mix(in oklab, var(--color-sidebar-indicator) 10%, white);
 	}
 
+	.memory-view-table__cell--instruction .s-m {
+		color: var(--color-sidebar-indicator);
+		font-weight: 500;
+	}
+
+	.memory-view-table__cell--instruction .s-n {
+		color: #c74329;
+	}
+
 	.dump-dockview-shell {
 		display: flex;
 		flex: 1;
@@ -749,6 +758,15 @@ Design language notes for future re-additions:
 
 .command-view__output-line--echo {
 	color: var(--color-sidebar-indicator);
+}
+
+.command-view__output-line .s-m {
+	color: var(--color-sidebar-indicator);
+	font-weight: 500;
+}
+
+.command-view__output-line .s-n {
+	color: #c74329;
 }
 
 .command-view__input-row {

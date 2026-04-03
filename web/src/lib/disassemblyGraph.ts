@@ -2,6 +2,8 @@ import type { DebugInterface } from "./debug_interface";
 import {
 	type DecodedControlFlow,
 	decodeInstruction,
+	type InstrTextSegment,
+	joinSegmentText,
 	MAX_INSTRUCTION_LENGTH,
 } from "./disassembly";
 import { fmtHex16 } from "./formatting";
@@ -14,7 +16,7 @@ export type CfgInstruction = {
 	byteLength: number;
 	prefix: string;
 	mnemonic: string;
-	operands: string;
+	operandSegments: InstrTextSegment[];
 	controlFlow: DecodedControlFlow;
 };
 
@@ -70,15 +72,6 @@ export const ESTIMATED_CHAR_WIDTH = 7;
 export const ESTIMATED_LINE_HEIGHT = 15;
 export const CARD_PADDING_X = 16 + 2;
 export const CARD_PADDING_Y = 12 + 2;
-const TEXT_TOKEN_PATTERN = /[A-Za-z0-9_]+/g;
-
-const joinTextSegments = (segments: readonly CfgTextSegment[]) =>
-	segments.map((segment) => segment.text).join("");
-
-const isNumericCfgToken = (token: string) =>
-	/^0x[0-9a-f]+$/i.test(token) ||
-	/^\d+$/.test(token) ||
-	/^(?=.*\d)[0-9a-f]+h?$/i.test(token);
 
 const makeTextSegment = (
 	text: string,
@@ -92,42 +85,29 @@ const makeTextSegment = (
 	syntaxKind,
 });
 
-const blockIdForAddress = (address: bigint) => `block:${address.toString(16)}`;
-
-export const tokenizeCfgTextSegments = (text: string): CfgTextSegment[] => {
-	if (!text) {
-		return [];
-	}
-
-	const segments: CfgTextSegment[] = [];
-	let lastIndex = 0;
-	for (const match of text.matchAll(TEXT_TOKEN_PATTERN)) {
-		const [token] = match;
-		const matchIndex = match.index ?? -1;
-		if (matchIndex < 0) {
-			continue;
-		}
-
-		if (matchIndex > lastIndex) {
-			segments.push(makeTextSegment(text.slice(lastIndex, matchIndex)));
-		}
-		segments.push(
-			makeTextSegment(
-				token,
-				true,
-				null,
-				isNumericCfgToken(token) ? "number" : "plain",
-			),
-		);
-		lastIndex = matchIndex + token.length;
-	}
-
-	if (lastIndex < text.length) {
-		segments.push(makeTextSegment(text.slice(lastIndex)));
-	}
-
-	return segments;
+const INSTR_TO_CFG_SYNTAX: Record<
+	InstrTextSegment["syntaxKind"],
+	CfgTextSyntaxKind
+> = {
+	plain: "plain",
+	mnemonic: "mnemonic",
+	number: "number",
+	register: "plain",
+	keyword: "plain",
 };
+
+const instrSegmentsToCfg = (segments: InstrTextSegment[]): CfgTextSegment[] =>
+	segments.map((s) => {
+		const isClickable = s.syntaxKind !== "plain";
+		return makeTextSegment(
+			s.text,
+			isClickable,
+			isClickable ? s.text : null,
+			INSTR_TO_CFG_SYNTAX[s.syntaxKind],
+		);
+	});
+
+const blockIdForAddress = (address: bigint) => `block:${address.toString(16)}`;
 
 const mnemonicColumnWidth = (
 	instruction: Pick<CfgInstruction, "prefix" | "mnemonic">,
@@ -139,7 +119,7 @@ const mnemonicColumnWidth = (
 export const buildCfgInstructionLine = (
 	instruction: Pick<
 		CfgInstruction,
-		"address" | "prefix" | "mnemonic" | "operands"
+		"address" | "prefix" | "mnemonic" | "operandSegments"
 	>,
 	columnWidth = mnemonicColumnWidth(instruction),
 ): CfgTextLine => {
@@ -156,7 +136,7 @@ export const buildCfgInstructionLine = (
 
 	segments.push(makeTextSegment(instruction.mnemonic, true, null, "mnemonic"));
 
-	if (instruction.operands) {
+	if (instruction.operandSegments.length > 0) {
 		segments.push(
 			makeTextSegment(
 				" ".repeat(
@@ -164,11 +144,11 @@ export const buildCfgInstructionLine = (
 				),
 			),
 		);
-		segments.push(...tokenizeCfgTextSegments(instruction.operands));
+		segments.push(...instrSegmentsToCfg(instruction.operandSegments));
 	}
 
 	return {
-		text: joinTextSegments(segments),
+		text: joinSegmentText(segments),
 		segments,
 	};
 };
@@ -176,13 +156,13 @@ export const buildCfgInstructionLine = (
 export const buildCfgTextLinesFromLabel = (label: string): CfgTextLine[] =>
 	label.split("\n").map((line) => ({
 		text: line,
-		segments: tokenizeCfgTextSegments(line),
+		segments: [makeTextSegment(line)],
 	}));
 
 export const buildCfgInstructionLines = (
 	instructions: readonly Pick<
 		CfgInstruction,
-		"address" | "prefix" | "mnemonic" | "operands"
+		"address" | "prefix" | "mnemonic" | "operandSegments"
 	>[],
 ) => {
 	const maxColumnWidth = instructions.reduce(
@@ -233,20 +213,12 @@ const decodeBlock = async (
 			break;
 		}
 
-		let operands = decoded.operands;
-		if (
-			!operands &&
-			decoded.controlFlow.directTargetAddress !== null
-		) {
-			operands = `0x${decoded.controlFlow.directTargetAddress.toString(16).toUpperCase()}`;
-		}
-
 		instructions.push({
 			address: ip,
 			byteLength: decoded.length,
 			prefix: decoded.prefix,
 			mnemonic: decoded.mnemonic,
-			operands,
+			operandSegments: decoded.operandSegments,
 			controlFlow: decoded.controlFlow,
 		});
 
@@ -427,7 +399,7 @@ export const buildCfg2 = async (
 	};
 
 	while (pendingBlocks.length > 0) {
-		const addr = pendingBlocks.pop()!;
+		const addr = pendingBlocks.pop();
 
 		if (builtBlocks.has(addr)) {
 			continue;

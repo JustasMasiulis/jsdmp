@@ -215,10 +215,8 @@ export class BlockTextRenderer {
 		this.graph.forEachNode((nodeId) => {
 			const x = this.graph.getNodeAttribute(nodeId, "x") as number;
 			const sigmaY = this.graph.getNodeAttribute(nodeId, "y") as number;
-			const w =
-				(this.graph.getNodeAttribute(nodeId, "width") as number) ?? 0;
-			const h =
-				(this.graph.getNodeAttribute(nodeId, "height") as number) ?? 0;
+			const w = (this.graph.getNodeAttribute(nodeId, "width") as number) ?? 0;
+			const h = (this.graph.getNodeAttribute(nodeId, "height") as number) ?? 0;
 			this.nodeEntries.push({ id: nodeId, x, y: sigmaY, w, h });
 		});
 	}
@@ -248,11 +246,7 @@ export class BlockTextRenderer {
 		const prevRange = this.bboxRange;
 		this.bboxCenterX = (bbox.x[0] + bbox.x[1]) / 2;
 		this.bboxCenterY = (bbox.y[0] + bbox.y[1]) / 2;
-		this.bboxRange = Math.max(
-			bbox.x[1] - bbox.x[0],
-			bbox.y[1] - bbox.y[0],
-			1,
-		);
+		this.bboxRange = Math.max(bbox.x[1] - bbox.x[0], bbox.y[1] - bbox.y[0], 1);
 		this.invBBoxRange = 1 / this.bboxRange;
 		if (this.bboxRange !== prevRange) {
 			this.dirty = true;
@@ -366,13 +360,22 @@ export class BlockTextRenderer {
 			const nh = node.h * inv;
 
 			const isSelected =
-				this.graph.getNodeAttribute(node.id, "borderColor") ===
-				"#3575fe";
+				this.graph.getNodeAttribute(node.id, "borderColor") === "#3575fe";
 			const br = isSelected ? SEL_BORDER_R : BORDER_R;
 			const bg = isSelected ? SEL_BORDER_G : BORDER_G;
 			const bb = isSelected ? SEL_BORDER_B : BORDER_B;
 
-			o = solidQuad(buf, o, nx0, ny0, nw, nh, BLOCK_BG_R, BLOCK_BG_G, BLOCK_BG_B);
+			o = solidQuad(
+				buf,
+				o,
+				nx0,
+				ny0,
+				nw,
+				nh,
+				BLOCK_BG_R,
+				BLOCK_BG_G,
+				BLOCK_BG_B,
+			);
 			o = solidQuad(buf, o, nx0, ny0, nw, nBorderW, br, bg, bb);
 			o = solidQuad(buf, o, nx0, ny0 - nh + nBorderW, nw, nBorderW, br, bg, bb);
 			o = solidQuad(buf, o, nx0, ny0, nBorderW, nh, br, bg, bb);
@@ -387,8 +390,7 @@ export class BlockTextRenderer {
 				const lineNY = 0.5 + (lineGY - cy) * inv;
 				let charIdx = 0;
 
-				const segs =
-					line.segments.length > 0 ? line.segments : null;
+				const segs = line.segments.length > 0 ? line.segments : null;
 				if (segs) {
 					for (const seg of segs) {
 						const colors = SYNTAX_COLORS[seg.syntaxKind];
@@ -400,20 +402,25 @@ export class BlockTextRenderer {
 							seg.term === this.highlightedTerm;
 
 						for (let ci = 0; ci < seg.text.length; ci++) {
-							const charNX =
-								0.5 + (baseGX + charIdx * charW - cx) * inv;
+							const charNX = 0.5 + (baseGX + charIdx * charW - cx) * inv;
 
 							if (isHl) {
-								o = solidQuad(buf, o, charNX, lineNY, nCharW, nCharH, HIGHLIGHT_R, HIGHLIGHT_G, HIGHLIGHT_B);
+								o = solidQuad(
+									buf,
+									o,
+									charNX,
+									lineNY,
+									nCharW,
+									nCharH,
+									HIGHLIGHT_R,
+									HIGHLIGHT_G,
+									HIGHLIGHT_B,
+								);
 							}
 
-							let code = seg.text.charCodeAt(ci);
+							const code = seg.text.charCodeAt(ci);
 							let uvIdx = (code - firstChar) * 4;
-							if (
-								uvIdx < 0 ||
-								code > lastChar
-							)
-								uvIdx = fallbackIdx;
+							if (uvIdx < 0 || code > lastChar) uvIdx = fallbackIdx;
 
 							const x1 = charNX + nCharW;
 							const y1 = lineNY - nCharH;
@@ -422,12 +429,54 @@ export class BlockTextRenderer {
 							const u1 = uvTable[uvIdx + 2];
 							const v1 = uvTable[uvIdx + 3];
 
-							buf[o++] = charNX; buf[o++] = lineNY; buf[o++] = u0; buf[o++] = v0; buf[o++] = cr; buf[o++] = cg; buf[o++] = cb; buf[o++] = 1;
-							buf[o++] = x1;     buf[o++] = lineNY; buf[o++] = u1; buf[o++] = v0; buf[o++] = cr; buf[o++] = cg; buf[o++] = cb; buf[o++] = 1;
-							buf[o++] = charNX; buf[o++] = y1;     buf[o++] = u0; buf[o++] = v1; buf[o++] = cr; buf[o++] = cg; buf[o++] = cb; buf[o++] = 1;
-							buf[o++] = charNX; buf[o++] = y1;     buf[o++] = u0; buf[o++] = v1; buf[o++] = cr; buf[o++] = cg; buf[o++] = cb; buf[o++] = 1;
-							buf[o++] = x1;     buf[o++] = lineNY; buf[o++] = u1; buf[o++] = v0; buf[o++] = cr; buf[o++] = cg; buf[o++] = cb; buf[o++] = 1;
-							buf[o++] = x1;     buf[o++] = y1;     buf[o++] = u1; buf[o++] = v1; buf[o++] = cr; buf[o++] = cg; buf[o++] = cb; buf[o++] = 1;
+							buf[o++] = charNX;
+							buf[o++] = lineNY;
+							buf[o++] = u0;
+							buf[o++] = v0;
+							buf[o++] = cr;
+							buf[o++] = cg;
+							buf[o++] = cb;
+							buf[o++] = 1;
+							buf[o++] = x1;
+							buf[o++] = lineNY;
+							buf[o++] = u1;
+							buf[o++] = v0;
+							buf[o++] = cr;
+							buf[o++] = cg;
+							buf[o++] = cb;
+							buf[o++] = 1;
+							buf[o++] = charNX;
+							buf[o++] = y1;
+							buf[o++] = u0;
+							buf[o++] = v1;
+							buf[o++] = cr;
+							buf[o++] = cg;
+							buf[o++] = cb;
+							buf[o++] = 1;
+							buf[o++] = charNX;
+							buf[o++] = y1;
+							buf[o++] = u0;
+							buf[o++] = v1;
+							buf[o++] = cr;
+							buf[o++] = cg;
+							buf[o++] = cb;
+							buf[o++] = 1;
+							buf[o++] = x1;
+							buf[o++] = lineNY;
+							buf[o++] = u1;
+							buf[o++] = v0;
+							buf[o++] = cr;
+							buf[o++] = cg;
+							buf[o++] = cb;
+							buf[o++] = 1;
+							buf[o++] = x1;
+							buf[o++] = y1;
+							buf[o++] = u1;
+							buf[o++] = v1;
+							buf[o++] = cr;
+							buf[o++] = cg;
+							buf[o++] = cb;
+							buf[o++] = 1;
 
 							charIdx++;
 						}
@@ -435,10 +484,9 @@ export class BlockTextRenderer {
 				} else {
 					const text = line.text;
 					for (let ci = 0; ci < text.length; ci++) {
-						const charNX =
-							0.5 + (baseGX + ci * charW - cx) * inv;
+						const charNX = 0.5 + (baseGX + ci * charW - cx) * inv;
 
-						let code = text.charCodeAt(ci);
+						const code = text.charCodeAt(ci);
 						let uvIdx = (code - firstChar) * 4;
 						if (uvIdx < 0 || code > lastChar) uvIdx = fallbackIdx;
 
@@ -449,12 +497,54 @@ export class BlockTextRenderer {
 						const u1 = uvTable[uvIdx + 2];
 						const v1 = uvTable[uvIdx + 3];
 
-						buf[o++] = charNX; buf[o++] = lineNY; buf[o++] = u0; buf[o++] = v0; buf[o++] = 0.1; buf[o++] = 0.1; buf[o++] = 0.1; buf[o++] = 1;
-						buf[o++] = x1;     buf[o++] = lineNY; buf[o++] = u1; buf[o++] = v0; buf[o++] = 0.1; buf[o++] = 0.1; buf[o++] = 0.1; buf[o++] = 1;
-						buf[o++] = charNX; buf[o++] = y1;     buf[o++] = u0; buf[o++] = v1; buf[o++] = 0.1; buf[o++] = 0.1; buf[o++] = 0.1; buf[o++] = 1;
-						buf[o++] = charNX; buf[o++] = y1;     buf[o++] = u0; buf[o++] = v1; buf[o++] = 0.1; buf[o++] = 0.1; buf[o++] = 0.1; buf[o++] = 1;
-						buf[o++] = x1;     buf[o++] = lineNY; buf[o++] = u1; buf[o++] = v0; buf[o++] = 0.1; buf[o++] = 0.1; buf[o++] = 0.1; buf[o++] = 1;
-						buf[o++] = x1;     buf[o++] = y1;     buf[o++] = u1; buf[o++] = v1; buf[o++] = 0.1; buf[o++] = 0.1; buf[o++] = 0.1; buf[o++] = 1;
+						buf[o++] = charNX;
+						buf[o++] = lineNY;
+						buf[o++] = u0;
+						buf[o++] = v0;
+						buf[o++] = 0.1;
+						buf[o++] = 0.1;
+						buf[o++] = 0.1;
+						buf[o++] = 1;
+						buf[o++] = x1;
+						buf[o++] = lineNY;
+						buf[o++] = u1;
+						buf[o++] = v0;
+						buf[o++] = 0.1;
+						buf[o++] = 0.1;
+						buf[o++] = 0.1;
+						buf[o++] = 1;
+						buf[o++] = charNX;
+						buf[o++] = y1;
+						buf[o++] = u0;
+						buf[o++] = v1;
+						buf[o++] = 0.1;
+						buf[o++] = 0.1;
+						buf[o++] = 0.1;
+						buf[o++] = 1;
+						buf[o++] = charNX;
+						buf[o++] = y1;
+						buf[o++] = u0;
+						buf[o++] = v1;
+						buf[o++] = 0.1;
+						buf[o++] = 0.1;
+						buf[o++] = 0.1;
+						buf[o++] = 1;
+						buf[o++] = x1;
+						buf[o++] = lineNY;
+						buf[o++] = u1;
+						buf[o++] = v0;
+						buf[o++] = 0.1;
+						buf[o++] = 0.1;
+						buf[o++] = 0.1;
+						buf[o++] = 1;
+						buf[o++] = x1;
+						buf[o++] = y1;
+						buf[o++] = u1;
+						buf[o++] = v1;
+						buf[o++] = 0.1;
+						buf[o++] = 0.1;
+						buf[o++] = 0.1;
+						buf[o++] = 1;
 					}
 				}
 			}
@@ -519,11 +609,53 @@ function solidQuad(
 ): number {
 	const x1 = x + w;
 	const y1 = y - h;
-	buf[o++] = x;  buf[o++] = y;  buf[o++] = -1; buf[o++] = -1; buf[o++] = r; buf[o++] = g; buf[o++] = b; buf[o++] = 1;
-	buf[o++] = x1; buf[o++] = y;  buf[o++] = -1; buf[o++] = -1; buf[o++] = r; buf[o++] = g; buf[o++] = b; buf[o++] = 1;
-	buf[o++] = x;  buf[o++] = y1; buf[o++] = -1; buf[o++] = -1; buf[o++] = r; buf[o++] = g; buf[o++] = b; buf[o++] = 1;
-	buf[o++] = x;  buf[o++] = y1; buf[o++] = -1; buf[o++] = -1; buf[o++] = r; buf[o++] = g; buf[o++] = b; buf[o++] = 1;
-	buf[o++] = x1; buf[o++] = y;  buf[o++] = -1; buf[o++] = -1; buf[o++] = r; buf[o++] = g; buf[o++] = b; buf[o++] = 1;
-	buf[o++] = x1; buf[o++] = y1; buf[o++] = -1; buf[o++] = -1; buf[o++] = r; buf[o++] = g; buf[o++] = b; buf[o++] = 1;
+	buf[o++] = x;
+	buf[o++] = y;
+	buf[o++] = -1;
+	buf[o++] = -1;
+	buf[o++] = r;
+	buf[o++] = g;
+	buf[o++] = b;
+	buf[o++] = 1;
+	buf[o++] = x1;
+	buf[o++] = y;
+	buf[o++] = -1;
+	buf[o++] = -1;
+	buf[o++] = r;
+	buf[o++] = g;
+	buf[o++] = b;
+	buf[o++] = 1;
+	buf[o++] = x;
+	buf[o++] = y1;
+	buf[o++] = -1;
+	buf[o++] = -1;
+	buf[o++] = r;
+	buf[o++] = g;
+	buf[o++] = b;
+	buf[o++] = 1;
+	buf[o++] = x;
+	buf[o++] = y1;
+	buf[o++] = -1;
+	buf[o++] = -1;
+	buf[o++] = r;
+	buf[o++] = g;
+	buf[o++] = b;
+	buf[o++] = 1;
+	buf[o++] = x1;
+	buf[o++] = y;
+	buf[o++] = -1;
+	buf[o++] = -1;
+	buf[o++] = r;
+	buf[o++] = g;
+	buf[o++] = b;
+	buf[o++] = 1;
+	buf[o++] = x1;
+	buf[o++] = y1;
+	buf[o++] = -1;
+	buf[o++] = -1;
+	buf[o++] = r;
+	buf[o++] = g;
+	buf[o++] = b;
+	buf[o++] = 1;
 	return o;
 }

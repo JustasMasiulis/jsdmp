@@ -5,8 +5,8 @@ import {
 	buildCfgInstructionLine,
 	buildCfgInstructionLines,
 	buildCfgTextLinesFromLabel,
-	tokenizeCfgTextSegments,
 } from "./disassemblyGraph";
+import type { InstrTextSegment } from "./intelFormatter";
 import {
 	__setWasmExportsForTesting,
 	WASM_MEMORY,
@@ -452,29 +452,10 @@ describe("buildCfg2", () => {
 	});
 });
 
-describe("tokenizeCfgTextSegments", () => {
-	it("splits operands into literal tokens and separator text", () => {
-		const text = "qword ptr [rax+0x20], rbx";
-		const segments = tokenizeCfgTextSegments(text);
-
-		expect(segments.map((segment) => segment.text).join("")).toBe(text);
-		expect(
-			segments
-				.filter((segment) => segment.clickable)
-				.map((segment) => segment.term),
-		).toEqual(["qword", "ptr", "rax", "0x20", "rbx"]);
-		expect(
-			segments
-				.filter((segment) => segment.clickable)
-				.map((segment) => segment.syntaxKind),
-		).toEqual(["plain", "plain", "plain", "number", "plain"]);
-		expect(
-			segments
-				.filter((segment) => !segment.clickable)
-				.map((segment) => segment.text),
-		).toEqual([" ", " [", "+", "], "]);
-	});
-});
+const operandSegments = (
+	...pairs: [string, InstrTextSegment["syntaxKind"]][]
+): InstrTextSegment[] =>
+	pairs.map(([text, syntaxKind]) => ({ text, syntaxKind }));
 
 describe("buildCfgInstructionLine", () => {
 	it("preserves the rendered graph line while exposing clickable tokens", () => {
@@ -482,7 +463,17 @@ describe("buildCfgInstructionLine", () => {
 			address: 0x401000n,
 			prefix: "",
 			mnemonic: "mov",
-			operands: "qword ptr [rax+0x20], rbx",
+			operandSegments: operandSegments(
+				["qword ptr", "keyword"],
+				[" ", "plain"],
+				["[", "plain"],
+				["rax", "register"],
+				["+", "plain"],
+				["0x20", "number"],
+				["]", "plain"],
+				[", ", "plain"],
+				["rbx", "register"],
+			),
 		});
 
 		expect(line.text).toBe("0000000000401000  mov qword ptr [rax+0x20], rbx");
@@ -490,28 +481,12 @@ describe("buildCfgInstructionLine", () => {
 			line.segments
 				.filter((segment) => segment.clickable)
 				.map((segment) => segment.term),
-		).toEqual([
-			"0000000000401000",
-			"mov",
-			"qword",
-			"ptr",
-			"rax",
-			"0x20",
-			"rbx",
-		]);
+		).toEqual(["0000000000401000", "mov", "qword ptr", "rax", "0x20", "rbx"]);
 		expect(
 			line.segments
 				.filter((segment) => segment.clickable)
 				.map((segment) => segment.syntaxKind),
-		).toEqual([
-			"plain",
-			"mnemonic",
-			"plain",
-			"plain",
-			"plain",
-			"number",
-			"plain",
-		]);
+		).toEqual(["plain", "mnemonic", "plain", "plain", "number", "plain"]);
 	});
 });
 
@@ -522,19 +497,27 @@ describe("buildCfgInstructionLines", () => {
 				address: 0x401000n,
 				prefix: "",
 				mnemonic: "mov",
-				operands: "rax, rbx",
+				operandSegments: operandSegments(
+					["rax", "register"],
+					[", ", "plain"],
+					["rbx", "register"],
+				),
 			},
 			{
 				address: 0x401002n,
 				prefix: "",
 				mnemonic: "cmovne",
-				operands: "rcx, rdx",
+				operandSegments: operandSegments(
+					["rcx", "register"],
+					[", ", "plain"],
+					["rdx", "register"],
+				),
 			},
 			{
 				address: 0x401004n,
 				prefix: "",
 				mnemonic: "ret",
-				operands: "",
+				operandSegments: [],
 			},
 		]);
 
@@ -547,7 +530,7 @@ describe("buildCfgInstructionLines", () => {
 });
 
 describe("buildCfgTextLinesFromLabel", () => {
-	it("tokenizes synthetic labels without changing the visible text", () => {
+	it("emits each line as a single plain segment", () => {
 		const lines = buildCfgTextLinesFromLabel(
 			"missing memory\n0000000000001000",
 		);
@@ -556,20 +539,9 @@ describe("buildCfgTextLinesFromLabel", () => {
 		expect(lines.map((line) => line.text).join("\n")).toBe(
 			"missing memory\n0000000000001000",
 		);
-		expect(
-			lines[0]?.segments
-				.filter((segment) => segment.clickable)
-				.map((segment) => segment.term),
-		).toEqual(["missing", "memory"]);
-		expect(
-			lines[1]?.segments
-				.filter((segment) => segment.clickable)
-				.map((segment) => segment.term),
-		).toEqual(["0000000000001000"]);
-		expect(
-			lines[1]?.segments
-				.filter((segment) => segment.clickable)
-				.map((segment) => segment.syntaxKind),
-		).toEqual(["number"]);
+		expect(lines[0]?.segments).toHaveLength(1);
+		expect(lines[0]?.segments[0]?.clickable).toBe(false);
+		expect(lines[1]?.segments).toHaveLength(1);
+		expect(lines[1]?.segments[0]?.clickable).toBe(false);
 	});
 });

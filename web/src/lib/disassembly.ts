@@ -1,7 +1,10 @@
+/** biome-ignore-all lint/style/useTemplate: string concatenation has better performance */
 import {
 	type DecodedInstructionHeader,
 	type DecodedOperand,
-	formatInstructionOperands,
+	formatInstructionOperandsSegments,
+	type InstrTextSegment,
+	seg,
 } from "./intelFormatter";
 import { readCString } from "./reader";
 import { WASM_EXPORTS, WASM_MEMORY } from "./wasm";
@@ -9,7 +12,10 @@ import { WASM_EXPORTS, WASM_MEMORY } from "./wasm";
 export type {
 	DecodedInstructionHeader,
 	DecodedOperand,
+	InstrTextSegment,
 } from "./intelFormatter";
+
+export { joinSegmentText, seg } from "./intelFormatter";
 
 export const MAX_INSTRUCTION_LENGTH = 15;
 
@@ -35,7 +41,7 @@ export type DecodedInstruction = {
 	controlFlow: DecodedControlFlow;
 	prefix: string;
 	mnemonic: string;
-	operands: string;
+	operandSegments: InstrTextSegment[];
 	header: DecodedInstructionHeader;
 	decodedOperands: DecodedOperand[];
 };
@@ -201,11 +207,17 @@ export const decodeInstruction = (
 		mnemonicPtr,
 		48,
 	);
-	const operandsStr = formatInstructionOperands(
+	let operandSegments = formatInstructionOperandsSegments(
 		header,
 		decodedOperands,
 		runtimeAddress,
 	);
+
+	if (operandSegments.length === 0 && header.hasDirectTarget) {
+		operandSegments = [
+			seg("0x" + header.directTarget.toString(16).toUpperCase(), "number"),
+		];
+	}
 
 	return {
 		length: header.length,
@@ -217,7 +229,7 @@ export const decodeInstruction = (
 		},
 		prefix,
 		mnemonic,
-		operands: operandsStr,
+		operandSegments,
 		header,
 		decodedOperands,
 	};

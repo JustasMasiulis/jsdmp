@@ -7,12 +7,14 @@ import type { Context } from "../lib/cpu_context";
 import {
 	buildDisassemblyListing,
 	type DebugDisassemblyListing,
+	type DisassemblyLine,
 	loadNextDisassemblyLines,
 	loadPreviousDisassemblyLines,
 } from "../lib/debugDisassembly";
 import { DBG } from "../lib/debugState";
 import { fmtHex16 } from "../lib/formatting";
 import type { SignalHandle } from "../lib/reactive";
+import { renderSegment, renderSegments } from "../lib/syntaxHighlight";
 import {
 	FixedRowVirtualTable,
 	type VirtualListingAdapter,
@@ -33,16 +35,20 @@ type DisassemblyViewPanelOptions = {
 	panelId: string;
 };
 
-type DisassemblyLine = NonNullable<DebugDisassemblyListing["lines"]>[number];
-
 type DisassemblyRowState = {
 	addressCode: HTMLElement;
 	bytesCode: HTMLElement;
 	instructionCode: HTMLElement;
 };
 
-const formatInstruction = (line: DisassemblyLine) =>
-	line.operands ? `${line.mnemonic} ${line.operands}` : line.mnemonic;
+const renderInstructionLine = (parent: HTMLElement, line: DisassemblyLine) => {
+	parent.textContent = "";
+	renderSegment(parent, line.mnemonic, "mnemonic");
+	if (line.operandSegments.length > 0) {
+		parent.appendChild(document.createTextNode(" "));
+		renderSegments(parent, line.operandSegments);
+	}
+};
 
 const getPanelStorageKey = (panelId: string) =>
 	`${DISASSEMBLY_PANEL_STATE_KEY}:${panelId}`;
@@ -566,7 +572,7 @@ export class VanillaDisassemblyView {
 
 		row.addressCode.textContent = fmtHex16(line.address);
 		row.bytesCode.textContent = line.bytesHex;
-		row.instructionCode.textContent = formatInstruction(line);
+		renderInstructionLine(row.instructionCode, line);
 	}
 
 	private async submitAddress() {

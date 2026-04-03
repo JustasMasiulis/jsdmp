@@ -1,7 +1,7 @@
-import type Sigma from "sigma";
 import type Graph from "graphology";
-import type { CfgNode } from "../lib/disassemblyGraph";
+import type Sigma from "sigma";
 import { renderCfgBlockHtml } from "../lib/cfgHtml";
+import type { CfgNode } from "../lib/disassemblyGraph";
 
 const VIEWPORT_CULL_MARGIN = 200;
 const CULL_INTERVAL_MS = 150;
@@ -75,10 +75,8 @@ export class CfgBlockOverlay {
 		this.graph.forEachNode((nodeId) => {
 			const graphX = this.graph.getNodeAttribute(nodeId, "x") as number;
 			const graphY = -(this.graph.getNodeAttribute(nodeId, "y") as number);
-			const w =
-				(this.graph.getNodeAttribute(nodeId, "width") as number) ?? 0;
-			const h =
-				(this.graph.getNodeAttribute(nodeId, "height") as number) ?? 0;
+			const w = (this.graph.getNodeAttribute(nodeId, "width") as number) ?? 0;
+			const h = (this.graph.getNodeAttribute(nodeId, "height") as number) ?? 0;
 
 			const div = document.createElement("div");
 			div.className = "cfg-block";
@@ -123,20 +121,14 @@ export class CfgBlockOverlay {
 		const bbox = this.sigma.getCustomBBox();
 		if (!bbox) return;
 
-		const bboxRange = Math.max(
-			bbox.x[1] - bbox.x[0],
-			bbox.y[1] - bbox.y[0],
-			1,
-		);
+		const bboxRange = Math.max(bbox.x[1] - bbox.x[0], bbox.y[1] - bbox.y[0], 1);
 
 		const o0 = this.sigma.graphToViewport({ x: 0, y: 0 });
 		const o1 = this.sigma.graphToViewport({ x: bboxRange, y: 0 });
 		const scale = (o1.x - o0.x) / bboxRange;
 		this.lastScale = scale;
 
-		this.viewport.style.transform =
-			`translate(${o0.x}px, ${o0.y}px) scale(${scale})`;
-
+		this.viewport.style.transform = `translate(${o0.x}px, ${o0.y}px) scale(${scale})`;
 	}
 
 	private cull(): void {
@@ -146,11 +138,6 @@ export class CfgBlockOverlay {
 
 		const bbox = this.sigma.getCustomBBox();
 		if (!bbox) return;
-		const bboxRange = Math.max(
-			bbox.x[1] - bbox.x[0],
-			bbox.y[1] - bbox.y[0],
-			1,
-		);
 		const o0 = this.sigma.graphToViewport({ x: 0, y: 0 });
 
 		const margin = VIEWPORT_CULL_MARGIN;

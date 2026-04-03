@@ -357,11 +357,7 @@ export class EdgePolylineRenderer {
 		const prevRange = this.bboxRange;
 		this.bboxCenterX = (bbox.x[0] + bbox.x[1]) / 2;
 		this.bboxCenterY = (bbox.y[0] + bbox.y[1]) / 2;
-		this.bboxRange = Math.max(
-			bbox.x[1] - bbox.x[0],
-			bbox.y[1] - bbox.y[0],
-			1,
-		);
+		this.bboxRange = Math.max(bbox.x[1] - bbox.x[0], bbox.y[1] - bbox.y[0], 1);
 		if (this.bboxRange !== prevRange) {
 			this.dirty = true;
 		}
@@ -410,7 +406,16 @@ export class EdgePolylineRenderer {
 				);
 			}
 
-			offset = writeArrowVertices(buf, offset, npts, r, g, b, a, 1 / this.bboxRange);
+			offset = writeArrowVertices(
+				buf,
+				offset,
+				npts,
+				r,
+				g,
+				b,
+				a,
+				1 / this.bboxRange,
+			);
 		});
 
 		const gl = this.gl;

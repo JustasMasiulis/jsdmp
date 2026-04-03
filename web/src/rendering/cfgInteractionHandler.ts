@@ -1,14 +1,11 @@
-import type Sigma from "sigma";
 import type Graph from "graphology";
-import type {
-	CfgNode,
-	CfgTextSegment,
-} from "../lib/disassemblyGraph";
+import type Sigma from "sigma";
+import type { CfgNode, CfgTextSegment } from "../lib/disassemblyGraph";
 import {
-	ESTIMATED_CHAR_WIDTH,
-	ESTIMATED_LINE_HEIGHT,
 	CARD_PADDING_X,
 	CARD_PADDING_Y,
+	ESTIMATED_CHAR_WIDTH,
+	ESTIMATED_LINE_HEIGHT,
 } from "../lib/disassemblyGraph";
 import type { BlockTextRenderer } from "./blockTextProgram";
 
@@ -56,8 +53,7 @@ export class CfgInteractionHandler {
 			const x = graph.getNodeAttribute(nodeId, "x") as number;
 			const y = -(graph.getNodeAttribute(nodeId, "y") as number);
 			const w = (graph.getNodeAttribute(nodeId, "width") as number) ?? 0;
-			const h =
-				(graph.getNodeAttribute(nodeId, "height") as number) ?? 0;
+			const h = (graph.getNodeAttribute(nodeId, "height") as number) ?? 0;
 			this.nodePositions.push({ id: nodeId, x, y, w, h });
 		});
 
@@ -175,21 +171,13 @@ export class CfgInteractionHandler {
 		if (prev === nodeId) return;
 
 		if (prev !== null && this.graph.hasNode(prev)) {
-			this.graph.setNodeAttribute(
-				prev,
-				"borderColor",
-				DEFAULT_BORDER_COLOR,
-			);
+			this.graph.setNodeAttribute(prev, "borderColor", DEFAULT_BORDER_COLOR);
 		}
 
 		this._selectedNodeId = nodeId;
 
 		if (nodeId !== null && this.graph.hasNode(nodeId)) {
-			this.graph.setNodeAttribute(
-				nodeId,
-				"borderColor",
-				SELECTED_BORDER_COLOR,
-			);
+			this.graph.setNodeAttribute(nodeId, "borderColor", SELECTED_BORDER_COLOR);
 		}
 
 		this.textRenderer.markDirtyAndRender();
@@ -210,9 +198,7 @@ export class CfgInteractionHandler {
 		}
 		if (this._selectedTerm) {
 			const count = this.termCounts.get(this._selectedTerm) ?? 0;
-			parts.push(
-				`Highlighting "${this._selectedTerm}" (${count} matches).`,
-			);
+			parts.push(`Highlighting "${this._selectedTerm}" (${count} matches).`);
 		}
 		this.statusCallback(parts.join(" "));
 	}

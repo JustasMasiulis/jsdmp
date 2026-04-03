@@ -1,13 +1,20 @@
 import { evaluateExpression } from "./commandExpr";
 import { type Context, GPR_NAMES } from "./cpu_context";
 import { findModuleForAddress } from "./debug_interface";
-import { decodeInstruction, MAX_INSTRUCTION_LENGTH } from "./disassembly";
+import {
+	decodeInstruction,
+	type InstrTextSegment,
+	MAX_INSTRUCTION_LENGTH,
+	seg,
+} from "./disassembly";
 import { fmtHex, fmtHex16 } from "./formatting";
 import type { MinidumpDebugInterface } from "./minidump_debug_interface";
 import { basename } from "./utils";
 
+export type CommandOutputLine = string | InstrTextSegment[];
+
 type CommandOutput = {
-	lines: string[];
+	lines: CommandOutputLine[];
 	isError?: boolean;
 };
 
@@ -327,7 +334,7 @@ async function unassembleCommand(
 	}
 	const { address, count } = parseAddressAndCount(args, ctx, 8, ctx?.ip);
 
-	const lines: string[] = [];
+	const lines: CommandOutputLine[] = [];
 	let currentAddr = address;
 
 	for (let i = 0; i < count; i++) {
@@ -335,13 +342,13 @@ async function unassembleCommand(
 		try {
 			bytes = await dbg.read(currentAddr, MAX_INSTRUCTION_LENGTH, 1);
 		} catch {
-			lines.push(`${fmtHex(currentAddr, 16).toLowerCase()} ??`);
+			lines.push(fmtHex(currentAddr, 16).toLowerCase() + " ??");
 			break;
 		}
 
 		const instr = decodeInstruction(bytes, currentAddr);
 		if (!instr) {
-			lines.push(`${fmtHex(currentAddr, 16).toLowerCase()} ??`);
+			lines.push(fmtHex(currentAddr, 16).toLowerCase() + " ??");
 			break;
 		}
 
@@ -349,11 +356,16 @@ async function unassembleCommand(
 			.map((b) => fmtHex(b, 2).toLowerCase())
 			.join("");
 		const prefixedMnemonic = instr.prefix
-			? `${instr.prefix} ${instr.mnemonic}`
+			? instr.prefix + " " + instr.mnemonic
 			: instr.mnemonic;
-		lines.push(
-			`${fmtHex(currentAddr, 16).toLowerCase()} ${hexBytes.padEnd(16)} ${prefixedMnemonic.padEnd(8)} ${instr.operands}`,
-		);
+
+		const line: InstrTextSegment[] = [
+			seg(fmtHex(currentAddr, 16).toLowerCase() + " "),
+			seg(hexBytes.padEnd(16) + " "),
+			seg(prefixedMnemonic.padEnd(8) + " ", "mnemonic"),
+			...instr.operandSegments,
+		];
+		lines.push(line);
 		currentAddr += BigInt(instr.length);
 	}
 	return { lines };

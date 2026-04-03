@@ -1,6 +1,19 @@
+/** biome-ignore-all lint/style/useTemplate: string concatenation has better performance */
 import { readCString } from "./reader";
 import { registerName, ZydisRegister } from "./register";
 import { WASM_EXPORTS, WASM_MEMORY } from "./wasm";
+
+export type InstrSyntaxKind =
+	| "plain"
+	| "mnemonic"
+	| "number"
+	| "register"
+	| "keyword";
+
+export type InstrTextSegment = {
+	text: string;
+	syntaxKind: InstrSyntaxKind;
+};
 
 export type DecodedInstructionHeader = {
 	mnemonic: number;
@@ -150,50 +163,61 @@ function formatSignedHex(value: bigint, bits: number): string {
 	return "0x" + masked.toString(16).toUpperCase();
 }
 
-function formatImm(
+export const seg = (
+	text: string,
+	syntaxKind: InstrSyntaxKind = "plain",
+): InstrTextSegment => ({ text, syntaxKind });
+
+function formatImmSegments(
 	op: DecodedOperandImm,
 	runtimeAddress: bigint,
 	instrLength: number,
-): string {
+): InstrTextSegment[] {
 	if (op.isRelative) {
 		const target = runtimeAddress + BigInt(instrLength) + op.value;
 		const mask = (1n << 64n) - 1n;
-		return "0x" + (target & mask).toString(16).toUpperCase();
+		return [seg("0x" + (target & mask).toString(16).toUpperCase(), "number")];
 	}
 	if (op.isSigned) {
-		return formatSignedHex(op.value, op.size);
+		return [seg(formatSignedHex(op.value, op.size), "number")];
 	}
-	return hexPad(op.value, op.size);
+	return [seg(hexPad(op.value, op.size), "number")];
 }
 
-function formatMem(op: DecodedOperandMem): string {
-	let result = "";
+function formatMemSegments(op: DecodedOperandMem): InstrTextSegment[] {
+	const out: InstrTextSegment[] = [];
 
 	const isAgen = op.memType === 1;
 	if (!isAgen) {
 		const qualifier = SIZE_QUALIFIERS[op.size];
-		if (qualifier) result += qualifier + " ";
+		if (qualifier) {
+			out.push(seg(qualifier, "keyword"));
+			out.push(seg(" "));
+		}
 	}
 
 	const segIdx = op.segment;
 	if (segIdx > 0 && segIdx !== defaultSegmentIndex(op.base)) {
-		result += (SEGMENT_NAMES[segIdx] ?? "") + ":";
+		out.push(seg(SEGMENT_NAMES[segIdx] ?? "", "register"));
+		out.push(seg(":"));
 	}
 
-	result += "[";
+	out.push(seg("["));
 
 	const hasBase = op.base !== ZydisRegister.NONE;
 	const hasIndex = op.index !== ZydisRegister.NONE;
-	let bracket = "";
 
 	if (hasBase) {
-		bracket = registerName(op.base);
+		out.push(seg(registerName(op.base), "register"));
 	}
 
 	if (hasIndex) {
-		if (bracket.length > 0) bracket += "+";
-		const idxName = registerName(op.index);
-		bracket += op.scale > 1 ? idxName + "*" + op.scale : idxName;
+		if (hasBase) out.push(seg("+"));
+		out.push(seg(registerName(op.index), "register"));
+		if (op.scale > 1) {
+			out.push(seg("*"));
+			out.push(seg(String(op.scale), "number"));
+		}
 	}
 
 	if (op.hasDisplacement && op.displacement !== 0n) {
@@ -208,80 +232,133 @@ function formatMem(op: DecodedOperandMem): string {
 			absVal = op.displacement;
 		}
 		const hexStr = absVal.toString(16).toUpperCase();
-		if (bracket.length > 0) {
-			bracket += isNeg ? "-0x" + hexStr : "+0x" + hexStr;
+		if (hasBase || hasIndex) {
+			out.push(seg(isNeg ? "-" : "+"));
+			out.push(seg("0x" + hexStr, "number"));
 		} else {
-			bracket += isNeg ? "-0x" + hexStr : "0x" + hexStr;
+			out.push(seg((isNeg ? "-0x" : "0x") + hexStr, "number"));
 		}
 	} else if (!hasBase && !hasIndex) {
 		const disp = op.displacement & ((1n << 64n) - 1n);
-		bracket += "0x" + disp.toString(16).toUpperCase();
+		out.push(seg("0x" + disp.toString(16).toUpperCase(), "number"));
 	}
 
-	return result + bracket + "]";
+	out.push(seg("]"));
+	return out;
 }
 
-function formatPtr(op: DecodedOperandPtr): string {
-	return (
-		"0x" +
-		op.segment.toString(16).toUpperCase() +
-		":0x" +
-		op.offset.toString(16).toUpperCase()
-	);
+function formatPtrSegments(op: DecodedOperandPtr): InstrTextSegment[] {
+	return [
+		seg("0x" + op.segment.toString(16).toUpperCase(), "number"),
+		seg(":"),
+		seg("0x" + op.offset.toString(16).toUpperCase(), "number"),
+	];
 }
 
-function formatOperand(
+function formatOperandSegments(
 	op: DecodedOperand,
 	runtimeAddress: bigint,
 	instrLength: number,
-): string {
+): InstrTextSegment[] {
 	switch (op.type) {
 		case 1:
-			return registerName(op.reg);
+			return [seg(registerName(op.reg), "register")];
 		case 2:
-			return formatMem(op);
+			return formatMemSegments(op);
 		case 3:
-			return formatPtr(op);
+			return formatPtrSegments(op);
 		case 4:
-			return formatImm(op, runtimeAddress, instrLength);
+			return formatImmSegments(op, runtimeAddress, instrLength);
 	}
 }
 
-function emitPrefixes(attributes: bigint): string {
-	let result = "";
-	if (attributes & ATTRIB_HAS_XACQUIRE) result += "xacquire ";
-	if (attributes & ATTRIB_HAS_XRELEASE) result += "xrelease ";
-	if (attributes & ATTRIB_HAS_LOCK) result += "lock ";
-	if (attributes & ATTRIB_HAS_REP) result += "rep ";
-	if (attributes & ATTRIB_HAS_REPE) result += "repe ";
-	if (attributes & ATTRIB_HAS_REPNE) result += "repne ";
-	if (attributes & ATTRIB_HAS_BND) result += "bnd ";
-	if (attributes & ATTRIB_HAS_NOTRACK) result += "notrack ";
-	return result;
+function emitPrefixSegments(attributes: bigint): InstrTextSegment[] {
+	const out: InstrTextSegment[] = [];
+	if (attributes & ATTRIB_HAS_XACQUIRE) out.push(seg("xacquire ", "mnemonic"));
+	if (attributes & ATTRIB_HAS_XRELEASE) out.push(seg("xrelease ", "mnemonic"));
+	if (attributes & ATTRIB_HAS_LOCK) out.push(seg("lock ", "mnemonic"));
+	if (attributes & ATTRIB_HAS_REP) out.push(seg("rep ", "mnemonic"));
+	if (attributes & ATTRIB_HAS_REPE) out.push(seg("repe ", "mnemonic"));
+	if (attributes & ATTRIB_HAS_REPNE) out.push(seg("repne ", "mnemonic"));
+	if (attributes & ATTRIB_HAS_BND) out.push(seg("bnd ", "mnemonic"));
+	if (attributes & ATTRIB_HAS_NOTRACK) out.push(seg("notrack ", "mnemonic"));
+	return out;
 }
 
-function emitAvxDecorators(header: DecodedInstructionHeader): string {
-	let result = "";
+function emitAvxDecoratorSegments(
+	header: DecodedInstructionHeader,
+): InstrTextSegment[] {
+	const out: InstrTextSegment[] = [];
 	if (header.avxMaskReg > 0) {
-		result += ` {k${header.avxMaskReg}}`;
+		out.push(seg(` {k${header.avxMaskReg}}`, "keyword"));
 		if (
 			header.avxMaskMode === MASK_MODE_ZEROING ||
 			header.avxMaskMode === MASK_MODE_CONTROL_ZEROING
 		) {
-			result += " {z}";
+			out.push(seg(" {z}", "keyword"));
 		}
 	}
 	if (header.avxBroadcast > 0) {
 		const bc = BROADCAST_STRINGS[header.avxBroadcast];
-		if (bc) result += ` ${bc}`;
+		if (bc) out.push(seg(` ${bc}`, "keyword"));
 	}
 	if (header.avxRounding > 0) {
 		const rnd = ROUNDING_STRINGS[header.avxRounding];
-		if (rnd) result += ` ${rnd}`;
+		if (rnd) out.push(seg(` ${rnd}`, "keyword"));
 	} else if (header.avxHasSae) {
-		result += " {sae}";
+		out.push(seg(" {sae}", "keyword"));
 	}
+	return out;
+}
+
+export const joinSegmentText = (
+	segments: readonly { text: string }[],
+): string => {
+	let result = "";
+	for (const s of segments) result += s.text;
 	return result;
+};
+
+export function formatInstructionOperandsSegments(
+	header: DecodedInstructionHeader,
+	operands: DecodedOperand[],
+	runtimeAddress: bigint,
+): InstrTextSegment[] {
+	const count = Math.min(header.operandCount, operands.length);
+	if (count === 0) return emitAvxDecoratorSegments(header);
+	const out: InstrTextSegment[] = formatOperandSegments(
+		operands[0],
+		runtimeAddress,
+		header.length,
+	);
+	for (let i = 1; i < count; i++) {
+		out.push(seg(", "));
+		out.push(
+			...formatOperandSegments(operands[i], runtimeAddress, header.length),
+		);
+	}
+	out.push(...emitAvxDecoratorSegments(header));
+	return out;
+}
+
+export function formatInstructionSegments(
+	header: DecodedInstructionHeader,
+	operands: DecodedOperand[],
+	runtimeAddress: bigint,
+): InstrTextSegment[] {
+	const out: InstrTextSegment[] = emitPrefixSegments(header.attributes);
+	out.push(seg(mnemonicString(header.mnemonic), "mnemonic"));
+
+	const operandSegs = formatInstructionOperandsSegments(
+		header,
+		operands,
+		runtimeAddress,
+	);
+	if (operandSegs.length > 0) {
+		out.push(seg(" "));
+		out.push(...operandSegs);
+	}
+	return out;
 }
 
 export function formatInstruction(
@@ -289,33 +366,7 @@ export function formatInstruction(
 	operands: DecodedOperand[],
 	runtimeAddress: bigint,
 ): string {
-	let result =
-		emitPrefixes(header.attributes) + mnemonicString(header.mnemonic);
-
-	const count = Math.min(header.operandCount, operands.length);
-	if (count > 0) {
-		result += " " + formatOperand(operands[0], runtimeAddress, header.length);
-		for (let i = 1; i < count; i++) {
-			result +=
-				", " + formatOperand(operands[i], runtimeAddress, header.length);
-		}
-	}
-	result += emitAvxDecorators(header);
-
-	return result;
-}
-
-export function formatInstructionOperands(
-	header: DecodedInstructionHeader,
-	operands: DecodedOperand[],
-	runtimeAddress: bigint,
-): string {
-	const count = Math.min(header.operandCount, operands.length);
-	if (count === 0) return emitAvxDecorators(header);
-	let result = formatOperand(operands[0], runtimeAddress, header.length);
-	for (let i = 1; i < count; i++) {
-		result += ", " + formatOperand(operands[i], runtimeAddress, header.length);
-	}
-	result += emitAvxDecorators(header);
-	return result;
+	return joinSegmentText(
+		formatInstructionSegments(header, operands, runtimeAddress),
+	);
 }

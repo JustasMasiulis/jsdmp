@@ -2,13 +2,7 @@ import type { CfgNode } from "./disassemblyGraph";
 
 export const escapeHtml = (text: string) =>
 	text.replace(/[&<>"]/g, (ch) =>
-		ch === "&"
-			? "&amp;"
-			: ch === "<"
-				? "&lt;"
-				: ch === ">"
-					? "&gt;"
-					: "&quot;",
+		ch === "&" ? "&amp;" : ch === "<" ? "&lt;" : ch === ">" ? "&gt;" : "&quot;",
 	);
 
 export const escapeAttr = (text: string) =>

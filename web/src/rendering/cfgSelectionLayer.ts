@@ -1,13 +1,13 @@
-import type Sigma from "sigma";
 import type Graph from "graphology";
+import type Sigma from "sigma";
+import { renderCfgBlockHtml } from "../lib/cfgHtml";
 import type { CfgNode } from "../lib/disassemblyGraph";
 import {
-	ESTIMATED_CHAR_WIDTH,
-	ESTIMATED_LINE_HEIGHT,
 	CARD_PADDING_X,
 	CARD_PADDING_Y,
+	ESTIMATED_CHAR_WIDTH,
+	ESTIMATED_LINE_HEIGHT,
 } from "../lib/disassemblyGraph";
-import { renderCfgBlockHtml } from "../lib/cfgHtml";
 
 const FONT_SIZE = 12;
 const FONT_FAMILY =
@@ -77,10 +77,8 @@ export class CfgSelectionLayer {
 		this.graph.forEachNode((nodeId) => {
 			const graphX = this.graph.getNodeAttribute(nodeId, "x") as number;
 			const graphY = -(this.graph.getNodeAttribute(nodeId, "y") as number);
-			const w =
-				(this.graph.getNodeAttribute(nodeId, "width") as number) ?? 0;
-			const h =
-				(this.graph.getNodeAttribute(nodeId, "height") as number) ?? 0;
+			const w = (this.graph.getNodeAttribute(nodeId, "width") as number) ?? 0;
+			const h = (this.graph.getNodeAttribute(nodeId, "height") as number) ?? 0;
 
 			const cssPadX = CARD_PADDING_X / 2 - 1;
 			const cssPadY = CARD_PADDING_Y / 2 - 1 - this.paddingTopOffset;
@@ -139,18 +137,12 @@ export class CfgSelectionLayer {
 		const bbox = this.sigma.getCustomBBox();
 		if (!bbox) return;
 
-		const bboxRange = Math.max(
-			bbox.x[1] - bbox.x[0],
-			bbox.y[1] - bbox.y[0],
-			1,
-		);
+		const bboxRange = Math.max(bbox.x[1] - bbox.x[0], bbox.y[1] - bbox.y[0], 1);
 
 		const o0 = this.sigma.graphToViewport({ x: 0, y: 0 });
 		const o1 = this.sigma.graphToViewport({ x: bboxRange, y: 0 });
 		const scale = (o1.x - o0.x) / bboxRange;
 
-		this.viewport.style.transform =
-			`translate(${o0.x}px, ${o0.y}px) scale(${scale})`;
+		this.viewport.style.transform = `translate(${o0.x}px, ${o0.y}px) scale(${scale})`;
 	}
-
 }

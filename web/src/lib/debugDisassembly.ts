@@ -2,7 +2,9 @@ import type { DebugInterface } from "./debug_interface";
 import {
 	decodeInstruction,
 	decodeInstructionLength,
+	type InstrTextSegment,
 	MAX_INSTRUCTION_LENGTH,
+	seg,
 } from "./disassembly";
 import { fmtHex, fmtHex16 } from "./formatting";
 import { maxU64 } from "./utils";
@@ -17,7 +19,7 @@ export type DisassemblyLine = {
 	byteLength: number;
 	bytesHex: string;
 	mnemonic: string;
-	operands: string;
+	operandSegments: InstrTextSegment[];
 	isCurrent: boolean;
 };
 
@@ -43,34 +45,10 @@ export type NextDisassemblyLoadResult = {
 
 export type DisassemblyMemorySource = DebugInterface;
 
-type DecodedLine = {
-	address: bigint;
-	length: number;
-	bytesHex: string;
-	mnemonic: string;
-	operands: string;
-};
-
 type LoadedLine = {
 	line: DisassemblyLine;
 	nextAddress: bigint;
 };
-
-const makeLine = (
-	address: bigint,
-	byteLength: number,
-	bytesHex: string,
-	mnemonic: string,
-	operands: string,
-	isCurrent: boolean,
-): DisassemblyLine => ({
-	address,
-	byteLength,
-	bytesHex,
-	mnemonic,
-	operands,
-	isCurrent,
-});
 
 const makeListing = (
 	status: DisassemblyStatus,
@@ -106,11 +84,13 @@ const emptyNextLoad = (
 	hasMoreAfter,
 });
 
+type DecodedLineBase = Omit<DisassemblyLine, "isCurrent">;
+
 const decodeInstructionAt = async (
 	source: DisassemblyMemorySource,
 	address: bigint,
 	maxBytes = MAX_INSTRUCTION_LENGTH,
-): Promise<DecodedLine | null> => {
+): Promise<DecodedLineBase | null> => {
 	const requestedSize = Math.max(
 		1,
 		Math.min(MAX_INSTRUCTION_LENGTH, Math.floor(maxBytes)),
@@ -126,16 +106,14 @@ const decodeInstructionAt = async (
 	const decoded = decodeInstruction(bytes, address);
 	if (!decoded) return null;
 
-	const mnemonic = decoded.prefix
-		? `${decoded.prefix} ${decoded.mnemonic}`
-		: decoded.mnemonic;
-
 	return {
 		address,
-		length: decoded.length,
+		byteLength: decoded.length,
 		bytesHex: [...decoded.bytes].map((b) => fmtHex(b, 2)).join(" "),
-		mnemonic,
-		operands: decoded.operands,
+		mnemonic: decoded.prefix
+			? decoded.prefix + " " + decoded.mnemonic
+			: decoded.mnemonic,
+		operandSegments: decoded.operandSegments,
 	};
 };
 
@@ -148,15 +126,8 @@ const decodeLine = async (
 	const decoded = await decodeInstructionAt(source, address, maxBytes);
 	if (decoded) {
 		return {
-			line: makeLine(
-				decoded.address,
-				decoded.length,
-				decoded.bytesHex,
-				decoded.mnemonic,
-				decoded.operands,
-				isCurrent,
-			),
-			nextAddress: decoded.address + BigInt(decoded.length),
+			line: { ...decoded, isCurrent },
+			nextAddress: decoded.address + BigInt(decoded.byteLength),
 		};
 	}
 
@@ -172,15 +143,16 @@ const decodeLine = async (
 		return null;
 	}
 
+	const fallbackHex = "0x" + fmtHex(fallback[0], 2);
 	return {
-		line: makeLine(
+		line: {
 			address,
-			1,
-			fmtHex(fallback[0], 2),
-			"db",
-			`0x${fmtHex(fallback[0], 2)}`,
+			byteLength: 1,
+			bytesHex: fmtHex(fallback[0], 2),
+			mnemonic: "db",
+			operandSegments: [seg(fallbackHex, "number")],
 			isCurrent,
-		),
+		},
 		nextAddress: address + 1n,
 	};
 };
@@ -254,16 +226,7 @@ const buildPreviousGuessLines = async (
 	for (const entry of chain) {
 		const decoded = await decodeInstructionAt(source, entry.address);
 		if (decoded) {
-			lines.push(
-				makeLine(
-					decoded.address,
-					decoded.length,
-					decoded.bytesHex,
-					decoded.mnemonic,
-					decoded.operands,
-					false,
-				),
-			);
+			lines.push({ ...decoded, isCurrent: false });
 		}
 	}
 	return lines;

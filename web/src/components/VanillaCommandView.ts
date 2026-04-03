@@ -1,7 +1,11 @@
-import { createCommandEngine } from "../lib/commandEngine";
+import {
+	type CommandOutputLine,
+	createCommandEngine,
+} from "../lib/commandEngine";
 import type { DebugThread } from "../lib/debug_interface";
 import { DBG } from "../lib/debugState";
 import type { SignalHandle } from "../lib/reactive";
+import { renderSegments } from "../lib/syntaxHighlight";
 
 export type VanillaCommandViewOptions = {
 	container: HTMLElement;
@@ -53,7 +57,7 @@ export class VanillaCommandView {
 		this.handle = DBG.currentThread.subscribe(() => this.updatePrompt());
 		this.updatePrompt();
 
-		this.appendLine("Type .help for a list of commands");
+		this.appendOutputLine("Type .help for a list of commands");
 	}
 
 	private updatePrompt(): void {
@@ -64,17 +68,23 @@ export class VanillaCommandView {
 		this.promptSpan.textContent = `0:${padded}> `;
 	}
 
-	private appendLine(text: string, modifier?: "error" | "echo"): void {
+	private appendOutputLine(
+		content: CommandOutputLine,
+		modifier?: "error" | "echo",
+	): void {
 		const line = document.createElement("div");
 		line.className = "command-view__output-line";
 		if (modifier) {
 			line.classList.add(`command-view__output-line--${modifier}`);
 		}
-		line.textContent = text;
+		if (typeof content === "string") {
+			line.textContent = content;
+		} else {
+			renderSegments(line, content);
+		}
 		this.output.append(line);
 		this.outputLineCount++;
 
-		// Trim oldest lines when exceeding cap
 		while (
 			this.outputLineCount > VanillaCommandView.MAX_OUTPUT_LINES &&
 			this.output.firstChild
@@ -105,7 +115,7 @@ export class VanillaCommandView {
 			this.savedInput = "";
 
 			const prompt = this.promptSpan.textContent ?? "0:000> ";
-			this.appendLine(prompt + value, "echo");
+			this.appendOutputLine(prompt + value, "echo");
 			this.executeCommand(value);
 			return;
 		}
@@ -140,10 +150,10 @@ export class VanillaCommandView {
 		try {
 			const result = await this.engine.execute(value);
 			for (const line of result.lines) {
-				this.appendLine(line, result.isError ? "error" : undefined);
+				this.appendOutputLine(line, result.isError ? "error" : undefined);
 			}
 		} catch (err) {
-			this.appendLine(
+			this.appendOutputLine(
 				String(err instanceof Error ? err.message : err),
 				"error",
 			);

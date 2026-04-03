@@ -21,8 +21,8 @@ import {
 	saveLayout,
 	THREADS_COMPONENT,
 } from "../lib/dockviewLayout";
-import { VanillaCommandView } from "./VanillaCommandView";
 import { SigmaDisassemblyGraphView } from "./SigmaDisassemblyGraphView";
+import { VanillaCommandView } from "./VanillaCommandView";
 import { VanillaDisassemblyView } from "./VanillaDisassemblyView";
 import { VanillaDumpSummary } from "./VanillaDumpSummary";
 import { VanillaMemoryView } from "./VanillaMemoryView";

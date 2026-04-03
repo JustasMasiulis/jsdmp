@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from "bun:test";
-import { decodeInstruction } from "./disassembly";
+import { decodeInstruction, joinSegmentText } from "./disassembly";
 import {
 	type DecodedInstructionHeader,
 	type DecodedOperandImm,
@@ -506,7 +506,7 @@ describe("decodeInstruction parity", () => {
 		expect(decoded).not.toBeNull();
 		expect(decoded?.mnemonic).toBe("ret");
 		expect(decoded?.length).toBe(1);
-		expect(decoded?.operands).toBe("");
+		expect(decoded?.operandSegments).toEqual([]);
 	});
 
 	it("nop: full pipeline decode", () => {
@@ -519,13 +519,13 @@ describe("decodeInstruction parity", () => {
 		const decoded = decodeInstruction(new Uint8Array([0x53]), 0x1000n);
 		expect(decoded).not.toBeNull();
 		expect(decoded.mnemonic).toBe("push");
-		expect(decoded.operands).toBe("rbx");
+		expect(joinSegmentText(decoded.operandSegments)).toBe("rbx");
 	});
 
 	it("pop rbx: full pipeline decode", () => {
 		const decoded = decodeInstruction(new Uint8Array([0x5b]), 0x1000n);
 		expect(decoded).not.toBeNull();
 		expect(decoded.mnemonic).toBe("pop");
-		expect(decoded.operands).toBe("rbx");
+		expect(joinSegmentText(decoded.operandSegments)).toBe("rbx");
 	});
 });
