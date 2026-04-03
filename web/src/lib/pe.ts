@@ -185,6 +185,26 @@ export class PeFile {
 		return this.pdata;
 	}
 
+	async getAllRuntimeFunctions(
+		reader: MemoryReader,
+		moduleBase: bigint,
+	): Promise<RuntimeFunction[]> {
+		const pdata = await this.loadPdata(reader, moduleBase);
+		if (!pdata) return [];
+
+		const { view, count } = pdata;
+		const entries: RuntimeFunction[] = [];
+		for (let i = 0; i < count; i++) {
+			const off = i * 12;
+			entries.push({
+				beginAddress: view.getUint32(off, true),
+				endAddress: view.getUint32(off + 4, true),
+				unwindInfoAddress: view.getUint32(off + 8, true),
+			});
+		}
+		return entries;
+	}
+
 	async findRuntimeFunction(
 		reader: MemoryReader,
 		moduleBase: bigint,

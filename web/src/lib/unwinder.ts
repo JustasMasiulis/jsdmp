@@ -14,17 +14,17 @@ import { basename } from "./utils";
 // --- Constants ---
 const UNWIND_CHAIN_LIMIT = 32;
 
-const UWOP_PUSH_NONVOL = 0;
-const UWOP_ALLOC_LARGE = 1;
-const UWOP_ALLOC_SMALL = 2;
-const UWOP_SET_FPREG = 3;
-const UWOP_SAVE_NONVOL = 4;
-const UWOP_SAVE_NONVOL_FAR = 5;
-const UWOP_EPILOG = 6;
+export const UWOP_PUSH_NONVOL = 0;
+export const UWOP_ALLOC_LARGE = 1;
+export const UWOP_ALLOC_SMALL = 2;
+export const UWOP_SET_FPREG = 3;
+export const UWOP_SAVE_NONVOL = 4;
+export const UWOP_SAVE_NONVOL_FAR = 5;
+export const UWOP_EPILOG = 6;
 // const UWOP_SPARE_CODE = 7;
-const UWOP_SAVE_XMM128 = 8;
-const UWOP_SAVE_XMM128_FAR = 9;
-const UWOP_PUSH_MACHFRAME = 10;
+export const UWOP_SAVE_XMM128 = 8;
+export const UWOP_SAVE_XMM128_FAR = 9;
+export const UWOP_PUSH_MACHFRAME = 10;
 
 const SIZE64_PREFIX = 0x48;
 const ADD_IMM8_OP = 0x83;
@@ -39,7 +39,7 @@ const POP_OP = 0x58;
 const RET_OP = 0xc3;
 const RET_OP_2 = 0xc2;
 
-const UNWIND_OP_EXTRA_SLOT_TABLE = [0, 1, 0, 0, 1, 2, 1, 2, 1, 2, 0];
+export const UNWIND_OP_EXTRA_SLOT_TABLE = [0, 1, 0, 0, 1, 2, 1, 2, 1, 2, 0];
 
 // --- Helpers ---
 
@@ -58,7 +58,7 @@ async function readOword(
 	return [view.getBigUint64(0, true), view.getBigUint64(8, true)];
 }
 
-function unwindOpSlots(code: UnwindCode): number {
+export function unwindOpSlots(code: UnwindCode): number {
 	const extra = UNWIND_OP_EXTRA_SLOT_TABLE[code.unwindOp] ?? 0;
 	if (code.unwindOp === UWOP_ALLOC_LARGE && code.opInfo !== 0) {
 		return 1 + extra + 1; // 3 slots total
