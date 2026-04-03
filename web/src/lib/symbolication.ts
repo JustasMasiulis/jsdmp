@@ -1,5 +1,6 @@
 import { type DebugModule, findModuleForAddress } from "./debug_interface";
 import { fmtHex } from "./formatting";
+import { type InstrTextSegment, seg } from "./intelFormatter";
 import { getSymbolServerUrl } from "./symbolServer";
 import { basename } from "./utils";
 
@@ -88,4 +89,33 @@ export async function resolveSymbol(
 
 	const sym = await lookupSymbol(pdbInfo, rva);
 	return formatSymbolResult(mod, rva, sym);
+}
+
+function replaceAddressSegment(
+	address: bigint,
+	symbolText: string,
+	segments: InstrTextSegment[],
+): void {
+	const hex = "0x" + address.toString(16).toUpperCase();
+	const idx = segments.findIndex(
+		(s) => s.syntaxKind === "number" && s.text === hex,
+	);
+	if (idx !== -1) segments[idx] = seg(symbolText, "number");
+}
+
+export async function symbolicateSegments(
+	segments: InstrTextSegment[],
+	addresses: readonly bigint[],
+	modules: readonly DebugModule[],
+): Promise<void> {
+	const promises: Promise<void>[] = [];
+	for (const addr of addresses) {
+		if (!findModuleForAddress(addr, modules)) continue;
+		promises.push(
+			resolveSymbol(addr, modules).then((sym) =>
+				replaceAddressSegment(addr, sym, segments),
+			),
+		);
+	}
+	await Promise.all(promises);
 }

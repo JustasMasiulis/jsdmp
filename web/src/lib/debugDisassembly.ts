@@ -1,8 +1,4 @@
-import {
-	type DebugInterface,
-	type DebugModule,
-	findModuleForAddress,
-} from "./debug_interface";
+import type { DebugInterface, DebugModule } from "./debug_interface";
 import {
 	decodeInstruction,
 	decodeInstructionLength,
@@ -11,7 +7,7 @@ import {
 	seg,
 } from "./disassembly";
 import { fmtHex, fmtHex16 } from "./formatting";
-import { resolveSymbol } from "./symbolication";
+import { resolveSymbol, symbolicateSegments } from "./symbolication";
 import { maxU64 } from "./utils";
 
 const DISASSEMBLY_LOOKBACK_BYTES = 256;
@@ -26,6 +22,7 @@ export type DisassemblyLine = {
 	mnemonic: string;
 	operandSegments: InstrTextSegment[];
 	directTargetAddress: bigint | null;
+	ripRelativeTargets: bigint[];
 	isCurrent: boolean;
 	symbol?: string;
 };
@@ -122,6 +119,7 @@ const decodeInstructionAt = async (
 			: decoded.mnemonic,
 		operandSegments: decoded.operandSegments,
 		directTargetAddress: decoded.controlFlow.directTargetAddress,
+		ripRelativeTargets: decoded.ripRelativeTargets,
 	};
 };
 
@@ -160,6 +158,7 @@ const decodeLine = async (
 			mnemonic: "db",
 			operandSegments: [seg(fallbackHex, "number")],
 			directTargetAddress: null,
+			ripRelativeTargets: [],
 			isCurrent,
 		},
 		nextAddress: address + 1n,
@@ -173,33 +172,24 @@ async function annotateSymbols(
 	lines: DisassemblyLine[],
 	modules: readonly DebugModule[],
 ): Promise<void> {
-	const symbolPromises = lines.map((line) =>
-		resolveSymbol(line.address, modules),
-	);
-	const targetPromises = lines.map((line) => {
-		if (line.directTargetAddress === null) return null;
-		if (!findModuleForAddress(line.directTargetAddress, modules)) return null;
-		return resolveSymbol(line.directTargetAddress, modules);
-	});
-	const [symbols, targets] = await Promise.all([
-		Promise.all(symbolPromises),
-		Promise.all(targetPromises),
-	]);
-	for (let i = 0; i < lines.length; i++) {
-		lines[i].symbol = symbols[i];
-		const targetSymbol = targets[i];
-		if (targetSymbol) {
-			const line = lines[i];
-			const targetHex =
-				"0x" + line.directTargetAddress!.toString(16).toUpperCase();
-			const idx = line.operandSegments.findIndex(
-				(s) => s.syntaxKind === "number" && s.text === targetHex,
+	const promises: Promise<void>[] = [];
+	for (const line of lines) {
+		promises.push(
+			resolveSymbol(line.address, modules).then((s) => {
+				line.symbol = s;
+			}),
+		);
+		const targetAddresses = [
+			...(line.directTargetAddress !== null ? [line.directTargetAddress] : []),
+			...line.ripRelativeTargets,
+		];
+		if (targetAddresses.length > 0) {
+			promises.push(
+				symbolicateSegments(line.operandSegments, targetAddresses, modules),
 			);
-			if (idx !== -1) {
-				line.operandSegments[idx] = seg(targetSymbol, "number");
-			}
 		}
 	}
+	await Promise.all(promises);
 }
 
 const buildPreviousGuessLines = async (

@@ -7,7 +7,10 @@ import {
 	seg,
 } from "./intelFormatter";
 import { readCString } from "./reader";
+import { ZydisRegister } from "./register";
 import { WASM_EXPORTS, WASM_MEMORY } from "./wasm";
+
+const U64_MASK = (1n << 64n) - 1n;
 
 export type {
 	DecodedInstructionHeader,
@@ -44,6 +47,7 @@ export type DecodedInstruction = {
 	operandSegments: InstrTextSegment[];
 	header: DecodedInstructionHeader;
 	decodedOperands: DecodedOperand[];
+	ripRelativeTargets: bigint[];
 };
 
 const SIZE_INDEX_TABLE = [
@@ -223,6 +227,15 @@ export const decodeInstruction = (
 		];
 	}
 
+	const ripRelativeTargets: bigint[] = [];
+	for (const op of decodedOperands) {
+		if (op.type === 2 && op.base === ZydisRegister.RIP) {
+			const target =
+				(runtimeAddress + BigInt(header.length) + op.displacement) & U64_MASK;
+			ripRelativeTargets.push(target);
+		}
+	}
+
 	return {
 		length: header.length,
 		bytes: candidateBytes.slice(0, header.length),
@@ -236,6 +249,7 @@ export const decodeInstruction = (
 		operandSegments,
 		header,
 		decodedOperands,
+		ripRelativeTargets,
 	};
 };
 

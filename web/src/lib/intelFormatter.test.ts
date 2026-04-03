@@ -251,7 +251,7 @@ describe("formatInstruction", () => {
 			[reg, mem],
 			0x1000n,
 		);
-		expect(result).toBe("lea rax, [rip+0x1234]");
+		expect(result).toBe("lea rax, [0x223B]");
 	});
 
 	it("lock cmpxchg [rcx], edx", () => {

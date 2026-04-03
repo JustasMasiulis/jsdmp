@@ -3,6 +3,8 @@ import { readCString } from "./reader";
 import { registerName, ZydisRegister } from "./register";
 import { WASM_EXPORTS, WASM_MEMORY } from "./wasm";
 
+const U64_MASK = (1n << 64n) - 1n;
+
 export type InstrSyntaxKind =
 	| "plain"
 	| "mnemonic"
@@ -184,17 +186,36 @@ function formatImmSegments(
 	return [seg(hexPad(op.value, op.size), "number")];
 }
 
-function formatMemSegments(op: DecodedOperandMem): InstrTextSegment[] {
-	const out: InstrTextSegment[] = [];
-
-	const isAgen = op.memType === 1;
-	if (!isAgen) {
-		const qualifier = SIZE_QUALIFIERS[op.size];
-		if (qualifier) {
-			out.push(seg(qualifier, "keyword"));
-			out.push(seg(" "));
-		}
+function emitSizeQualifier(
+	out: InstrTextSegment[],
+	op: DecodedOperandMem,
+): void {
+	if (op.memType === 1) return;
+	const qualifier = SIZE_QUALIFIERS[op.size];
+	if (qualifier) {
+		out.push(seg(qualifier, "keyword"));
+		out.push(seg(" "));
 	}
+}
+
+function formatMemSegments(
+	op: DecodedOperandMem,
+	runtimeAddress: bigint,
+	instrLength: number,
+): InstrTextSegment[] {
+	if (op.base === ZydisRegister.RIP) {
+		const target =
+			(runtimeAddress + BigInt(instrLength) + op.displacement) & U64_MASK;
+		const out: InstrTextSegment[] = [];
+		emitSizeQualifier(out, op);
+		out.push(seg("["));
+		out.push(seg("0x" + target.toString(16).toUpperCase(), "number"));
+		out.push(seg("]"));
+		return out;
+	}
+
+	const out: InstrTextSegment[] = [];
+	emitSizeQualifier(out, op);
 
 	const segIdx = op.segment;
 	if (segIdx > 0 && segIdx !== defaultSegmentIndex(op.base)) {
@@ -264,7 +285,7 @@ function formatOperandSegments(
 		case 1:
 			return [seg(registerName(op.reg), "register")];
 		case 2:
-			return formatMemSegments(op);
+			return formatMemSegments(op, runtimeAddress, instrLength);
 		case 3:
 			return formatPtrSegments(op);
 		case 4:

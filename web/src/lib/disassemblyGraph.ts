@@ -8,7 +8,7 @@ import {
 } from "./disassembly";
 import { fmtHex16 } from "./formatting";
 import { ZydisMnemonic } from "./mnemonic";
-import { resolveSymbol } from "./symbolication";
+import { resolveSymbol, symbolicateSegments } from "./symbolication";
 
 export type CfgEdgeKind = "true" | "false" | "unconditional";
 
@@ -19,6 +19,7 @@ export type CfgInstruction = {
 	mnemonic: string;
 	operandSegments: InstrTextSegment[];
 	controlFlow: DecodedControlFlow;
+	ripRelativeTargets: bigint[];
 };
 
 export type CfgTextSegment = {
@@ -221,6 +222,7 @@ const decodeBlock = async (
 			mnemonic: decoded.mnemonic,
 			operandSegments: decoded.operandSegments,
 			controlFlow: decoded.controlFlow,
+			ripRelativeTargets: decoded.ripRelativeTargets,
 		});
 
 		const nextIp = ip + BigInt(decoded.length);
@@ -260,10 +262,29 @@ const decodeBlock = async (
 	return { address: blockAddr, instructions, error };
 };
 
+const annotateBlockSymbols = async (
+	instructions: CfgInstruction[],
+	modules: readonly DebugModule[],
+): Promise<void> => {
+	await Promise.all(
+		instructions.map((instr) => {
+			const addresses = [
+				...(instr.controlFlow.directTargetAddress !== null
+					? [instr.controlFlow.directTargetAddress]
+					: []),
+				...instr.ripRelativeTargets,
+			];
+			if (addresses.length === 0) return;
+			return symbolicateSegments(instr.operandSegments, addresses, modules);
+		}),
+	);
+};
+
 const makeNode = async (
 	block: BuiltBlock,
 	modules: readonly DebugModule[],
 ): Promise<CfgNode> => {
+	await annotateBlockSymbols(block.instructions, modules);
 	const lines = buildCfgInstructionLines(block.instructions);
 	if (block.error) {
 		lines.push(...buildCfgTextLinesFromLabel(block.error));

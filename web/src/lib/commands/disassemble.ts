@@ -11,7 +11,7 @@ import {
 } from "../disassembly";
 import { fmtHex } from "../formatting";
 import type { MinidumpDebugInterface } from "../minidump_debug_interface";
-import { resolveSymbol } from "../symbolication";
+import { resolveSymbol, symbolicateSegments } from "../symbolication";
 
 export async function unassembleCommand(
 	dbg: MinidumpDebugInterface,
@@ -41,6 +41,20 @@ export async function unassembleCommand(
 		if (!instr) {
 			lines.push(fmtHex(currentAddr, 16).toLowerCase() + " ??");
 			break;
+		}
+
+		const addresses = [
+			...(instr.controlFlow.directTargetAddress !== null
+				? [instr.controlFlow.directTargetAddress]
+				: []),
+			...instr.ripRelativeTargets,
+		];
+		if (addresses.length > 0) {
+			await symbolicateSegments(
+				instr.operandSegments,
+				addresses,
+				dbg.modules.state,
+			);
 		}
 
 		const hexBytes = Array.from(instr.bytes)
