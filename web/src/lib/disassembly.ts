@@ -132,6 +132,16 @@ const readPackedOperand = (view: DataView, offset: number): DecodedOperand => {
 	const size = SIZE_INDEX_TABLE[(word0 >>> 24) & 0xf];
 
 	switch (type) {
+		case 0: {
+			const flags = view.getUint8(offset + 4);
+			return {
+				type: 4,
+				size,
+				isSigned: (flags & 2) !== 0,
+				isRelative: (flags & 1) !== 0,
+				value: view.getBigInt64(offset + 8, true),
+			};
+		}
 		case 1:
 			return { type: 1, size, reg: view.getUint16(offset + 4, true) };
 		case 2: {
@@ -155,16 +165,6 @@ const readPackedOperand = (view: DataView, offset: number): DecodedOperand => {
 				segment: view.getUint16(offset + 4, true),
 				offset: view.getUint32(offset + 8, true),
 			};
-		case 4: {
-			const flags = view.getUint8(offset + 4);
-			return {
-				type: 4,
-				size,
-				isSigned: (flags & 2) !== 0,
-				isRelative: (flags & 1) !== 0,
-				value: view.getBigInt64(offset + 8, true),
-			};
-		}
 		default:
 			return { type: 1, size: 0, reg: 0 };
 	}
@@ -197,7 +197,10 @@ export const decodeInstruction = (
 
 	const decodedOperands: DecodedOperand[] = [];
 	for (let i = 0; i < header.operandCount; i++) {
-		decodedOperands.push(readPackedOperand(view, 24 + i * 16));
+		const slotOffset = 24 + i * 16;
+		const vis = (view.getUint32(slotOffset, true) >>> 28) & 0x3;
+		if (vis !== 0) continue;
+		decodedOperands.push(readPackedOperand(view, slotOffset));
 	}
 
 	const prefix = extractPrefix(header.attributes);
@@ -207,6 +210,7 @@ export const decodeInstruction = (
 		mnemonicPtr,
 		48,
 	);
+
 	let operandSegments = formatInstructionOperandsSegments(
 		header,
 		decodedOperands,

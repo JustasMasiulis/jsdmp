@@ -1,4 +1,8 @@
-import type { DebugInterface, DebugModule } from "./debug_interface";
+import {
+	type DebugInterface,
+	type DebugModule,
+	findModuleForAddress,
+} from "./debug_interface";
 import {
 	decodeInstruction,
 	decodeInstructionLength,
@@ -21,6 +25,7 @@ export type DisassemblyLine = {
 	bytesHex: string;
 	mnemonic: string;
 	operandSegments: InstrTextSegment[];
+	directTargetAddress: bigint | null;
 	isCurrent: boolean;
 	symbol?: string;
 };
@@ -116,6 +121,7 @@ const decodeInstructionAt = async (
 			? decoded.prefix + " " + decoded.mnemonic
 			: decoded.mnemonic,
 		operandSegments: decoded.operandSegments,
+		directTargetAddress: decoded.controlFlow.directTargetAddress,
 	};
 };
 
@@ -153,6 +159,7 @@ const decodeLine = async (
 			bytesHex: fmtHex(fallback[0], 2),
 			mnemonic: "db",
 			operandSegments: [seg(fallbackHex, "number")],
+			directTargetAddress: null,
 			isCurrent,
 		},
 		nextAddress: address + 1n,
@@ -166,11 +173,32 @@ async function annotateSymbols(
 	lines: DisassemblyLine[],
 	modules: readonly DebugModule[],
 ): Promise<void> {
-	const results = await Promise.all(
-		lines.map((line) => resolveSymbol(line.address, modules)),
+	const symbolPromises = lines.map((line) =>
+		resolveSymbol(line.address, modules),
 	);
+	const targetPromises = lines.map((line) => {
+		if (line.directTargetAddress === null) return null;
+		if (!findModuleForAddress(line.directTargetAddress, modules)) return null;
+		return resolveSymbol(line.directTargetAddress, modules);
+	});
+	const [symbols, targets] = await Promise.all([
+		Promise.all(symbolPromises),
+		Promise.all(targetPromises),
+	]);
 	for (let i = 0; i < lines.length; i++) {
-		lines[i].symbol = results[i];
+		lines[i].symbol = symbols[i];
+		const targetSymbol = targets[i];
+		if (targetSymbol) {
+			const line = lines[i];
+			const targetHex =
+				"0x" + line.directTargetAddress!.toString(16).toUpperCase();
+			const idx = line.operandSegments.findIndex(
+				(s) => s.syntaxKind === "number" && s.text === targetHex,
+			);
+			if (idx !== -1) {
+				line.operandSegments[idx] = seg(targetSymbol, "number");
+			}
+		}
 	}
 }
 

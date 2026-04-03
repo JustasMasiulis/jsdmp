@@ -242,7 +242,7 @@ static void pack_decoded_buffer(
       case ZYDIS_OPERAND_TYPE_REGISTER:  type_enc = 1; break;
       case ZYDIS_OPERAND_TYPE_MEMORY:    type_enc = 2; break;
       case ZYDIS_OPERAND_TYPE_POINTER:   type_enc = 3; break;
-      case ZYDIS_OPERAND_TYPE_IMMEDIATE: type_enc = 4; break;
+      case ZYDIS_OPERAND_TYPE_IMMEDIATE: type_enc = 0; break;
       default: break;
     }
 
