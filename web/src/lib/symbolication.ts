@@ -1,6 +1,7 @@
 import { type DebugModule, findModuleForAddress } from "./debug_interface";
+import { fetchWithRetry } from "./fetchRetry";
 import { fmtHex } from "./formatting";
-import { type InstrTextSegment, seg } from "./intelFormatter";
+import type { InstrTextSegment } from "./intelFormatter";
 import { getSymbolServerUrl } from "./symbolServer";
 import { basename } from "./utils";
 
@@ -26,7 +27,7 @@ async function fetchSymbol(
 	const base = getSymbolServerUrl().replace(/\/+$/, "");
 	const url = `${base}/pdb/${pdbInfo.name}/${pdbInfo.key}/nearest?rva=${rva}`;
 	try {
-		const response = await fetch(url);
+		const response = await fetchWithRetry(url);
 		if (!response.ok) return null;
 		return (await response.json()) as SymbolInfo;
 	} catch {
@@ -100,7 +101,14 @@ function replaceAddressSegment(
 	const idx = segments.findIndex(
 		(s) => s.syntaxKind === "number" && s.text === hex,
 	);
-	if (idx !== -1) segments[idx] = seg(symbolText, "number");
+	if (idx !== -1) {
+		const existing = segments[idx];
+		segments[idx] = {
+			text: symbolText,
+			syntaxKind: "number",
+			targetAddress: existing.targetAddress,
+		};
+	}
 }
 
 export async function symbolicateSegments(

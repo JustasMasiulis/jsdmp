@@ -117,6 +117,24 @@ export class SigmaDisassemblyGraphView implements IContentRenderer {
 		void this.submitAddress();
 	};
 
+	private readonly onDisasmLinkClick = (event: MouseEvent) => {
+		const target = (event.target as HTMLElement).closest<HTMLElement>(
+			".disasm-link[data-target-address]",
+		);
+		if (!target) return;
+		const hex = target.dataset.targetAddress;
+		if (!hex) return;
+		event.preventDefault();
+		event.stopPropagation();
+		const address = BigInt("0x" + hex);
+		this.manualAddress = address;
+		this.followInstructionPointer = false;
+		this.followCheckbox.checked = false;
+		this.clearAddressError();
+		this.saveState();
+		this.refreshView(true);
+	};
+
 	constructor(options: SigmaGraphViewOptions) {
 		this.panelId = options.panelId;
 		this.root = this.createRoot(options.panelId);
@@ -131,6 +149,7 @@ export class SigmaDisassemblyGraphView implements IContentRenderer {
 		options.container.replaceChildren(this.root);
 
 		this.root.addEventListener("submit", this.onAddressSubmit);
+		this.root.addEventListener("click", this.onDisasmLinkClick);
 		this.followCheckbox.addEventListener("change", this.onFollowChange);
 
 		this.contextHandle = DBG.currentContext.subscribe(() => this.update());
@@ -155,6 +174,7 @@ export class SigmaDisassemblyGraphView implements IContentRenderer {
 		this.isDisposed = true;
 		this.contextHandle.dispose();
 		this.root.removeEventListener("submit", this.onAddressSubmit);
+		this.root.removeEventListener("click", this.onDisasmLinkClick);
 		this.followCheckbox.removeEventListener("change", this.onFollowChange);
 		this.disposeGraph();
 		this.root.replaceChildren();

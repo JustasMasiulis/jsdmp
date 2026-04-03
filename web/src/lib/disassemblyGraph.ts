@@ -27,6 +27,7 @@ export type CfgTextSegment = {
 	clickable: boolean;
 	term: string | null;
 	syntaxKind: CfgTextSyntaxKind;
+	targetAddress?: bigint;
 };
 
 export type CfgTextSyntaxKind = "plain" | "mnemonic" | "number";
@@ -101,12 +102,14 @@ const INSTR_TO_CFG_SYNTAX: Record<
 const instrSegmentsToCfg = (segments: InstrTextSegment[]): CfgTextSegment[] =>
 	segments.map((s) => {
 		const isClickable = s.syntaxKind !== "plain";
-		return makeTextSegment(
+		const cfgSeg = makeTextSegment(
 			s.text,
 			isClickable,
 			isClickable ? s.text : null,
 			INSTR_TO_CFG_SYNTAX[s.syntaxKind],
 		);
+		if (s.targetAddress !== undefined) cfgSeg.targetAddress = s.targetAddress;
+		return cfgSeg;
 	});
 
 const blockIdForAddress = (address: bigint) => `block:${address.toString(16)}`;

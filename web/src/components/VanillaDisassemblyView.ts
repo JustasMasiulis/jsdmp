@@ -14,7 +14,11 @@ import {
 import { DBG } from "../lib/debugState";
 import { fmtHex16 } from "../lib/formatting";
 import type { SignalHandle } from "../lib/reactive";
-import { renderSegment, renderSegments } from "../lib/syntaxHighlight";
+import {
+	type AddressNavigator,
+	renderSegment,
+	renderSegments,
+} from "../lib/syntaxHighlight";
 import {
 	FixedRowVirtualTable,
 	type VirtualListingAdapter,
@@ -47,12 +51,18 @@ type DisassemblyRowState = {
 	instructionCode: HTMLElement;
 };
 
-const renderInstructionLine = (parent: HTMLElement, line: DisassemblyLine) => {
+const renderInstructionLine = (
+	parent: HTMLElement,
+	line: DisassemblyLine,
+	onNavigate?: AddressNavigator,
+) => {
 	parent.textContent = "";
-	renderSegment(parent, line.mnemonic, "mnemonic");
+	const mnemonicCol = document.createElement("span");
+	mnemonicCol.className = "disasm-mnemonic-col";
+	renderSegment(mnemonicCol, { text: line.mnemonic, syntaxKind: "mnemonic" });
+	parent.appendChild(mnemonicCol);
 	if (line.operandSegments.length > 0) {
-		parent.appendChild(document.createTextNode(" "));
-		renderSegments(parent, line.operandSegments);
+		renderSegments(parent, line.operandSegments, onNavigate);
 	}
 };
 
@@ -577,6 +587,15 @@ export class VanillaDisassemblyView {
 		this.table.requestRender(forceRows);
 	}
 
+	private readonly navigateToAddress: AddressNavigator = (address: bigint) => {
+		this.manualAddress = address;
+		this.followInstructionPointer = false;
+		this.followCheckbox.checked = false;
+		this.clearAddressError();
+		this.saveState();
+		this.refreshView(true);
+	};
+
 	private fillRow(row: DisassemblyRowState, rowIndex: number) {
 		const line = this.lines()[rowIndex];
 		if (!line) {
@@ -590,7 +609,7 @@ export class VanillaDisassemblyView {
 		row.addressCode.textContent = fmtHex16(line.address);
 		row.addressCode.title = line.symbol ?? "";
 		row.bytesCode.textContent = line.bytesHex;
-		renderInstructionLine(row.instructionCode, line);
+		renderInstructionLine(row.instructionCode, line, this.navigateToAddress);
 	}
 
 	private async submitAddress() {

@@ -6,25 +6,43 @@ const SYNTAX_CSS: Partial<Record<InstrSyntaxKind, string>> = {
 	register: "s-r",
 };
 
+export type AddressNavigator = (address: bigint) => void;
+
 export const renderSegment = (
 	parent: HTMLElement,
-	text: string,
-	syntaxKind: InstrSyntaxKind,
+	segment: Pick<InstrTextSegment, "text" | "syntaxKind" | "targetAddress">,
+	onNavigate?: AddressNavigator,
 ) => {
-	const cls = SYNTAX_CSS[syntaxKind];
+	if (segment.targetAddress !== undefined && onNavigate) {
+		const span = document.createElement("span");
+		span.className = "disasm-link";
+		const cls = SYNTAX_CSS[segment.syntaxKind];
+		if (cls) span.classList.add(cls);
+		span.textContent = segment.text;
+		span.addEventListener("click", (e) => {
+			e.preventDefault();
+			e.stopPropagation();
+			onNavigate(segment.targetAddress!);
+		});
+		parent.appendChild(span);
+		return;
+	}
+
+	const cls = SYNTAX_CSS[segment.syntaxKind];
 	if (cls) {
 		const span = document.createElement("span");
 		span.className = cls;
-		span.textContent = text;
+		span.textContent = segment.text;
 		parent.appendChild(span);
 	} else {
-		parent.appendChild(document.createTextNode(text));
+		parent.appendChild(document.createTextNode(segment.text));
 	}
 };
 
 export const renderSegments = (
 	parent: HTMLElement,
 	segments: readonly InstrTextSegment[],
+	onNavigate?: AddressNavigator,
 ) => {
-	for (const s of segments) renderSegment(parent, s.text, s.syntaxKind);
+	for (const s of segments) renderSegment(parent, s, onNavigate);
 };

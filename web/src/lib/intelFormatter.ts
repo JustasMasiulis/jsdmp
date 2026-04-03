@@ -15,6 +15,7 @@ export type InstrSyntaxKind =
 export type InstrTextSegment = {
 	text: string;
 	syntaxKind: InstrSyntaxKind;
+	targetAddress?: bigint;
 };
 
 export type DecodedInstructionHeader = {
@@ -176,9 +177,14 @@ function formatImmSegments(
 	instrLength: number,
 ): InstrTextSegment[] {
 	if (op.isRelative) {
-		const target = runtimeAddress + BigInt(instrLength) + op.value;
-		const mask = (1n << 64n) - 1n;
-		return [seg("0x" + (target & mask).toString(16).toUpperCase(), "number")];
+		const target = (runtimeAddress + BigInt(instrLength) + op.value) & U64_MASK;
+		return [
+			{
+				text: "0x" + target.toString(16).toUpperCase(),
+				syntaxKind: "number",
+				targetAddress: target,
+			},
+		];
 	}
 	if (op.isSigned) {
 		return [seg(formatSignedHex(op.value, op.size), "number")];
@@ -209,7 +215,11 @@ function formatMemSegments(
 		const out: InstrTextSegment[] = [];
 		emitSizeQualifier(out, op);
 		out.push(seg("["));
-		out.push(seg("0x" + target.toString(16).toUpperCase(), "number"));
+		out.push({
+			text: "0x" + target.toString(16).toUpperCase(),
+			syntaxKind: "number",
+			targetAddress: target,
+		});
 		out.push(seg("]"));
 		return out;
 	}

@@ -403,6 +403,15 @@ Design language notes for future re-additions:
 		color: #c74329;
 	}
 
+	.disasm-link {
+		cursor: pointer;
+		text-decoration: none;
+	}
+
+	.disasm-link:hover {
+		text-decoration: underline;
+	}
+
 	.dump-dockview-shell {
 		display: flex;
 		flex: 1;
@@ -612,6 +621,11 @@ Design language notes for future re-additions:
 	.memory-view-table__cell--instruction {
 		user-select: text;
 		-webkit-user-select: text;
+	}
+
+	.disasm-mnemonic-col {
+		display: inline-block;
+		min-width: 8ch;
 	}
 
 	.memory-view-table__row code {
