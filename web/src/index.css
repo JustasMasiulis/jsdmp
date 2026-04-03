@@ -390,6 +390,10 @@ Design language notes for future re-additions:
 		background: color-mix(in oklab, var(--color-sidebar-indicator) 10%, white);
 	}
 
+	.memory-view-table__row.dump-disassembly-table__fn-boundary {
+		border-top: 1px solid var(--color-fg2);
+	}
+
 	.memory-view-table__cell--instruction .s-m {
 		color: var(--color-sidebar-indicator);
 		font-weight: 500;

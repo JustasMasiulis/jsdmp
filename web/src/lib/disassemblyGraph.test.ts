@@ -7,6 +7,7 @@ import {
 	buildCfgTextLinesFromLabel,
 } from "./disassemblyGraph";
 import type { InstrTextSegment } from "./intelFormatter";
+import { Signal } from "./reactive";
 import {
 	__setWasmExportsForTesting,
 	WASM_MEMORY,
@@ -30,6 +31,7 @@ const makeSource = (segments: MemorySegment[]): DisassemblyMemorySource => ({
 		currentThreadId: 0,
 		currentContext: null,
 	},
+	modules: new Signal([]),
 	read: async (address, size, minSize) => {
 		const segment = segments.find((candidate) => {
 			const endExclusive = candidate.start + BigInt(candidate.bytes.byteLength);

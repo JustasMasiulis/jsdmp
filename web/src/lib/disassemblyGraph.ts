@@ -1,4 +1,4 @@
-import type { DebugInterface } from "./debug_interface";
+import type { DebugInterface, DebugModule } from "./debug_interface";
 import {
 	type DecodedControlFlow,
 	decodeInstruction,
@@ -8,6 +8,7 @@ import {
 } from "./disassembly";
 import { fmtHex16 } from "./formatting";
 import { ZydisMnemonic } from "./mnemonic";
+import { resolveSymbol } from "./symbolication";
 
 export type CfgEdgeKind = "true" | "false" | "unconditional";
 
@@ -259,14 +260,18 @@ const decodeBlock = async (
 	return { address: blockAddr, instructions, error };
 };
 
-const makeNode = (block: BuiltBlock): CfgNode => {
+const makeNode = async (
+	block: BuiltBlock,
+	modules: readonly DebugModule[],
+): Promise<CfgNode> => {
 	const lines = buildCfgInstructionLines(block.instructions);
 	if (block.error) {
 		lines.push(...buildCfgTextLinesFromLabel(block.error));
 	}
+	const title = await resolveSymbol(block.address, modules);
 	return {
 		id: blockIdForAddress(block.address),
-		title: fmtHex16(block.address),
+		title,
 		instructionCount: block.instructions.length,
 		lines,
 	};
@@ -438,12 +443,14 @@ export const buildCfg2 = async (
 		}
 	}
 
-	const allBlocks: CfgNode[] = [];
+	const modules = dbg.modules.state;
 	let totalInstructions = 0;
+	const nodePromises: Promise<CfgNode>[] = [];
 	for (const built of builtBlocks.values()) {
 		totalInstructions += built.instructions.length;
-		allBlocks.push(makeNode(built));
+		nodePromises.push(makeNode(built, modules));
 	}
+	const allBlocks = await Promise.all(nodePromises);
 
 	return {
 		anchorAddress: entryAddress,

@@ -10,6 +10,7 @@ import {
 	type UnwindCode,
 	type UnwindInfo,
 } from "../pe";
+import { resolveSymbol } from "../symbolication";
 import { getModulePeFile } from "../symbolServer";
 import {
 	UWOP_ALLOC_LARGE,
@@ -156,7 +157,6 @@ export async function fnentCommand(
 
 	const reader = (addr: bigint, size: number) => dbg.read(addr, size);
 	const rva = Number(address - mod.address);
-	const modName = basename(mod.path);
 
 	const exactEntry = await pe.findRuntimeFunction(reader, mod.address, rva);
 	if (!exactEntry)
@@ -250,16 +250,20 @@ export async function fnentCommand(
 		lines.push("");
 	}
 
-	lines.push(
-		`${modName}+0x${fmtHex(rootEntry.beginAddress, 1).toLowerCase()}:`,
+	const rootSymbol = await resolveSymbol(
+		mod.address + BigInt(rootEntry.beginAddress),
+		dbg.modules.state,
 	);
+	lines.push(`${rootSymbol}:`);
 	formatFunctionEntry(rootEntry, rootInfo, lines);
 
 	for (const child of children) {
-		lines.push("");
-		lines.push(
-			`Child entry ${modName}+0x${fmtHex(child.entry.beginAddress, 1).toLowerCase()}:`,
+		const childSymbol = await resolveSymbol(
+			mod.address + BigInt(child.entry.beginAddress),
+			dbg.modules.state,
 		);
+		lines.push("");
+		lines.push(`Child entry ${childSymbol}:`);
 		formatFunctionEntry(child.entry, child.info, lines);
 	}
 

@@ -3,18 +3,16 @@ import { evaluateExpression } from "../commandExpr";
 import { findModuleForAddress } from "../debug_interface";
 import { fmtHex } from "../formatting";
 import type { MinidumpDebugInterface } from "../minidump_debug_interface";
+import { resolveSymbol } from "../symbolication";
 import { basename } from "../utils";
 
-export function addressCommand(
+export async function addressCommand(
 	dbg: MinidumpDebugInterface,
 	args: string,
 ): Promise<CommandOutput> {
 	const trimmed = args.trim();
 	if (!trimmed) {
-		return Promise.resolve({
-			lines: ["Address expression required"],
-			isError: true,
-		});
+		return { lines: ["Address expression required"], isError: true };
 	}
 
 	const address = evaluateExpression(trimmed, dbg.currentContext.state);
@@ -38,22 +36,25 @@ export function addressCommand(
 
 	const mod = findModuleForAddress(address, modules);
 	const moduleName = mod ? basename(mod.path) : "<unknown>";
+	const symbol = await resolveSymbol(address, modules);
 
 	if (!found) {
-		return Promise.resolve({
+		return {
 			lines: [
 				`Address ${fmtHex(address, 16).toLowerCase()} not found in any memory range`,
+				`Symbol:        ${symbol}`,
 				mod ? `Module: ${moduleName}` : "",
 			].filter(Boolean),
 			isError: !mod,
-		});
+		};
 	}
 
 	const lines = [
 		`Base Address:  ${fmtHex(rangeBase, 16).toLowerCase()}`,
 		`End Address:   ${fmtHex(rangeEnd, 16).toLowerCase()}`,
 		`Region Size:   ${fmtHex(rangeSize, 16).toLowerCase()}`,
+		`Symbol:        ${symbol}`,
 		`Module:        ${moduleName}`,
 	];
-	return Promise.resolve({ lines });
+	return { lines };
 }

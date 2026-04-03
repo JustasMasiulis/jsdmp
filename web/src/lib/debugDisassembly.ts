@@ -1,4 +1,4 @@
-import type { DebugInterface } from "./debug_interface";
+import type { DebugInterface, DebugModule } from "./debug_interface";
 import {
 	decodeInstruction,
 	decodeInstructionLength,
@@ -7,6 +7,7 @@ import {
 	seg,
 } from "./disassembly";
 import { fmtHex, fmtHex16 } from "./formatting";
+import { resolveSymbol } from "./symbolication";
 import { maxU64 } from "./utils";
 
 const DISASSEMBLY_LOOKBACK_BYTES = 256;
@@ -21,6 +22,7 @@ export type DisassemblyLine = {
 	mnemonic: string;
 	operandSegments: InstrTextSegment[];
 	isCurrent: boolean;
+	symbol?: string;
 };
 
 export type DebugDisassemblyListing = {
@@ -160,6 +162,18 @@ const decodeLine = async (
 const countLoadedBytes = (lines: readonly DisassemblyLine[]) =>
 	lines.reduce((total, line) => total + line.byteLength, 0);
 
+async function annotateSymbols(
+	lines: DisassemblyLine[],
+	modules: readonly DebugModule[],
+): Promise<void> {
+	const results = await Promise.all(
+		lines.map((line) => resolveSymbol(line.address, modules)),
+	);
+	for (let i = 0; i < lines.length; i++) {
+		lines[i].symbol = results[i];
+	}
+}
+
 const buildPreviousGuessLines = async (
 	source: DisassemblyMemorySource,
 	endAddress: bigint,
@@ -243,30 +257,35 @@ const loadPreviousWindow = async (
 	const lines: DisassemblyLine[] = [];
 	let cursor = beforeAddress;
 	let loadedBytes = 0;
+	let hasMoreBefore = false;
+	let exhausted = false;
 
 	while (cursor > 0n && loadedBytes < DISASSEMBLY_PAGE_BYTES) {
 		const batch = await buildPreviousGuessLines(source, cursor);
 		if (batch.length === 0) {
-			return emptyPreviousLoad(lines, false);
+			exhausted = true;
+			break;
 		}
 
 		lines.unshift(...batch);
 		loadedBytes += countLoadedBytes(batch);
 		const nextCursor = batch[0].address;
 		if (nextCursor >= cursor) {
-			return emptyPreviousLoad(lines, false);
+			exhausted = true;
+			break;
 		}
 		cursor = nextCursor;
 	}
 
-	if (cursor <= 0n) {
-		return emptyPreviousLoad(lines, false);
+	if (!exhausted && cursor > 0n) {
+		hasMoreBefore = (await buildPreviousGuessLines(source, cursor)).length > 0;
 	}
 
-	return emptyPreviousLoad(
-		lines,
-		(await buildPreviousGuessLines(source, cursor)).length > 0,
-	);
+	if (lines.length > 0) {
+		await annotateSymbols(lines, source.modules.state);
+	}
+
+	return emptyPreviousLoad(lines, hasMoreBefore);
 };
 
 const loadForwardWindow = async (
@@ -303,6 +322,10 @@ const loadForwardWindow = async (
 			(await source.read(cursor, MAX_INSTRUCTION_LENGTH, 1)).byteLength > 0;
 	} catch {
 		hasMoreAfter = false;
+	}
+
+	if (lines.length > 0) {
+		await annotateSymbols(lines, source.modules.state);
 	}
 
 	return emptyNextLoad(lines, hasMoreAfter);

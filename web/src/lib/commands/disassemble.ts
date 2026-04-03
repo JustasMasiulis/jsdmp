@@ -11,6 +11,7 @@ import {
 } from "../disassembly";
 import { fmtHex } from "../formatting";
 import type { MinidumpDebugInterface } from "../minidump_debug_interface";
+import { resolveSymbol } from "../symbolication";
 
 export async function unassembleCommand(
 	dbg: MinidumpDebugInterface,
@@ -23,6 +24,8 @@ export async function unassembleCommand(
 	const { address, count } = parseAddressAndCount(args, ctx, 8, ctx?.ip);
 
 	const lines: CommandOutputLine[] = [];
+	const symbolLabel = await resolveSymbol(address, dbg.modules.state);
+	lines.push(`${symbolLabel}:`);
 	let currentAddr = address;
 
 	for (let i = 0; i < count; i++) {

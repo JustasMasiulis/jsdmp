@@ -1,19 +1,7 @@
 import type { CommandOutput } from "../commandEngine";
-import { findModuleForAddress } from "../debug_interface";
-import { fmtHex, fmtHex16 } from "../formatting";
+import { fmtHex } from "../formatting";
 import type { MinidumpDebugInterface } from "../minidump_debug_interface";
-import { basename } from "../utils";
-
-function formatModuleOffset(
-	address: bigint,
-	modules: readonly { address: bigint; size: number; path: string }[],
-): string {
-	const mod = findModuleForAddress(address, modules);
-	if (mod) {
-		return `${basename(mod.path)}+0x${(address - mod.address).toString(16)}`;
-	}
-	return fmtHex16(address);
-}
+import { resolveSymbol } from "../symbolication";
 
 export async function stackCommand(
 	dbg: MinidumpDebugInterface,
@@ -38,7 +26,7 @@ export async function stackCommand(
 			const retAddr =
 				i + 1 < result.frames.length ? result.frames[i + 1].ip : 0n;
 			const ret = fmtHex(retAddr, 16).toLowerCase();
-			const site = formatModuleOffset(f.ip, modules);
+			const site = await resolveSymbol(f.ip, modules);
 			lines.push(`${idx} ${sp}  ${ret}  ${site}`);
 		}
 		if (result.error) {

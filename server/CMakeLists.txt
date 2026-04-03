@@ -55,4 +55,4 @@ target_link_libraries(uWebSockets INTERFACE uSockets)
 
 # Main executable
 add_executable(symbol_server src/main.cpp)
-target_link_libraries(symbol_server PRIVATE uWebSockets winhttp)
+target_link_libraries(symbol_server PRIVATE uWebSockets winhttp dbghelp)

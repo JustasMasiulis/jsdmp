@@ -21,6 +21,12 @@ import {
 	type VirtualListingViewportState,
 } from "./VirtualListingTable";
 
+const symbolBase = (sym: string | undefined): string => {
+	if (!sym) return "";
+	const i = sym.lastIndexOf("+0x");
+	return i >= 0 ? sym.slice(0, i) : sym;
+};
+
 const ROW_HEIGHT_PX = 20;
 const OVERSCAN_ROWS = 10;
 const DEFAULT_VIEWPORT_HEIGHT_PX = 320;
@@ -200,10 +206,20 @@ export class VanillaDisassemblyView {
 			renderRow: (rowIndex, rowState) => {
 				this.fillRow(rowState, rowIndex);
 			},
-			getRowClassName: (rowIndex) =>
-				this.lines()[rowIndex]?.isCurrent
-					? "dump-disassembly-table__current"
-					: "",
+			getRowClassName: (rowIndex) => {
+				const lines = this.lines();
+				const line = lines[rowIndex];
+				if (!line) return "";
+				const current = line.isCurrent ? "dump-disassembly-table__current" : "";
+				const boundary =
+					line.symbol &&
+					rowIndex > 0 &&
+					symbolBase(lines[rowIndex - 1]?.symbol) !== symbolBase(line.symbol)
+						? "dump-disassembly-table__fn-boundary"
+						: "";
+				if (current && boundary) return `${current} ${boundary}`;
+				return current || boundary;
+			},
 		};
 	}
 
@@ -565,12 +581,14 @@ export class VanillaDisassemblyView {
 		const line = this.lines()[rowIndex];
 		if (!line) {
 			row.addressCode.textContent = "";
+			row.addressCode.title = "";
 			row.bytesCode.textContent = "";
 			row.instructionCode.textContent = "";
 			return;
 		}
 
 		row.addressCode.textContent = fmtHex16(line.address);
+		row.addressCode.title = line.symbol ?? "";
 		row.bytesCode.textContent = line.bytesHex;
 		renderInstructionLine(row.instructionCode, line);
 	}

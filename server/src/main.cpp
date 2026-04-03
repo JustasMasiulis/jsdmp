@@ -2,6 +2,7 @@
 
 #include <Windows.h>
 #include <winhttp.h>
+#include <DbgHelp.h>
 
 #include <atomic>
 #include <cstdint>
@@ -33,6 +34,11 @@ static std::unordered_map<std::string, std::shared_future<std::string>> g_inflig
 // Once a module is loaded, all byte-range reads are served from memory.
 static std::mutex g_filecache_mu;
 static std::unordered_map<std::string, std::shared_ptr<std::vector<uint8_t>>> g_filecache;
+
+static std::mutex g_dbghelp_mu;
+static std::unordered_map<std::string, DWORD64> g_loaded_pdbs;
+static DWORD64 g_next_base = 0x10000000;
+static HANDLE g_sym_handle = reinterpret_cast<HANDLE>(1);
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -70,6 +76,7 @@ static std::string resolve_cache_dir() {
 struct QueryParams {
     int64_t offset = -1;
     int64_t size = -1;
+    int64_t rva = -1;
 };
 
 static QueryParams parse_query(std::string_view qs) {
@@ -83,6 +90,7 @@ static QueryParams parse_query(std::string_view qs) {
             auto val = pair.substr(eq + 1);
             if (key == "offset") p.offset = std::stoll(std::string(val));
             else if (key == "size") p.size = std::stoll(std::string(val));
+            else if (key == "rva") p.rva = std::stoll(std::string(val));
         }
         if (amp == std::string_view::npos) break;
         qs = qs.substr(amp + 1);
@@ -233,6 +241,37 @@ static std::shared_future<std::string> deduplicated_fetch(const std::string& nam
 }
 
 // ---------------------------------------------------------------------------
+// DbgHelp symbolication
+// ---------------------------------------------------------------------------
+
+static void init_dbghelp() {
+    SymSetOptions(SYMOPT_DEFERRED_LOADS | SYMOPT_UNDNAME);
+    if (!SymInitialize(g_sym_handle, nullptr, FALSE))
+        fprintf(stderr, "SymInitialize failed: %lu\n", GetLastError());
+}
+
+static DWORD64 load_pdb_module(const std::string& pdb_path, const std::string& map_key) {
+    auto it = g_loaded_pdbs.find(map_key);
+    if (it != g_loaded_pdbs.end()) return it->second;
+
+    DWORD64 base = g_next_base;
+    g_next_base += 0x10000000;
+
+    std::wstring wide_path(pdb_path.begin(), pdb_path.end());
+    DWORD64 loaded = SymLoadModuleExW(g_sym_handle, nullptr, wide_path.c_str(),
+                                       nullptr, base, 0x10000000, nullptr, 0);
+    if (!loaded) {
+        fprintf(stderr, "[dbghelp] SymLoadModuleExW failed for %s: %lu\n",
+                pdb_path.c_str(), GetLastError());
+        return 0;
+    }
+
+    g_loaded_pdbs[map_key] = base;
+    printf("[dbghelp] loaded %s at base 0x%llx\n", pdb_path.c_str(), base);
+    return base;
+}
+
+// ---------------------------------------------------------------------------
 // CORS helper
 // ---------------------------------------------------------------------------
 
@@ -289,6 +328,7 @@ int main(int argc, char* argv[]) {
 
     g_cache_dir = resolve_cache_dir();
     init_winhttp();
+    init_dbghelp();
     printf("Cache directory: %s\n", g_cache_dir.c_str());
     printf("Starting symbol proxy on port %d\n", port);
 
@@ -397,6 +437,75 @@ int main(int argc, char* argv[]) {
                     res->end(std::string_view(
                         reinterpret_cast<const char*>(file_data->data() + read_offset),
                         static_cast<size_t>(read_size)));
+                });
+            }).detach();
+        })
+        .get("/pdb/:name/:key/nearest", [](auto* res, auto* req) {
+            auto origin = std::string(req->getHeader("origin"));
+            auto name = std::string(req->getParameter("name"));
+            auto key = std::string(req->getParameter("key"));
+            auto qp = parse_query(req->getQuery());
+
+            if (qp.rva < 0) {
+                set_cors(res, origin);
+                res->writeStatus("400 Bad Request");
+                res->end("Missing rva query parameter");
+                return;
+            }
+
+            auto aborted = std::make_shared<std::atomic<bool>>(false);
+            res->onAborted([aborted]() { aborted->store(true); });
+
+            auto fut = deduplicated_fetch(name, key);
+            auto map_key = name + "/" + key;
+            auto* loop = uWS::Loop::get();
+            auto rva = static_cast<DWORD64>(qp.rva);
+
+            std::thread([res, loop, fut, origin, aborted, map_key, rva]() {
+                auto path = fut.get();
+                if (path.empty()) {
+                    send_error(res, loop, origin, aborted,
+                               "502 Bad Gateway", "Failed to fetch PDB file");
+                    return;
+                }
+
+                std::lock_guard lk(g_dbghelp_mu);
+                DWORD64 base = load_pdb_module(path, map_key);
+                if (!base) {
+                    send_error(res, loop, origin, aborted,
+                               "502 Bad Gateway", "Failed to load PDB");
+                    return;
+                }
+
+                alignas(SYMBOL_INFO) char sym_buf[sizeof(SYMBOL_INFO) + MAX_SYM_NAME];
+                auto* sym = reinterpret_cast<SYMBOL_INFO*>(sym_buf);
+                sym->SizeOfStruct = sizeof(SYMBOL_INFO);
+                sym->MaxNameLen = MAX_SYM_NAME;
+                DWORD64 displacement = 0;
+
+                if (!SymFromAddr(g_sym_handle, base + rva, &displacement, sym)) {
+                    send_error(res, loop, origin, aborted,
+                               "404 Not Found", "No symbol at address");
+                    return;
+                }
+
+                auto sym_rva = sym->Address - base;
+                std::string escaped_name;
+                for (const char* p = sym->Name; *p; ++p) {
+                    if (*p == '"' || *p == '\\') escaped_name += '\\';
+                    escaped_name += *p;
+                }
+                char json[4096];
+                snprintf(json, sizeof(json),
+                         R"({"name":"%s","rva":%llu})",
+                         escaped_name.c_str(), sym_rva);
+                auto json_str = std::string(json);
+
+                loop->defer([res, origin, aborted, json_str]() {
+                    if (aborted->load()) return;
+                    set_cors(res, origin);
+                    res->writeHeader("Content-Type", "application/json");
+                    res->end(json_str);
                 });
             }).detach();
         })
