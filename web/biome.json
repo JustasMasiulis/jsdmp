@@ -4,7 +4,12 @@
 	},
 	"linter": {
 		"domains": {
-			"solid": "all"
+			"types": "recommended"
+		},
+		"rules": {
+			"style": {
+				"useTemplate": "off"
+			}
 		}
 	},
 	"assist": {
