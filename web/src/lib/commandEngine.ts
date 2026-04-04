@@ -1,6 +1,7 @@
 import { evaluateExpression } from "./commandExpr";
 import { addressCommand } from "./commands/address";
 import { unassembleCommand } from "./commands/disassemble";
+import { dpsCommand } from "./commands/dps";
 import { evaluateCommand } from "./commands/evaluate";
 import { exceptionRecordCommand } from "./commands/exception";
 import { fnentCommand } from "./commands/fnent";
@@ -110,6 +111,12 @@ export function createCommandEngine(
 			aliases: ["dp"],
 			summary: "Display memory as qwords",
 			execute: (ctx) => displayWordsCommand(dbg, ctx.args, 8, 2, 16),
+		},
+		{
+			name: "dps",
+			aliases: ["dpp", "dpa"],
+			summary: "Display pointer-sized values with symbols",
+			execute: (ctx) => dpsCommand(dbg, ctx.args),
 		},
 		{
 			name: "u",
