@@ -24,50 +24,47 @@ varying vec4 v_color;
 varying vec4 v_borderColor;
 varying vec2 v_halfSize;
 varying vec2 v_fragOffset;
+varying float v_border;
 
 void main() {
-  float w = a_width / u_sizeRatio;
-  float h = a_height / u_sizeRatio;
-  vec2 halfSize = vec2(w, h) * 0.5;
-  float border = 1.0 * u_correctionRatio;
+  float scale = u_correctionRatio / u_sizeRatio;
+  vec2 halfSize = vec2(a_width, a_height) * scale * 0.5;
+  float border = u_correctionRatio * 2.0;
   vec2 offset = a_corner * (halfSize + border);
 
-  vec3 projected = u_matrix * vec3(a_position, 1.0);
-  gl_Position = vec4(
-    projected.xy + offset * projected.z / u_correctionRatio,
-    0.0,
-    1.0
-  );
+  vec2 position = a_position + offset;
+  gl_Position = vec4((u_matrix * vec3(position, 1.0)).xy, 0.0, 1.0);
 
   v_color = a_color;
   v_borderColor = a_borderColor;
   v_halfSize = halfSize;
-  v_fragOffset = a_corner * (halfSize + border);
+  v_fragOffset = offset;
+  v_border = border;
 }
 `;
 
 const FRAGMENT_SHADER_SOURCE = /*glsl*/ `
-precision mediump float;
+precision highp float;
 
 varying vec4 v_color;
 varying vec4 v_borderColor;
 varying vec2 v_halfSize;
 varying vec2 v_fragOffset;
+varying float v_border;
 
 void main() {
   vec2 absOff = abs(v_fragOffset);
   float dx = absOff.x - v_halfSize.x;
   float dy = absOff.y - v_halfSize.y;
+  float dist = max(dx, dy);
 
-  if (dx > 1.0 || dy > 1.0) {
-    discard;
-  }
+  if (dist > v_border) discard;
 
-  if (dx > 0.0 || dy > 0.0) {
-    gl_FragColor = v_borderColor;
-  } else {
-    gl_FragColor = v_color;
-  }
+  float t = 0.0;
+  if (dist > 0.0)
+    t = dist / v_border;
+
+  gl_FragColor = mix(v_color, v_borderColor, t);
 }
 `;
 
