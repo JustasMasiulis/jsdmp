@@ -1,4 +1,5 @@
 import type { DebugModule } from "./debug_interface";
+import { fetchWithRetry } from "./fetchRetry";
 import { PeFile } from "./pe";
 import { basename } from "./utils";
 
@@ -63,7 +64,7 @@ async function fetchPageFromServer(
 	const key = moduleKey(mod);
 	const url = `${base}/modules/${name}/${key}?offset=${offset}&size=${PAGE_SIZE}`;
 	try {
-		const response = await fetch(url);
+		const response = await fetchWithRetry(url);
 		if (!response.ok) return null;
 		const buffer = await response.arrayBuffer();
 		const data = new Uint8Array(buffer);
@@ -162,7 +163,7 @@ async function loadPeFile(mod: DebugModule): Promise<PeFile | null> {
 	const key = moduleKey(mod);
 	const url = `${base}/headers/${name}/${key}`;
 	try {
-		const response = await fetch(url);
+		const response = await fetchWithRetry(url);
 		if (!response.ok)
 			throw new Error(
 				`Failed to load PE file for module ${mod.path}: ${url} ${response.statusText}`,
