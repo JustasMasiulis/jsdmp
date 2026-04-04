@@ -76,7 +76,12 @@ class WasmDumpDebugger {
 
 	// ─── drag & drop ──────────────────────────────────────────────────────────
 
+	private isFileDrag(event: DragEvent): boolean {
+		return !!event.dataTransfer?.types.includes("Files");
+	}
+
 	private onDragEnter = (event: DragEvent): void => {
+		if (!this.isFileDrag(event)) return;
 		event.preventDefault();
 		this.dragDepth += 1;
 		this.shell.classList.add("is-dragging");
@@ -84,11 +89,13 @@ class WasmDumpDebugger {
 	};
 
 	private onDragOver = (event: DragEvent): void => {
+		if (!this.isFileDrag(event)) return;
 		event.preventDefault();
 		if (event.dataTransfer) event.dataTransfer.dropEffect = "copy";
 	};
 
 	private onDragLeave = (event: DragEvent): void => {
+		if (!this.isFileDrag(event)) return;
 		event.preventDefault();
 		this.dragDepth = Math.max(0, this.dragDepth - 1);
 		if (this.dragDepth === 0) {
@@ -98,6 +105,7 @@ class WasmDumpDebugger {
 	};
 
 	private onDrop = (event: DragEvent): void => {
+		if (!this.isFileDrag(event)) return;
 		event.preventDefault();
 		this.dragDepth = 0;
 		this.shell.classList.remove("is-dragging");
