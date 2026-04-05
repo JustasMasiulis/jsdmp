@@ -1,7 +1,11 @@
 import { NodeProgram } from "sigma/rendering";
-import type { ProgramInfo } from "sigma/rendering/utils";
 import type { NodeDisplayData, RenderParams } from "sigma/types";
 import { floatColor } from "sigma/utils";
+
+type ProgramInfo<Uniform extends string = string> = {
+	gl: WebGLRenderingContext | WebGL2RenderingContext;
+	uniformLocations: Record<Uniform, WebGLUniformLocation>;
+};
 
 const FLOAT = WebGLRenderingContext.FLOAT;
 const UNSIGNED_BYTE = WebGLRenderingContext.UNSIGNED_BYTE;

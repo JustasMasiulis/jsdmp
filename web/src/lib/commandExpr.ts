@@ -1,6 +1,12 @@
-import { type Context, GPR_NAMES } from "./cpu_context";
+import {
+	ARM64_GPR_NAMES,
+	Arm64Context,
+	Context,
+	type CpuContext,
+	GPR_NAMES,
+} from "./cpu_context";
 
-const REGISTER_MAP: Record<string, (ctx: Context) => bigint> =
+const AMD64_REGISTER_MAP: Record<string, (ctx: Context) => bigint> =
 	Object.fromEntries([
 		...GPR_NAMES.map(
 			(name, idx) => [name, (ctx: Context) => ctx.gpr(idx)] as const,
@@ -9,12 +15,21 @@ const REGISTER_MAP: Record<string, (ctx: Context) => bigint> =
 		["rflags", (ctx: Context) => BigInt(ctx.flags)],
 	]);
 
+const ARM64_REGISTER_MAP: Record<string, (ctx: Arm64Context) => bigint> =
+	Object.fromEntries([
+		...ARM64_GPR_NAMES.map(
+			(name, idx) => [name, (ctx: Arm64Context) => ctx.gpr(idx)] as const,
+		),
+		["sp", (ctx: Arm64Context) => ctx.sp],
+		["pc", (ctx: Arm64Context) => ctx.ip],
+	]);
+
 class Parser {
 	private pos = 0;
 	private readonly src: string;
-	private readonly ctx: Context | null;
+	private readonly ctx: CpuContext | null;
 
-	constructor(src: string, ctx: Context | null) {
+	constructor(src: string, ctx: CpuContext | null) {
 		this.src = src;
 		this.ctx = ctx;
 	}
@@ -107,14 +122,20 @@ class Parser {
 			}
 
 			// Register name
-			const regFn = REGISTER_MAP[token.toLowerCase()];
-			if (regFn) {
-				if (this.ctx === null) {
+			if (this.ctx === null) {
+				const hasReg =
+					token.toLowerCase() in AMD64_REGISTER_MAP ||
+					token.toLowerCase() in ARM64_REGISTER_MAP;
+				if (hasReg)
 					throw new Error(
 						`Cannot read register '${token}': no context available`,
 					);
-				}
-				return regFn(this.ctx);
+			} else if (this.ctx instanceof Context) {
+				const regFn = AMD64_REGISTER_MAP[token.toLowerCase()];
+				if (regFn) return regFn(this.ctx);
+			} else if (this.ctx instanceof Arm64Context) {
+				const regFn = ARM64_REGISTER_MAP[token.toLowerCase()];
+				if (regFn) return regFn(this.ctx);
 			}
 
 			// Pure decimal number
@@ -174,6 +195,9 @@ function isAllDecDigits(s: string): boolean {
 	return s.length > 0;
 }
 
-export function evaluateExpression(expr: string, ctx: Context | null): bigint {
+export function evaluateExpression(
+	expr: string,
+	ctx: CpuContext | null,
+): bigint {
 	return new Parser(expr.trim(), ctx).parse();
 }

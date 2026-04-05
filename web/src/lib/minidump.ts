@@ -69,6 +69,10 @@ export type MinidumpSystemInfo = {
 				amdExtendedCpuFeatures: number;
 		  }
 		| {
+				type: "arm64";
+				processorFeatures: [bigint, bigint];
+		  }
+		| {
 				type: "other";
 				processorFeatures: [bigint, bigint];
 		  };
@@ -952,22 +956,30 @@ export class MiniDump {
 			throw new Error(`Unsupported platform ID: ${platformId}`);
 		}
 
-		const isIntel = processorArchitecture === 0;
-		const cpu = isIntel
-			? {
-					type: "x86" as const,
-					vendorId: this.readFixedAscii(view, 32, 12),
-					versionInformation: view.getUint32(44, true),
-					featureInformation: view.getUint32(48, true),
-					amdExtendedCpuFeatures: view.getUint32(52, true),
-				}
-			: {
-					type: "other" as const,
-					processorFeatures: [
-						view.getBigUint64(32, true),
-						view.getBigUint64(40, true),
-					] as [bigint, bigint],
-				};
+		const cpu =
+			processorArchitecture === 0
+				? {
+						type: "x86" as const,
+						vendorId: this.readFixedAscii(view, 32, 12),
+						versionInformation: view.getUint32(44, true),
+						featureInformation: view.getUint32(48, true),
+						amdExtendedCpuFeatures: view.getUint32(52, true),
+					}
+				: processorArchitecture === 12
+					? {
+							type: "arm64" as const,
+							processorFeatures: [
+								view.getBigUint64(32, true),
+								view.getBigUint64(40, true),
+							] as [bigint, bigint],
+						}
+					: {
+							type: "other" as const,
+							processorFeatures: [
+								view.getBigUint64(32, true),
+								view.getBigUint64(40, true),
+							] as [bigint, bigint],
+						};
 
 		return {
 			processorArchitecture,

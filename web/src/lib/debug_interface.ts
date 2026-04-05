@@ -1,8 +1,13 @@
-import type { Context } from "./cpu_context";
+import type { CpuContext } from "./cpu_context";
 import type { PeFile } from "./pe";
 import type { Signal } from "./reactive";
 
 export type Address = bigint;
+
+export enum ProcessorArch {
+	ARCH_AMD64,
+	ARCH_ARM64,
+}
 
 export type DebugMemoryRange = {
 	address: Address;
@@ -15,7 +20,7 @@ export type DebugThreadException = {
 	address: Address;
 	record: bigint;
 	parameters: bigint[];
-	context: Context | null;
+	context: CpuContext | null;
 };
 
 export type DebugThread = {
@@ -27,7 +32,7 @@ export type DebugThread = {
 	stack: {
 		address: Address;
 	};
-	context: Context | null;
+	context: CpuContext | null;
 	exception: DebugThreadException | null;
 	dumpFlags: number;
 	dumpError: number;
@@ -69,7 +74,8 @@ export type DebugInterface = {
 	readonly unloadedModules: Signal<DebugUnloadedModule[]>;
 	readonly memoryRanges: Signal<DebugMemoryRange[]>;
 	readonly currentThread: Signal<DebugThread | null>;
-	readonly currentContext: Signal<Context | null>;
+	readonly currentContext: Signal<CpuContext | null>;
+	readonly arch: ProcessorArch;
 
 	read(address: bigint, size: number, minSize?: number): Promise<Uint8Array>;
 	selectThread(thread: DebugThread): void;

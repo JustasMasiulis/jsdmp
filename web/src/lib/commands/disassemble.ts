@@ -37,7 +37,7 @@ export async function unassembleCommand(
 			break;
 		}
 
-		const instr = decodeInstruction(bytes, currentAddr);
+		const instr = decodeInstruction(bytes, currentAddr, dbg.arch);
 		if (!instr) {
 			lines.push(fmtHex(currentAddr, 16).toLowerCase() + " ??");
 			break;
@@ -60,14 +60,11 @@ export async function unassembleCommand(
 		const hexBytes = Array.from(instr.bytes)
 			.map((b) => fmtHex(b, 2).toLowerCase())
 			.join("");
-		const prefixedMnemonic = instr.prefix
-			? instr.prefix + " " + instr.mnemonic
-			: instr.mnemonic;
 
 		const line: InstrTextSegment[] = [
 			seg(fmtHex(currentAddr, 16).toLowerCase() + " "),
 			seg(hexBytes.padEnd(16) + " "),
-			seg(prefixedMnemonic.padEnd(8) + " ", "mnemonic"),
+			seg(instr.mnemonic.padEnd(8) + " ", "mnemonic"),
 			...instr.operandSegments,
 		];
 		lines.push(line);

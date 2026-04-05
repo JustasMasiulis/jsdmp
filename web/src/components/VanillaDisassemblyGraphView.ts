@@ -4,7 +4,7 @@ import {
 	parseHexAddress,
 	saveAddressPanelState,
 } from "../lib/addressPanelState";
-import type { Context } from "../lib/cpu_context";
+import type { CpuContext } from "../lib/cpu_context";
 import { DBG } from "../lib/debugState";
 import {
 	buildCfg2,
@@ -98,7 +98,7 @@ const cfgResultToAnnotatedDescriptor = (
 
 export class VanillaDisassemblyGraphView implements IContentRenderer {
 	private readonly panelId: string;
-	private readonly contextHandle: SignalHandle<Context | null>;
+	private readonly contextHandle: SignalHandle<CpuContext | null>;
 	private graphResult: CfgBuildResult | null = null;
 	private followInstructionPointer = true;
 	private manualAddress: bigint | null = null;
@@ -295,13 +295,15 @@ export class VanillaDisassemblyGraphView implements IContentRenderer {
 			this.resizeObserver.observe(this.graphHost);
 		}
 
-		this.contextHandle = DBG.currentContext.subscribe(() => this.update());
+		this.contextHandle = DBG.currentContext.subscribe(() =>
+			this.onContextChanged(),
+		);
 
 		this.restoreState();
 		this.refreshView(true);
 	}
 
-	private update() {
+	private onContextChanged() {
 		if (this.isDisposed) {
 			return;
 		}
@@ -312,6 +314,12 @@ export class VanillaDisassemblyGraphView implements IContentRenderer {
 		this.clearAddressError();
 		this.refreshView(true);
 	}
+
+	get element() {
+		return this.root;
+	}
+
+	init() {}
 
 	dispose() {
 		if (this.isDisposed) {
@@ -527,10 +535,9 @@ export class VanillaDisassemblyGraphView implements IContentRenderer {
 				},
 			};
 		} finally {
-			if (this.isDisposed || token !== this.reloadToken) {
-				return;
+			if (!this.isDisposed && token === this.reloadToken) {
+				this.isLoadingGraph = false;
 			}
-			this.isLoadingGraph = false;
 		}
 
 		if (!this.graphResult || this.graphResult.blocks.length === 0) {

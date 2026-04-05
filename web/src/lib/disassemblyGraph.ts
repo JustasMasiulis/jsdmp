@@ -4,10 +4,9 @@ import {
 	decodeInstruction,
 	type InstrTextSegment,
 	joinSegmentText,
-	MAX_INSTRUCTION_LENGTH,
+	maxInstructionLength,
 } from "./disassembly";
 import { fmtHex16 } from "./formatting";
-import { ZydisMnemonic } from "./mnemonic";
 import { resolveSymbol, symbolicateSegments } from "./symbolication";
 
 export type CfgEdgeKind = "true" | "false" | "unconditional";
@@ -15,7 +14,6 @@ export type CfgEdgeKind = "true" | "false" | "unconditional";
 export type CfgInstruction = {
 	address: bigint;
 	byteLength: number;
-	prefix: string;
 	mnemonic: string;
 	operandSegments: InstrTextSegment[];
 	controlFlow: DecodedControlFlow;
@@ -114,30 +112,17 @@ const instrSegmentsToCfg = (segments: InstrTextSegment[]): CfgTextSegment[] =>
 
 const blockIdForAddress = (address: bigint) => `block:${address.toString(16)}`;
 
-const mnemonicColumnWidth = (
-	instruction: Pick<CfgInstruction, "prefix" | "mnemonic">,
-) => {
-	const prefixLen = instruction.prefix ? instruction.prefix.length + 1 : 0;
-	return prefixLen + instruction.mnemonic.length;
-};
+const mnemonicColumnWidth = (instruction: Pick<CfgInstruction, "mnemonic">) =>
+	instruction.mnemonic.length;
 
 export const buildCfgInstructionLine = (
-	instruction: Pick<
-		CfgInstruction,
-		"address" | "prefix" | "mnemonic" | "operandSegments"
-	>,
+	instruction: Pick<CfgInstruction, "address" | "mnemonic" | "operandSegments">,
 	columnWidth = mnemonicColumnWidth(instruction),
 ): CfgTextLine => {
 	const segments: CfgTextSegment[] = [
 		makeTextSegment(fmtHex16(instruction.address), true, null, "plain"),
 		makeTextSegment("  "),
 	];
-
-	if (instruction.prefix) {
-		segments.push(
-			makeTextSegment(`${instruction.prefix} `, true, null, "mnemonic"),
-		);
-	}
 
 	segments.push(makeTextSegment(instruction.mnemonic, true, null, "mnemonic"));
 
@@ -167,7 +152,7 @@ export const buildCfgTextLinesFromLabel = (label: string): CfgTextLine[] =>
 export const buildCfgInstructionLines = (
 	instructions: readonly Pick<
 		CfgInstruction,
-		"address" | "prefix" | "mnemonic" | "operandSegments"
+		"address" | "mnemonic" | "operandSegments"
 	>[],
 ) => {
 	const maxColumnWidth = instructions.reduce(
@@ -193,7 +178,9 @@ const decodeBlock = async (
 	knownAddrs: Set<bigint>,
 	addPendingBlock: (addr: bigint) => void,
 	addEdge: (to: bigint, kind: CfgEdgeKind) => void,
+	arch: number,
 ): Promise<BuiltBlock> => {
+	const maxLen = maxInstructionLength(arch);
 	const instructions: CfgInstruction[] = [];
 	let ip = blockAddr;
 
@@ -206,13 +193,13 @@ const decodeBlock = async (
 
 		let bytes: Uint8Array;
 		try {
-			bytes = await dbg.read(ip, MAX_INSTRUCTION_LENGTH, 1);
+			bytes = await dbg.read(ip, maxLen, 1);
 		} catch {
 			error = "missing memory";
 			break;
 		}
 
-		const decoded = decodeInstruction(bytes, ip);
+		const decoded = decodeInstruction(bytes, ip, arch);
 		if (!decoded) {
 			error = "decode error";
 			break;
@@ -221,7 +208,6 @@ const decodeBlock = async (
 		instructions.push({
 			address: ip,
 			byteLength: decoded.length,
-			prefix: decoded.prefix,
 			mnemonic: decoded.mnemonic,
 			operandSegments: decoded.operandSegments,
 			controlFlow: decoded.controlFlow,
@@ -252,10 +238,7 @@ const decodeBlock = async (
 				break loop;
 		}
 
-		if (
-			decoded.mnemonicId === ZydisMnemonic.ZYDIS_MNEMONIC_INT3 ||
-			decoded.mnemonicId === ZydisMnemonic.ZYDIS_MNEMONIC_UD2
-		) {
+		if (decoded.controlFlow.kind === "interrupt") {
 			break;
 		}
 
@@ -277,7 +260,7 @@ const annotateBlockSymbols = async (
 					: []),
 				...instr.ripRelativeTargets,
 			];
-			if (addresses.length === 0) return;
+			if (addresses.length === 0) return undefined;
 			return symbolicateSegments(instr.operandSegments, addresses, modules);
 		}),
 	);
@@ -330,6 +313,7 @@ export const buildCfg2 = async (
 	dbg: DebugInterface,
 	entryAddress: bigint,
 ): Promise<CfgBuildResult> => {
+	const arch = dbg.arch;
 	const builtBlocks = new Map<bigint, BuiltBlock>();
 	const knownAddrs = new Set<bigint>([entryAddress]);
 	const pendingBlocks: bigint[] = [entryAddress];
@@ -446,6 +430,7 @@ export const buildCfg2 = async (
 			knownAddrs,
 			addPendingBlock,
 			addEdge,
+			arch,
 		);
 
 		commitBlock(built);

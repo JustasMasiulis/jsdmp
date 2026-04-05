@@ -1,17 +1,22 @@
 export type WasmExports = {
 	wasm_get_disassembly_buffer: () => number;
-	wasm_decode_length: (length: number) => number;
-	wasm_decode_full: (length: number, runtimeAddress: bigint) => number;
+	wasm_decode_length: (arch: number, length: number) => number;
+	wasm_decode_full: (
+		arch: number,
+		length: number,
+		runtimeAddress: bigint,
+	) => number;
 	wasm_get_decoded_buffer: () => number;
-	wasm_mnemonic_string: (mnemonic: number) => number;
-
 	decoded_buffer: number;
 	disassembly_buffer: number;
 };
 
+export const ARCH_AMD64 = 0;
+export const ARCH_ARM64 = 1;
+
 export const WASM_MEMORY = new WebAssembly.Memory({
-	initial: 16,
-	maximum: 16,
+	initial: 32,
+	maximum: 32,
 	shared: true,
 });
 

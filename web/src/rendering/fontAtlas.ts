@@ -12,6 +12,10 @@ export type FontAtlas = {
 	cellHeight: number;
 	atlasWidth: number;
 	atlasHeight: number;
+	uvTable: Float32Array;
+	firstChar: number;
+	lastChar: number;
+	fallbackIdx: number;
 	getUV(charCode: number): { u0: number; v0: number; u1: number; v1: number };
 	dispose(gl: WebGL2RenderingContext): void;
 };

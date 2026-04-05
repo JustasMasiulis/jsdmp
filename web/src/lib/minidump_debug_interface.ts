@@ -1,4 +1,4 @@
-import { Context } from "./cpu_context";
+import { Arm64Context, Context, type CpuContext } from "./cpu_context";
 import {
 	type DebugInterface,
 	type DebugMemoryRange,
@@ -7,6 +7,7 @@ import {
 	type DebugThreadException,
 	type DebugUnloadedModule,
 	findModuleForAddress,
+	ProcessorArch,
 } from "./debug_interface";
 import {
 	type MiniDump,
@@ -21,7 +22,6 @@ import {
 } from "./minidump";
 import { Signal } from "./reactive";
 import { readFromModuleImage } from "./symbolServer";
-import { assert } from "./utils";
 
 export type MinidumpDebugSystemInfo = MinidumpSystemInfo;
 export type MinidumpDebugMiscInfo = MinidumpMiscInfo;
@@ -42,7 +42,7 @@ export type MinidumpDebugExceptionInfo = {
 		exceptionInformation: bigint[];
 	};
 	contextLocation: MinidumpLocation;
-	context: Context | null;
+	context: CpuContext | null;
 };
 
 export type MinidumpDebugSource = Pick<
@@ -120,7 +120,7 @@ const toDebugUnloadedModule = (
 
 const toDebugThread = (
 	thread: MinidumpAssociatedThread,
-	context: Context | null,
+	context: CpuContext | null,
 	exception: DebugThreadException | null,
 ): DebugThread => ({
 	id: thread.threadId,
@@ -153,7 +153,8 @@ export class MinidumpDebugInterface implements DebugInterface {
 	readonly unloadedModules: Signal<DebugUnloadedModule[]>;
 	readonly memoryRanges: Signal<DebugMemoryRange[]>;
 	readonly currentThread: Signal<DebugThread | null>;
-	readonly currentContext: Signal<Context | null>;
+	readonly currentContext: Signal<CpuContext | null>;
+	readonly arch: ProcessorArch;
 
 	readonly checksum: number;
 	readonly timestamp: number;
@@ -163,6 +164,7 @@ export class MinidumpDebugInterface implements DebugInterface {
 	readonly systemInfo: MinidumpDebugSystemInfo | null;
 	readonly miscInfo: MinidumpDebugMiscInfo | null;
 	readonly exceptionInfo: MinidumpDebugExceptionInfo | null;
+	readonly processorArchitecture: number;
 
 	private readonly source: MinidumpDebugSource;
 
@@ -179,7 +181,19 @@ export class MinidumpDebugInterface implements DebugInterface {
 		this.miscInfo = source.miscInfo;
 
 		const processorArchitecture = source.systemInfo?.processorArchitecture ?? 0;
-		assert(processorArchitecture === 9, "Only x64 dumps are supported");
+		if (processorArchitecture !== 9 && processorArchitecture !== 12) {
+			const name = source.systemInfo?.processorArchitectureName ?? "unknown";
+			throw new Error(
+				`Unsupported processor architecture: ${processorArchitecture} (${name})`,
+			);
+		}
+		this.processorArchitecture = processorArchitecture;
+
+		if (processorArchitecture === 9) {
+			this.arch = ProcessorArch.ARCH_AMD64;
+		} else if (processorArchitecture === 12) {
+			this.arch = ProcessorArch.ARCH_ARM64;
+		}
 
 		const exceptionInfo = this.registerExceptionInfo(source.exceptionStream);
 		this.exceptionInfo = exceptionInfo;
@@ -258,17 +272,19 @@ export class MinidumpDebugInterface implements DebugInterface {
 		};
 	}
 
+	private createContext(bytes: Uint8Array): CpuContext {
+		if (this.processorArchitecture === 12) return new Arm64Context(bytes);
+		return new Context(bytes);
+	}
+
 	private registerThreadContext(
 		thread: MinidumpAssociatedThread,
-	): Context | null {
-		if (!thread.threadContext) {
-			return null;
-		}
-
+	): CpuContext | null {
+		if (!thread.threadContext) return null;
 		const bytes = this.source.readLocationBytes(thread.threadContext);
 		if (!bytes) return null;
 		try {
-			return new Context(bytes);
+			return this.createContext(bytes);
 		} catch {
 			return null;
 		}
@@ -282,10 +298,10 @@ export class MinidumpDebugInterface implements DebugInterface {
 		}
 
 		const bytes = this.source.readLocationBytes(exceptionStream.threadContext);
-		let context: Context | null = null;
+		let context: CpuContext | null = null;
 		if (bytes) {
 			try {
-				context = new Context(bytes);
+				context = this.createContext(bytes);
 			} catch {
 				context = null;
 			}

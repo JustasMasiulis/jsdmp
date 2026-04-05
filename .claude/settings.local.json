@@ -8,7 +8,10 @@
       "Bash(xargs grep:*)",
       "Bash(bun test:*)",
       "Bash(git -C D:/web-dmp diff --no-color --name-only)",
-      "Bash(bunx --bun tsc --noEmit --pretty)"
+      "Bash(bunx --bun tsc --noEmit --pretty)",
+      "Bash(cargo +nightly test --test gen_tables -- gen_a64_table --exact --nocapture)",
+      "Bash(cargo test:*)",
+      "Bash(cargo build:*)"
     ]
   }
 }

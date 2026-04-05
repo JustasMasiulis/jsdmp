@@ -6,7 +6,7 @@ import {
 	saveAddressPanelState,
 } from "../lib/addressPanelState";
 import { buildGraphologyGraph } from "../lib/cfgGraphologyAdapter";
-import type { Context } from "../lib/cpu_context";
+import type { CpuContext } from "../lib/cpu_context";
 import { DBG } from "../lib/debugState";
 import {
 	buildCfg2,
@@ -72,7 +72,7 @@ const cfgResultToAnnotatedDescriptor = (
 
 export class SigmaDisassemblyGraphView implements IContentRenderer {
 	private readonly panelId: string;
-	private readonly contextHandle: SignalHandle<Context | null>;
+	private readonly contextHandle: SignalHandle<CpuContext | null>;
 	private graphResult: CfgBuildResult | null = null;
 	private followInstructionPointer = true;
 	private manualAddress: bigint | null = null;
@@ -152,7 +152,9 @@ export class SigmaDisassemblyGraphView implements IContentRenderer {
 		this.root.addEventListener("click", this.onDisasmLinkClick);
 		this.followCheckbox.addEventListener("change", this.onFollowChange);
 
-		this.contextHandle = DBG.currentContext.subscribe(() => this.update());
+		this.contextHandle = DBG.currentContext.subscribe(() =>
+			this.onContextChanged(),
+		);
 
 		this.restoreState();
 		this.refreshView(true);
@@ -162,7 +164,9 @@ export class SigmaDisassemblyGraphView implements IContentRenderer {
 		return this.root;
 	}
 
-	private update() {
+	init() {}
+
+	private onContextChanged() {
 		if (this.isDisposed) return;
 		this.graphResult = null;
 		this.clearAddressError();
@@ -339,8 +343,9 @@ export class SigmaDisassemblyGraphView implements IContentRenderer {
 				},
 			};
 		} finally {
-			if (this.isDisposed || token !== this.reloadToken) return;
-			this.isLoadingGraph = false;
+			if (!this.isDisposed && token === this.reloadToken) {
+				this.isLoadingGraph = false;
+			}
 		}
 
 		if (!this.graphResult || this.graphResult.blocks.length === 0) {

@@ -3,7 +3,7 @@ import {
 	parseHexAddress,
 	saveAddressPanelState,
 } from "../lib/addressPanelState";
-import type { Context } from "../lib/cpu_context";
+import type { CpuContext } from "../lib/cpu_context";
 import type { DebugMemoryRange } from "../lib/debug_interface";
 import { DBG } from "../lib/debugState";
 import { fmtHex, fmtHex16 } from "../lib/formatting";
@@ -84,7 +84,7 @@ const getPanelStorageKey = (panelId: string) =>
 export class VanillaMemoryView {
 	private readonly panelId: string;
 	private readonly panelIndex: number;
-	private readonly contextHandle: SignalHandle<Context | null>;
+	private readonly contextHandle: SignalHandle<CpuContext | null>;
 	private ranges: DebugMemoryRange[] = [];
 	private span: MemorySpan | null = null;
 	private totalRows = 0;

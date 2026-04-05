@@ -1,7 +1,7 @@
 import { type DebugModule, findModuleForAddress } from "./debug_interface";
 import { fetchWithRetry } from "./fetchRetry";
 import { fmtHex } from "./formatting";
-import type { InstrTextSegment } from "./intelFormatter";
+import type { InstrTextSegment } from "./instructionParser";
 import { getSymbolServerUrl } from "./symbolServer";
 import { basename } from "./utils";
 

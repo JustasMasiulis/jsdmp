@@ -1,0 +1,22 @@
+[package]
+name = "web_dmp"
+edition = "2021"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dev-dependencies]
+yaxpeax-arch = "0.3"
+yaxpeax-x86 = { version = "2", features = ["fmt"] }
+yaxpeax-arm = "0.4"
+
+[dependencies]
+yaxpeax-arch = { version = "0.3", default-features = false }
+yaxpeax-x86 = { version = "2", default-features = false, features = ["fmt"] }
+yaxpeax-arm = { version = "0.4", default-features = false, features = ["fmt"] }
+
+[profile.release]
+lto = true
+opt-level = "z"
+codegen-units = 1
+strip = true

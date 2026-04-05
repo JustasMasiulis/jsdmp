@@ -1,4 +1,4 @@
-import type { InstrSyntaxKind, InstrTextSegment } from "./intelFormatter";
+import type { InstrSyntaxKind, InstrTextSegment } from "./instructionParser";
 
 const SYNTAX_CSS: Partial<Record<InstrSyntaxKind, string>> = {
 	mnemonic: "s-m",

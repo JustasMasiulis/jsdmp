@@ -10,7 +10,7 @@ import { listModulesCommand } from "./commands/modules";
 import { registerCommand } from "./commands/register";
 import { stackCommand } from "./commands/stack";
 import { threadsCommand } from "./commands/threads";
-import type { Context } from "./cpu_context";
+import type { CpuContext } from "./cpu_context";
 import type { InstrTextSegment } from "./disassembly";
 import type { MinidumpDebugInterface } from "./minidump_debug_interface";
 
@@ -40,7 +40,7 @@ export type CommandEngine = {
 
 export function parseAddressAndCount(
 	args: string,
-	ctx: Context | null,
+	ctx: CpuContext | null,
 	defaultCount: number,
 	defaultAddress?: bigint,
 ): { address: bigint; count: number } {

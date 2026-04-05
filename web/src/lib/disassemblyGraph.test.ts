@@ -1,4 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from "bun:test";
+import { ProcessorArch } from "./debug_interface";
 import type { DisassemblyMemorySource } from "./debugDisassembly";
 import {
 	buildCfg2,
@@ -6,7 +7,7 @@ import {
 	buildCfgInstructionLines,
 	buildCfgTextLinesFromLabel,
 } from "./disassemblyGraph";
-import type { InstrTextSegment } from "./intelFormatter";
+import type { InstrTextSegment } from "./instructionParser";
 import { Signal } from "./reactive";
 import {
 	__setWasmExportsForTesting,
@@ -20,18 +21,18 @@ type MemorySegment = {
 };
 
 const makeSource = (segments: MemorySegment[]): DisassemblyMemorySource => ({
-	dm: {
-		threads: [],
-		modules: [],
-		unloadedModules: [],
-		memoryRanges: segments.map((segment) => ({
-			address: segment.start,
-			size: BigInt(segment.bytes.byteLength),
-		})),
-		currentThreadId: 0,
-		currentContext: null,
-	},
+	threads: new Signal([]),
 	modules: new Signal([]),
+	unloadedModules: new Signal([]),
+	memoryRanges: new Signal(
+		segments.map((s) => ({
+			address: s.start,
+			size: BigInt(s.bytes.byteLength),
+		})),
+	),
+	currentThread: new Signal(null),
+	currentContext: new Signal(null),
+	arch: ProcessorArch.ARCH_AMD64,
 	read: async (address, size, minSize) => {
 		const segment = segments.find((candidate) => {
 			const endExclusive = candidate.start + BigInt(candidate.bytes.byteLength);
@@ -51,6 +52,7 @@ const makeSource = (segments: MemorySegment[]): DisassemblyMemorySource => ({
 		const byteCount = Math.min(size, available);
 		return segment.bytes.slice(offset, offset + byteCount);
 	},
+	selectThread() {},
 });
 
 beforeAll(async () => {
@@ -463,7 +465,7 @@ describe("buildCfgInstructionLine", () => {
 	it("preserves the rendered graph line while exposing clickable tokens", () => {
 		const line = buildCfgInstructionLine({
 			address: 0x401000n,
-			prefix: "",
+
 			mnemonic: "mov",
 			operandSegments: operandSegments(
 				["qword ptr", "keyword"],
@@ -497,7 +499,7 @@ describe("buildCfgInstructionLines", () => {
 		const lines = buildCfgInstructionLines([
 			{
 				address: 0x401000n,
-				prefix: "",
+
 				mnemonic: "mov",
 				operandSegments: operandSegments(
 					["rax", "register"],
@@ -507,7 +509,7 @@ describe("buildCfgInstructionLines", () => {
 			},
 			{
 				address: 0x401002n,
-				prefix: "",
+
 				mnemonic: "cmovne",
 				operandSegments: operandSegments(
 					["rcx", "register"],
@@ -517,7 +519,7 @@ describe("buildCfgInstructionLines", () => {
 			},
 			{
 				address: 0x401004n,
-				prefix: "",
+
 				mnemonic: "ret",
 				operandSegments: [],
 			},

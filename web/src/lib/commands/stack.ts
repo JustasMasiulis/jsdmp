@@ -1,4 +1,5 @@
 import type { CommandOutput } from "../commandEngine";
+import { Context } from "../cpu_context";
 import { fmtHex } from "../formatting";
 import type { MinidumpDebugInterface } from "../minidump_debug_interface";
 import { resolveSymbol } from "../symbolication";
@@ -9,6 +10,12 @@ export async function stackCommand(
 	const ctx = dbg.currentContext.state;
 	if (!ctx) {
 		return { lines: ["No thread context available"], isError: true };
+	}
+	if (!(ctx instanceof Context)) {
+		return {
+			lines: ["Stack walking is only supported for AMD64"],
+			isError: true,
+		};
 	}
 
 	try {

@@ -3,7 +3,7 @@ import {
 	parseHexAddress,
 	saveAddressPanelState,
 } from "../lib/addressPanelState";
-import type { Context } from "../lib/cpu_context";
+import type { CpuContext } from "../lib/cpu_context";
 import {
 	buildDisassemblyListing,
 	type DebugDisassemblyListing,
@@ -84,7 +84,7 @@ const toDecodeErrorListing = (
 
 export class VanillaDisassemblyView {
 	private readonly panelId: string;
-	private readonly contextHandle: SignalHandle<Context | null>;
+	private readonly contextHandle: SignalHandle<CpuContext | null>;
 	private listing: DebugDisassemblyListing | null = null;
 	private followInstructionPointer = true;
 	private manualAddress: bigint | null = null;
@@ -372,7 +372,11 @@ export class VanillaDisassemblyView {
 		}
 
 		try {
-			const nextListing = await buildDisassemblyListing(DBG, anchorAddress);
+			const nextListing = await buildDisassemblyListing(
+				DBG,
+				anchorAddress,
+				DBG.arch,
+			);
 			if (this.isDisposed || token !== this.reloadToken) {
 				return;
 			}
@@ -387,13 +391,12 @@ export class VanillaDisassemblyView {
 				anchorAddress,
 			);
 		} finally {
-			if (this.isDisposed || token !== this.reloadToken) {
-				return;
+			if (!this.isDisposed && token === this.reloadToken) {
+				this.isLoadingListing = false;
+				this.recomputeRows(true);
+				this.syncControlState();
+				this.requestRender(true);
 			}
-			this.isLoadingListing = false;
-			this.recomputeRows(true);
-			this.syncControlState();
-			this.requestRender(true);
 		}
 	}
 
@@ -519,6 +522,7 @@ export class VanillaDisassemblyView {
 			const previousLoad = await loadPreviousDisassemblyLines(
 				DBG,
 				beforeAddress,
+				DBG.arch,
 			);
 			currentListing.hasMorePrevious = previousLoad.hasMoreBefore;
 			if (previousLoad.lines.length === 0) {
@@ -562,7 +566,11 @@ export class VanillaDisassemblyView {
 				return;
 			}
 
-			const nextLoad = await loadNextDisassemblyLines(DBG, startAddress);
+			const nextLoad = await loadNextDisassemblyLines(
+				DBG,
+				startAddress,
+				DBG.arch,
+			);
 			currentListing.hasMoreNext = nextLoad.hasMoreAfter;
 			if (nextLoad.lines.length === 0) {
 				return;

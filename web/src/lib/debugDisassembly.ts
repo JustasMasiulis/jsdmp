@@ -4,6 +4,7 @@ import {
 	decodeInstructionLength,
 	type InstrTextSegment,
 	MAX_INSTRUCTION_LENGTH,
+	maxInstructionLength,
 	seg,
 } from "./disassembly";
 import { fmtHex, fmtHex16 } from "./formatting";
@@ -94,11 +95,10 @@ const decodeInstructionAt = async (
 	source: DisassemblyMemorySource,
 	address: bigint,
 	maxBytes = MAX_INSTRUCTION_LENGTH,
+	arch: number,
 ): Promise<DecodedLineBase | null> => {
-	const requestedSize = Math.max(
-		1,
-		Math.min(MAX_INSTRUCTION_LENGTH, Math.floor(maxBytes)),
-	);
+	const maxLen = maxInstructionLength(arch);
+	const requestedSize = Math.max(1, Math.min(maxLen, Math.floor(maxBytes)));
 
 	let bytes: Uint8Array;
 	try {
@@ -107,16 +107,14 @@ const decodeInstructionAt = async (
 		return null;
 	}
 
-	const decoded = decodeInstruction(bytes, address);
+	const decoded = decodeInstruction(bytes, address, arch);
 	if (!decoded) return null;
 
 	return {
 		address,
 		byteLength: decoded.length,
 		bytesHex: [...decoded.bytes].map((b) => fmtHex(b, 2)).join(" "),
-		mnemonic: decoded.prefix
-			? decoded.prefix + " " + decoded.mnemonic
-			: decoded.mnemonic,
+		mnemonic: decoded.mnemonic,
 		operandSegments: decoded.operandSegments,
 		directTargetAddress: decoded.controlFlow.directTargetAddress,
 		ripRelativeTargets: decoded.ripRelativeTargets,
@@ -128,8 +126,9 @@ const decodeLine = async (
 	address: bigint,
 	maxBytes: number,
 	isCurrent: boolean,
+	arch: number,
 ): Promise<LoadedLine | null> => {
-	const decoded = await decodeInstructionAt(source, address, maxBytes);
+	const decoded = await decodeInstructionAt(source, address, maxBytes, arch);
 	if (decoded) {
 		return {
 			line: { ...decoded, isCurrent },
@@ -137,10 +136,8 @@ const decodeLine = async (
 		};
 	}
 
-	const requestedSize = Math.max(
-		1,
-		Math.min(MAX_INSTRUCTION_LENGTH, Math.floor(maxBytes)),
-	);
+	const maxLen = maxInstructionLength(arch);
+	const requestedSize = Math.max(1, Math.min(maxLen, Math.floor(maxBytes)));
 
 	let fallback: Uint8Array;
 	try {
@@ -195,11 +192,13 @@ async function annotateSymbols(
 const buildPreviousGuessLines = async (
 	source: DisassemblyMemorySource,
 	endAddress: bigint,
+	arch: number,
 ): Promise<DisassemblyLine[]> => {
 	if (endAddress <= 0n) {
 		return [];
 	}
 
+	const maxLen = maxInstructionLength(arch);
 	const searchStart = maxU64(
 		0n,
 		endAddress - BigInt(DISASSEMBLY_LOOKBACK_BYTES),
@@ -214,10 +213,7 @@ const buildPreviousGuessLines = async (
 
 		const chainPromise = (async () => {
 			let best: LengthChain = [];
-			const candidateStart = maxU64(
-				searchStart,
-				candidateEnd - BigInt(MAX_INSTRUCTION_LENGTH),
-			);
+			const candidateStart = maxU64(searchStart, candidateEnd - BigInt(maxLen));
 
 			for (let start = candidateStart; start < candidateEnd; start += 1n) {
 				const span = Number(candidateEnd - start);
@@ -229,7 +225,7 @@ const buildPreviousGuessLines = async (
 					continue;
 				}
 
-				const length = decodeInstructionLength(bytes);
+				const length = decodeInstructionLength(bytes, arch);
 				if (length !== span) continue;
 
 				const prefix =
@@ -256,7 +252,12 @@ const buildPreviousGuessLines = async (
 
 	const lines: DisassemblyLine[] = [];
 	for (const entry of chain) {
-		const decoded = await decodeInstructionAt(source, entry.address);
+		const decoded = await decodeInstructionAt(
+			source,
+			entry.address,
+			maxLen,
+			arch,
+		);
 		if (decoded) {
 			lines.push({ ...decoded, isCurrent: false });
 		}
@@ -267,6 +268,7 @@ const buildPreviousGuessLines = async (
 const loadPreviousWindow = async (
 	source: DisassemblyMemorySource,
 	beforeAddress: bigint,
+	arch: number,
 ): Promise<PreviousDisassemblyLoadResult> => {
 	if (beforeAddress <= 0n) {
 		return emptyPreviousLoad();
@@ -279,7 +281,7 @@ const loadPreviousWindow = async (
 	let exhausted = false;
 
 	while (cursor > 0n && loadedBytes < DISASSEMBLY_PAGE_BYTES) {
-		const batch = await buildPreviousGuessLines(source, cursor);
+		const batch = await buildPreviousGuessLines(source, cursor, arch);
 		if (batch.length === 0) {
 			exhausted = true;
 			break;
@@ -296,7 +298,8 @@ const loadPreviousWindow = async (
 	}
 
 	if (!exhausted && cursor > 0n) {
-		hasMoreBefore = (await buildPreviousGuessLines(source, cursor)).length > 0;
+		hasMoreBefore =
+			(await buildPreviousGuessLines(source, cursor, arch)).length > 0;
 	}
 
 	if (lines.length > 0) {
@@ -310,7 +313,9 @@ const loadForwardWindow = async (
 	source: DisassemblyMemorySource,
 	startAddress: bigint,
 	isCurrentStart: boolean,
+	arch: number,
 ): Promise<NextDisassemblyLoadResult> => {
+	const maxLen = maxInstructionLength(arch);
 	const lines: DisassemblyLine[] = [];
 	let cursor = startAddress;
 	let loadedBytes = 0;
@@ -319,8 +324,9 @@ const loadForwardWindow = async (
 		const loaded = await decodeLine(
 			source,
 			cursor,
-			MAX_INSTRUCTION_LENGTH,
+			maxLen,
 			isCurrentStart && cursor === startAddress,
+			arch,
 		);
 		if (!loaded) {
 			break;
@@ -336,8 +342,7 @@ const loadForwardWindow = async (
 
 	let hasMoreAfter = false;
 	try {
-		hasMoreAfter =
-			(await source.read(cursor, MAX_INSTRUCTION_LENGTH, 1)).byteLength > 0;
+		hasMoreAfter = (await source.read(cursor, maxLen, 1)).byteLength > 0;
 	} catch {
 		hasMoreAfter = false;
 	}
@@ -352,12 +357,11 @@ const loadForwardWindow = async (
 export const buildDisassemblyListing = async (
 	source: DisassemblyMemorySource,
 	anchorAddress: bigint,
+	arch: number,
 ): Promise<DebugDisassemblyListing> => {
+	const maxLen = maxInstructionLength(arch);
 	try {
-		if (
-			(await source.read(anchorAddress, MAX_INSTRUCTION_LENGTH, 1))
-				.byteLength === 0
-		) {
+		if ((await source.read(anchorAddress, maxLen, 1)).byteLength === 0) {
 			return makeListing(
 				"missing_memory",
 				`Address ${`0x${fmtHex16(anchorAddress)}`} is not present in dump memory.`,
@@ -372,8 +376,8 @@ export const buildDisassemblyListing = async (
 		);
 	}
 
-	const previousLoad = await loadPreviousWindow(source, anchorAddress);
-	const nextLoad = await loadForwardWindow(source, anchorAddress, true);
+	const previousLoad = await loadPreviousWindow(source, anchorAddress, arch);
+	const nextLoad = await loadForwardWindow(source, anchorAddress, true, arch);
 	const lines = [...previousLoad.lines, ...nextLoad.lines];
 	if (lines.length <= previousLoad.lines.length) {
 		return makeListing(
@@ -397,11 +401,13 @@ export const buildDisassemblyListing = async (
 export const loadPreviousDisassemblyLines = async (
 	source: DisassemblyMemorySource,
 	beforeAddress: bigint,
+	arch: number,
 ): Promise<PreviousDisassemblyLoadResult> =>
-	loadPreviousWindow(source, beforeAddress);
+	loadPreviousWindow(source, beforeAddress, arch);
 
 export const loadNextDisassemblyLines = async (
 	source: DisassemblyMemorySource,
 	startAddress: bigint,
+	arch: number,
 ): Promise<NextDisassemblyLoadResult> =>
-	loadForwardWindow(source, startAddress, false);
+	loadForwardWindow(source, startAddress, false, arch);
