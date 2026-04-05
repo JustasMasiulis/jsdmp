@@ -66,12 +66,6 @@ class WasmDumpDebugger {
 		this.warningMsg.className = "dump-dropzone__error";
 		this.warningMsg.hidden = true;
 		this.shell.append(this.warningMsg);
-
-		// Global drag events so dragging anywhere onto the page works
-		this.shell.addEventListener("dragenter", this.onDragEnter);
-		this.shell.addEventListener("dragover", this.onDragOver);
-		this.shell.addEventListener("dragleave", this.onDragLeave);
-		this.shell.addEventListener("drop", this.onDrop);
 	}
 
 	// ─── drag & drop ──────────────────────────────────────────────────────────
@@ -170,8 +164,9 @@ class WasmDumpDebugger {
 	}
 
 	private mountLayout(): void {
+		this.dropzone.remove();
+
 		this.layout?.dispose();
-		this.showDropzone(false);
 		this.layout = new DockviewDumpLayout(this.shell);
 	}
 }
