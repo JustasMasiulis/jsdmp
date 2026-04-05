@@ -201,7 +201,8 @@ export async function fnentCommand(
 	unwindInfoCache.set(rootEntry.unwindInfoAddress, rootInfo);
 
 	async function getCachedUnwindInfo(rva: number): Promise<UnwindInfo | null> {
-		if (unwindInfoCache.has(rva)) return unwindInfoCache.get(rva)!;
+		const cached = unwindInfoCache.get(rva);
+		if (cached !== undefined) return cached;
 		const info = await readUnwindInfo(reader, mod.address, rva);
 		unwindInfoCache.set(rva, info);
 		return info;

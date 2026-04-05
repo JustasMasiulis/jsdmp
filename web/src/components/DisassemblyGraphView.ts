@@ -1,11 +1,9 @@
 import type { IContentRenderer } from "dockview-core";
-import Sigma from "sigma";
 import {
 	loadAddressPanelState,
 	parseHexAddress,
 	saveAddressPanelState,
 } from "../lib/addressPanelState";
-import { buildGraphologyGraph } from "../lib/cfgGraphologyAdapter";
 import type { CpuContext } from "../lib/cpu_context";
 import { DBG } from "../lib/debugState";
 import {
@@ -25,13 +23,15 @@ import {
 } from "../lib/graph-layout-core";
 import type { SignalHandle } from "../lib/reactive";
 import { BlockTextRenderer } from "../rendering/blockTextProgram";
+import { CfgGraphRenderer } from "../rendering/cfgGraphRenderer";
 import { CfgInteractionHandler } from "../rendering/cfgInteractionHandler";
+import { buildRenderGraph } from "../rendering/cfgRenderGraph";
 import { CfgSelectionLayer } from "../rendering/cfgSelectionLayer";
 import { EdgePolylineRenderer } from "../rendering/edgePolylineProgram";
 
 const PANEL_STATE_KEY = "wasm-dump-debugger:disassembly-graph-panel-state:v1";
 
-type SigmaGraphViewOptions = {
+type GraphViewOptions = {
 	container: HTMLElement;
 	panelId: string;
 };
@@ -70,7 +70,7 @@ const cfgResultToAnnotatedDescriptor = (
 	return { nodes, edges };
 };
 
-export class SigmaDisassemblyGraphView implements IContentRenderer {
+export class DisassemblyGraphView implements IContentRenderer {
 	private readonly panelId: string;
 	private readonly contextHandle: SignalHandle<CpuContext | null>;
 	private graphResult: CfgBuildResult | null = null;
@@ -90,13 +90,13 @@ export class SigmaDisassemblyGraphView implements IContentRenderer {
 	private readonly emptyNode: HTMLParagraphElement;
 	private readonly graphHost: HTMLDivElement;
 
-	private sigmaInstance: Sigma | null = null;
+	private graphRenderer: CfgGraphRenderer | null = null;
 	private edgeRenderer: EdgePolylineRenderer | null = null;
 	private textRenderer: BlockTextRenderer | null = null;
 	private selectionLayer: CfgSelectionLayer | null = null;
 	private interactionHandler: CfgInteractionHandler | null = null;
 	private resizeObserver: ResizeObserver | null = null;
-	private pendingSigmaSetup: (() => void) | null = null;
+	private pendingSetup: (() => void) | null = null;
 
 	private readonly onFollowChange = () => {
 		const next = this.followCheckbox.checked;
@@ -135,7 +135,7 @@ export class SigmaDisassemblyGraphView implements IContentRenderer {
 		this.refreshView(true);
 	};
 
-	constructor(options: SigmaGraphViewOptions) {
+	constructor(options: GraphViewOptions) {
 		this.panelId = options.panelId;
 		this.root = this.createRoot(options.panelId);
 		const dom = this.createDomTree();
@@ -280,7 +280,7 @@ export class SigmaDisassemblyGraphView implements IContentRenderer {
 	private disposeGraph() {
 		this.resizeObserver?.disconnect();
 		this.resizeObserver = null;
-		this.pendingSigmaSetup = null;
+		this.pendingSetup = null;
 		this.interactionHandler?.dispose();
 		this.interactionHandler = null;
 		this.selectionLayer?.dispose();
@@ -289,8 +289,8 @@ export class SigmaDisassemblyGraphView implements IContentRenderer {
 		this.textRenderer = null;
 		this.edgeRenderer?.dispose();
 		this.edgeRenderer = null;
-		this.sigmaInstance?.kill();
-		this.sigmaInstance = null;
+		this.graphRenderer?.dispose();
+		this.graphRenderer = null;
 		this.graphHost.replaceChildren();
 	}
 
@@ -359,89 +359,44 @@ export class SigmaDisassemblyGraphView implements IContentRenderer {
 		this.disposeGraph();
 
 		const layoutCore = new GraphLayoutCore(descriptor, true, true);
-		const graph = buildGraphologyGraph(this.graphResult, layoutCore);
+		const graph = buildRenderGraph(this.graphResult, layoutCore);
 
 		this.graphHost.hidden = false;
 
-		const totalWidth = layoutCore.getWidth();
-		const totalHeight = layoutCore.getHeight();
 		const nodesById = new Map<string, CfgNode>(
 			this.graphResult.blocks.map((node) => [node.id, node]),
 		);
 
-		const setupSigma = () => {
+		const setupRenderer = () => {
 			if (this.isDisposed) return;
 
-			const sigma = new Sigma(graph, this.graphHost, {
-				allowInvalidContainer: true,
-				renderLabels: false,
-				renderEdgeLabels: false,
-				enableEdgeEvents: false,
-				nodeReducer: () => ({
-					hidden: true,
-					color: "#000",
-					label: "",
-					size: 1,
-					x: 0,
-					y: 0,
-				}),
-				edgeReducer: () => ({
-					hidden: true,
-					color: "#000",
-					label: "",
-					size: 0,
-				}),
-				minCameraRatio: null,
-				maxCameraRatio: null,
-				zoomingRatio: 1.3,
-				autoRescale: false,
-				autoCenter: false,
-				itemSizesReference: "positions",
-			});
+			const bboxRange = Math.max(
+				graph.bbox.x[1] - graph.bbox.x[0],
+				graph.bbox.y[1] - graph.bbox.y[0],
+				1,
+			);
 
-			this.sigmaInstance = sigma;
+			const vpW = this.graphHost.clientWidth;
+			const vpH = this.graphHost.clientHeight;
 
-			sigma.setCustomBBox({
-				x: [0, totalWidth],
-				y: [-totalHeight, 0],
-			});
-
-			const { width: vpW, height: vpH } = sigma.getDimensions();
-			const bboxRange = Math.max(totalWidth, totalHeight);
 			const MIN_VISIBLE_GRAPH_SPAN = 480;
 			const maxZoomInRatio = MIN_VISIBLE_GRAPH_SPAN / bboxRange;
-			const maxZoomOutRatio = (bboxRange / Math.min(vpW, vpH)) * 1.5;
+			const maxZoomOutRatio = (bboxRange / Math.min(vpW || 1, vpH || 1)) * 1.5;
 
 			const minRatio = maxZoomInRatio;
 			const maxRatio = Math.max(maxZoomOutRatio, minRatio, 1);
-			sigma.setSetting("minCameraRatio", minRatio);
-			sigma.setSetting("maxCameraRatio", maxRatio);
 
-			const mouseCaptor = sigma.getMouseCaptor();
-			for (const evt of [
-				"mousemove",
-				"mousemovebody",
-				"click",
-				"rightClick",
-				"doubleClick",
-				"wheel",
-				"mousedown",
-				"mouseup",
-				"mouseleave",
-				"mouseenter",
-			] as const) {
-				mouseCaptor.removeAllListeners(evt);
-			}
-			const touchCaptor = sigma.getTouchCaptor();
-			for (const evt of ["touchdown", "touchup", "touchmove"] as const) {
-				touchCaptor.removeAllListeners(evt);
-			}
+			const renderer = new CfgGraphRenderer(this.graphHost, graph, {
+				minRatio,
+				maxRatio,
+			});
+			this.graphRenderer = renderer;
 
-			this.edgeRenderer = new EdgePolylineRenderer(sigma, graph);
-			this.textRenderer = new BlockTextRenderer(sigma, graph, nodesById);
-			this.selectionLayer = new CfgSelectionLayer(sigma, graph, nodesById);
+			this.edgeRenderer = new EdgePolylineRenderer(renderer, graph);
+			this.textRenderer = new BlockTextRenderer(renderer, graph, nodesById);
+			this.selectionLayer = new CfgSelectionLayer(renderer, graph, nodesById);
 			this.interactionHandler = new CfgInteractionHandler(
-				sigma,
+				renderer,
 				graph,
 				this.textRenderer,
 				nodesById,
@@ -451,20 +406,20 @@ export class SigmaDisassemblyGraphView implements IContentRenderer {
 			);
 
 			this.interactionHandler.fitToView();
-			sigma.refresh();
+			renderer.requestRender();
 		};
 
 		if (this.graphHost.clientWidth > 0 && this.graphHost.clientHeight > 0) {
-			setupSigma();
+			setupRenderer();
 		} else {
-			this.pendingSigmaSetup = setupSigma;
+			this.pendingSetup = setupRenderer;
 			this.resizeObserver = new ResizeObserver((entries) => {
 				for (const entry of entries) {
 					if (entry.contentRect.width > 0 && entry.contentRect.height > 0) {
 						this.resizeObserver?.disconnect();
 						this.resizeObserver = null;
-						const pending = this.pendingSigmaSetup;
-						this.pendingSigmaSetup = null;
+						const pending = this.pendingSetup;
+						this.pendingSetup = null;
 						pending?.();
 						break;
 					}

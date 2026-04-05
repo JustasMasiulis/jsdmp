@@ -1,5 +1,3 @@
-import type Graph from "graphology";
-import type Sigma from "sigma";
 import type { CfgNode, CfgTextSyntaxKind } from "../lib/disassemblyGraph";
 import {
 	CARD_PADDING_X,
@@ -7,6 +5,8 @@ import {
 	ESTIMATED_CHAR_WIDTH,
 	ESTIMATED_LINE_HEIGHT,
 } from "../lib/disassemblyGraph";
+import type { CfgGraphRenderer } from "./cfgGraphRenderer";
+import type { CfgRenderGraph } from "./cfgRenderGraph";
 import { createFontAtlas, type FontAtlas } from "./fontAtlas";
 
 const VERTEX_SHADER = `
@@ -66,6 +66,7 @@ const HIGHLIGHT_R = 0.85;
 const HIGHLIGHT_G = 0.88;
 const HIGHLIGHT_B = 0.95;
 const BORDER_WIDTH = 1;
+const SELECTED_BORDER_COLOR = "#3575fe";
 
 type NodeEntry = {
 	id: string;
@@ -80,7 +81,8 @@ function compileShader(
 	type: number,
 	source: string,
 ): WebGLShader {
-	const shader = gl.createShader(type)!;
+	const shader = gl.createShader(type);
+	if (!shader) throw new Error(`Failed to create shader type ${type}`);
 	gl.shaderSource(shader, source);
 	gl.compileShader(shader);
 	if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) {
@@ -98,7 +100,8 @@ function linkProgram(
 ): WebGLProgram {
 	const v = compileShader(gl, gl.VERTEX_SHADER, vs);
 	const f = compileShader(gl, gl.FRAGMENT_SHADER, fs);
-	const p = gl.createProgram()!;
+	const p = gl.createProgram();
+	if (!p) throw new Error("Failed to create WebGL program");
 	gl.attachShader(p, v);
 	gl.attachShader(p, f);
 	gl.linkProgram(p);
@@ -113,20 +116,20 @@ function linkProgram(
 }
 
 export class BlockTextRenderer {
-	private readonly sigma: Sigma;
-	private readonly graph: Graph;
+	private readonly renderer: CfgGraphRenderer;
+	private readonly graph: CfgRenderGraph;
 	private readonly nodesById: Map<string, CfgNode>;
 	private readonly atlas: FontAtlas;
 	private readonly canvas: HTMLCanvasElement;
 	private readonly gl: WebGL2RenderingContext;
 	private readonly program: WebGLProgram;
-	private readonly vbo: WebGLBuffer;
+	private readonly vbo: WebGLBuffer | null;
 
 	private readonly aPosition: number;
 	private readonly aTexcoord: number;
 	private readonly aColor: number;
-	private readonly uMatrix: WebGLUniformLocation;
-	private readonly uAtlas: WebGLUniformLocation;
+	private readonly uMatrix: WebGLUniformLocation | null;
+	private readonly uAtlas: WebGLUniformLocation | null;
 
 	private readonly boundRender: () => void;
 	private readonly resizeObserver: ResizeObserver;
@@ -146,12 +149,16 @@ export class BlockTextRenderer {
 
 	private highlightedTerm: string | null = null;
 
-	constructor(sigma: Sigma, graph: Graph, nodesById: Map<string, CfgNode>) {
-		this.sigma = sigma;
+	constructor(
+		renderer: CfgGraphRenderer,
+		graph: CfgRenderGraph,
+		nodesById: Map<string, CfgNode>,
+	) {
+		this.renderer = renderer;
 		this.graph = graph;
 		this.nodesById = nodesById;
 
-		const container = sigma.getContainer();
+		const container = renderer.getContainer();
 		this.canvas = document.createElement("canvas");
 		this.canvas.style.position = "absolute";
 		this.canvas.style.inset = "0";
@@ -163,31 +170,32 @@ export class BlockTextRenderer {
 			alpha: true,
 			premultipliedAlpha: false,
 			antialias: false,
-		})!;
+		});
+		if (!gl) throw new Error("WebGL2 not supported");
 		this.gl = gl;
 
 		this.program = linkProgram(gl, VERTEX_SHADER, FRAGMENT_SHADER);
 		this.aPosition = gl.getAttribLocation(this.program, "a_position");
 		this.aTexcoord = gl.getAttribLocation(this.program, "a_texcoord");
 		this.aColor = gl.getAttribLocation(this.program, "a_color");
-		this.uMatrix = gl.getUniformLocation(this.program, "u_matrix")!;
-		this.uAtlas = gl.getUniformLocation(this.program, "u_atlas")!;
+		this.uMatrix = gl.getUniformLocation(this.program, "u_matrix");
+		this.uAtlas = gl.getUniformLocation(this.program, "u_atlas");
 
-		this.vbo = gl.createBuffer()!;
+		this.vbo = gl.createBuffer();
 		this.atlas = createFontAtlas(gl);
 
 		this.buildNodeIndex();
 
 		this.resizeObserver = new ResizeObserver(() => {
 			if (this.syncCanvasSize()) {
-				this.sigma.refresh();
+				this.renderer.requestRender();
 			}
 		});
 		this.resizeObserver.observe(container);
 		this.syncCanvasSize();
 
 		this.boundRender = () => this.onFrame();
-		sigma.on("afterRender", this.boundRender);
+		renderer.onRender(this.boundRender);
 	}
 
 	highlightTerm(term: string | null): void {
@@ -203,7 +211,7 @@ export class BlockTextRenderer {
 	}
 
 	dispose(): void {
-		this.sigma.off("afterRender", this.boundRender);
+		this.renderer.offRender(this.boundRender);
 		this.resizeObserver.disconnect();
 		this.atlas.dispose(this.gl);
 		this.gl.deleteBuffer(this.vbo);
@@ -212,25 +220,26 @@ export class BlockTextRenderer {
 	}
 
 	private buildNodeIndex(): void {
-		this.graph.forEachNode((nodeId) => {
-			const x = this.graph.getNodeAttribute(nodeId, "x") as number;
-			const sigmaY = this.graph.getNodeAttribute(nodeId, "y") as number;
-			const w = (this.graph.getNodeAttribute(nodeId, "width") as number) ?? 0;
-			const h = (this.graph.getNodeAttribute(nodeId, "height") as number) ?? 0;
-			this.nodeEntries.push({ id: nodeId, x, y: sigmaY, w, h });
-		});
+		for (const node of this.graph.nodes) {
+			this.nodeEntries.push({
+				id: node.id,
+				x: node.x,
+				y: node.y,
+				w: node.width,
+				h: node.height,
+			});
+		}
 	}
 
 	private syncCanvasSize(): boolean {
-		const container = this.sigma.getContainer();
+		const container = this.renderer.getContainer();
 		const w = container.clientWidth;
 		const h = container.clientHeight;
 		const dpr = window.devicePixelRatio || 1;
 		const targetW = Math.round(w * dpr);
 		const targetH = Math.round(h * dpr);
-		if (this.canvas.width === targetW && this.canvas.height === targetH) {
+		if (this.canvas.width === targetW && this.canvas.height === targetH)
 			return false;
-		}
 		this.canvas.width = targetW;
 		this.canvas.height = targetH;
 		this.canvas.style.width = `${w}px`;
@@ -241,16 +250,13 @@ export class BlockTextRenderer {
 	}
 
 	private updateBBox(): void {
-		const bbox = this.sigma.getCustomBBox();
-		if (!bbox) return;
+		const bbox = this.renderer.getBBox();
 		const prevRange = this.bboxRange;
 		this.bboxCenterX = (bbox.x[0] + bbox.x[1]) / 2;
 		this.bboxCenterY = (bbox.y[0] + bbox.y[1]) / 2;
 		this.bboxRange = Math.max(bbox.x[1] - bbox.x[0], bbox.y[1] - bbox.y[0], 1);
 		this.invBBoxRange = 1 / this.bboxRange;
-		if (this.bboxRange !== prevRange) {
-			this.dirty = true;
-		}
+		if (this.bboxRange !== prevRange) this.dirty = true;
 	}
 
 	private onFrame(): void {
@@ -264,11 +270,11 @@ export class BlockTextRenderer {
 
 	private updateCull(): void {
 		this.updateBBox();
-		const { width: vpW, height: vpH } = this.sigma.getDimensions();
+		const { width: vpW, height: vpH } = this.renderer.getDimensions();
 		if (vpW <= 0 || vpH <= 0) return;
 
-		const corner1 = this.sigma.viewportToGraph({ x: -200, y: -200 });
-		const corner2 = this.sigma.viewportToGraph({
+		const corner1 = this.renderer.viewportToGraph({ x: -200, y: -200 });
+		const corner2 = this.renderer.viewportToGraph({
 			x: vpW + 200,
 			y: vpH + 200,
 		});
@@ -359,8 +365,8 @@ export class BlockTextRenderer {
 			const nw = node.w * inv;
 			const nh = node.h * inv;
 
-			const isSelected =
-				this.graph.getNodeAttribute(node.id, "borderColor") === "#3575fe";
+			const renderNode = this.graph.nodeMap.get(node.id);
+			const isSelected = renderNode?.borderColor === SELECTED_BORDER_COLOR;
 			const br = isSelected ? SEL_BORDER_R : BORDER_R;
 			const bg = isSelected ? SEL_BORDER_G : BORDER_G;
 			const bb = isSelected ? SEL_BORDER_B : BORDER_B;
@@ -568,7 +574,7 @@ export class BlockTextRenderer {
 
 		if (this.vertexCount === 0) return;
 
-		const params = this.sigma.getRenderParams();
+		const params = this.renderer.getRenderParams();
 
 		gl.enable(gl.BLEND);
 		gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);

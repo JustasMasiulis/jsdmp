@@ -1,5 +1,3 @@
-import type Graph from "graphology";
-import type Sigma from "sigma";
 import { renderCfgBlockHtml } from "../lib/cfgHtml";
 import type { CfgNode } from "../lib/disassemblyGraph";
 import {
@@ -8,6 +6,8 @@ import {
 	ESTIMATED_CHAR_WIDTH,
 	ESTIMATED_LINE_HEIGHT,
 } from "../lib/disassemblyGraph";
+import type { CfgGraphRenderer } from "./cfgGraphRenderer";
+import type { CfgRenderGraph } from "./cfgRenderGraph";
 
 const FONT_SIZE = 12;
 const FONT_FAMILY =
@@ -20,8 +20,8 @@ type NodeEntry = {
 };
 
 export class CfgSelectionLayer {
-	private readonly sigma: Sigma;
-	private readonly graph: Graph;
+	private readonly renderer: CfgGraphRenderer;
+	private readonly graph: CfgRenderGraph;
 	private readonly container: HTMLDivElement;
 	private readonly viewport: HTMLDivElement;
 	private readonly boundUpdate: () => void;
@@ -30,8 +30,12 @@ export class CfgSelectionLayer {
 	private readonly paddingTopOffset: number;
 	private nodes: NodeEntry[] = [];
 
-	constructor(sigma: Sigma, graph: Graph, nodesById: Map<string, CfgNode>) {
-		this.sigma = sigma;
+	constructor(
+		renderer: CfgGraphRenderer,
+		graph: CfgRenderGraph,
+		nodesById: Map<string, CfgNode>,
+	) {
+		this.renderer = renderer;
 		this.graph = graph;
 		this.nodesById = nodesById;
 
@@ -52,33 +56,34 @@ export class CfgSelectionLayer {
 		this.viewport.style.transformOrigin = "0 0";
 		this.container.appendChild(this.viewport);
 
-		sigma.getContainer().appendChild(this.container);
+		renderer.getContainer().appendChild(this.container);
 		this.prebuildBlocks();
 
 		this.boundUpdate = () => this.syncTransform();
-		sigma.on("afterRender", this.boundUpdate);
+		renderer.onRender(this.boundUpdate);
 		this.syncTransform();
 	}
 
 	private static measureCharWidth(): number {
 		const canvas = document.createElement("canvas");
-		const ctx = canvas.getContext("2d")!;
+		const ctx = canvas.getContext("2d");
+		if (!ctx) return 8;
 		ctx.font = `${FONT_SIZE}px ${FONT_FAMILY}`;
 		return ctx.measureText("M").width;
 	}
 
 	dispose(): void {
-		this.sigma.off("afterRender", this.boundUpdate);
+		this.renderer.offRender(this.boundUpdate);
 		this.container.remove();
 		this.nodes = [];
 	}
 
 	private prebuildBlocks(): void {
-		this.graph.forEachNode((nodeId) => {
-			const graphX = this.graph.getNodeAttribute(nodeId, "x") as number;
-			const graphY = -(this.graph.getNodeAttribute(nodeId, "y") as number);
-			const w = (this.graph.getNodeAttribute(nodeId, "width") as number) ?? 0;
-			const h = (this.graph.getNodeAttribute(nodeId, "height") as number) ?? 0;
+		for (const node of this.graph.nodes) {
+			const graphX = node.x;
+			const graphY = -node.y;
+			const w = node.width;
+			const h = node.height;
 
 			const cssPadX = CARD_PADDING_X / 2 - 1;
 			const cssPadY = CARD_PADDING_Y / 2 - 1 - this.paddingTopOffset;
@@ -102,7 +107,7 @@ export class CfgSelectionLayer {
 			this.viewport.appendChild(div);
 
 			const entry: NodeEntry = {
-				id: nodeId,
+				id: node.id,
 				div,
 				populated: false,
 			};
@@ -111,7 +116,7 @@ export class CfgSelectionLayer {
 			div.addEventListener("mouseleave", () => this.depopulateBlock(entry));
 
 			this.nodes.push(entry);
-		});
+		}
 	}
 
 	private populateBlock(entry: NodeEntry): void {
@@ -126,21 +131,17 @@ export class CfgSelectionLayer {
 	private depopulateBlock(entry: NodeEntry): void {
 		if (!entry.populated) return;
 		const sel = window.getSelection();
-		if (sel && !sel.isCollapsed && entry.div.contains(sel.anchorNode)) {
-			return;
-		}
+		if (sel && !sel.isCollapsed && entry.div.contains(sel.anchorNode)) return;
 		entry.populated = false;
 		entry.div.textContent = "";
 	}
 
 	private syncTransform(): void {
-		const bbox = this.sigma.getCustomBBox();
-		if (!bbox) return;
-
+		const bbox = this.renderer.getBBox();
 		const bboxRange = Math.max(bbox.x[1] - bbox.x[0], bbox.y[1] - bbox.y[0], 1);
 
-		const o0 = this.sigma.graphToViewport({ x: 0, y: 0 });
-		const o1 = this.sigma.graphToViewport({ x: bboxRange, y: 0 });
+		const o0 = this.renderer.graphToViewport({ x: 0, y: 0 });
+		const o1 = this.renderer.graphToViewport({ x: bboxRange, y: 0 });
 		const scale = (o1.x - o0.x) / bboxRange;
 
 		this.viewport.style.transform = `translate(${o0.x}px, ${o0.y}px) scale(${scale})`;

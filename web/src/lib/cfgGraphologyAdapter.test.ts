@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { buildGraphologyGraph, trimPolylineEnd } from "./cfgGraphologyAdapter";
+import { buildRenderGraph, trimPolylineEnd } from "../rendering/cfgRenderGraph";
 import type { CfgBuildResult } from "./disassemblyGraph";
 import type { GraphLayoutCore } from "./graph-layout-core";
 
@@ -77,7 +77,7 @@ describe("trimPolylineEnd", () => {
 	});
 });
 
-describe("buildGraphologyGraph", () => {
+describe("buildRenderGraph", () => {
 	const makeLayout = (
 		blocks: Array<{
 			id: string;
@@ -155,20 +155,16 @@ describe("buildGraphologyGraph", () => {
 			},
 		]);
 
-		const graph = buildGraphologyGraph(stubResult, layout);
-		expect(graph.order).toBe(1);
-		expect(graph.hasNode("block:a")).toBe(true);
+		const result = buildRenderGraph(stubResult, layout);
+		expect(result.nodes.length).toBe(1);
+		expect(result.nodeMap.has("block:a")).toBe(true);
 
-		const attrs = graph.getNodeAttributes("block:a");
-		expect(attrs.x).toBe(10);
-		expect(attrs.y).toBe(-20);
-		expect(attrs.width).toBe(120);
-		expect(attrs.height).toBe(80);
-		expect(attrs.label).toBe("label-a");
-		expect(attrs.color).toBe("#f8f9fa");
-		expect(attrs.borderColor).toBe("#9ca3af");
-		expect(attrs.type).toBe("rectangle");
-		expect(attrs.size).toBe(120);
+		const node = result.nodes[0];
+		expect(node.x).toBe(10);
+		expect(node.y).toBe(-20);
+		expect(node.width).toBe(120);
+		expect(node.height).toBe(80);
+		expect(node.borderColor).toBe("#d1d5db");
 	});
 
 	test("creates edges with correct attributes", () => {
@@ -202,17 +198,13 @@ describe("buildGraphologyGraph", () => {
 			},
 		]);
 
-		const graph = buildGraphologyGraph(stubResult, layout);
-		expect(graph.size).toBe(1);
+		const result = buildRenderGraph(stubResult, layout);
+		expect(result.edges.length).toBe(1);
 
-		const edgeKey = "block:a→block:b";
-		expect(graph.hasEdge(edgeKey)).toBe(true);
-
-		const attrs = graph.getEdgeAttributes(edgeKey);
-		expect(attrs.color).toBe("#009b5e");
-		expect(attrs.arrowColor).toBe("#009b5e");
-		expect(attrs.hidden).toBe(true);
-		expect(attrs.polylinePoints).toEqual([
+		const edge = result.edges[0];
+		expect(edge.key).toBe("block:a\u2192block:b");
+		expect(edge.color).toBe("#009b5e");
+		expect(edge.polylinePoints).toEqual([
 			{ x: 50, y: -50 },
 			{ x: 50, y: -100 },
 			{ x: 50, y: -150 },
@@ -250,9 +242,8 @@ describe("buildGraphologyGraph", () => {
 			},
 		]);
 
-		const graph = buildGraphologyGraph(stubResult, layout);
-		const attrs = graph.getEdgeAttributes("block:a→block:b");
-		expect(attrs.polylinePoints).toEqual([
+		const result = buildRenderGraph(stubResult, layout);
+		expect(result.edges[0].polylinePoints).toEqual([
 			{ x: 10, y: -20 },
 			{ x: 30, y: -40 },
 		]);
@@ -290,10 +281,11 @@ describe("buildGraphologyGraph", () => {
 				},
 			]);
 
-			const graph = buildGraphologyGraph(stubResult, layout);
-			const edgeKey = `block:${i}a→block:${i}b`;
-			expect(graph.getEdgeAttribute(edgeKey, "color")).toBe(expected[i]);
-			expect(graph.getEdgeAttribute(edgeKey, "arrowColor")).toBe(expected[i]);
+			const result = buildRenderGraph(stubResult, layout);
+			const edgeKey = `block:${i}a\u2192block:${i}b`;
+			const edge = result.edges.find((e) => e.key === edgeKey);
+			expect(edge).toBeDefined();
+			expect(edge?.color).toBe(expected[i]);
 		}
 	});
 
@@ -316,14 +308,14 @@ describe("buildGraphologyGraph", () => {
 			},
 		]);
 
-		const graph = buildGraphologyGraph(stubResult, layout);
-		expect(graph.size).toBe(0);
+		const result = buildRenderGraph(stubResult, layout);
+		expect(result.edges.length).toBe(0);
 	});
 
 	test("handles empty layout", () => {
 		const layout = makeLayout([]);
-		const graph = buildGraphologyGraph(stubResult, layout);
-		expect(graph.order).toBe(0);
-		expect(graph.size).toBe(0);
+		const result = buildRenderGraph(stubResult, layout);
+		expect(result.nodes.length).toBe(0);
+		expect(result.edges.length).toBe(0);
 	});
 });

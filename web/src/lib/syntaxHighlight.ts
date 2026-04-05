@@ -14,6 +14,7 @@ export const renderSegment = (
 	onNavigate?: AddressNavigator,
 ) => {
 	if (segment.targetAddress !== undefined && onNavigate) {
+		const addr = segment.targetAddress;
 		const span = document.createElement("span");
 		span.className = "disasm-link";
 		const cls = SYNTAX_CSS[segment.syntaxKind];
@@ -22,7 +23,7 @@ export const renderSegment = (
 		span.addEventListener("click", (e) => {
 			e.preventDefault();
 			e.stopPropagation();
-			onNavigate(segment.targetAddress!);
+			onNavigate(addr);
 		});
 		parent.appendChild(span);
 		return;

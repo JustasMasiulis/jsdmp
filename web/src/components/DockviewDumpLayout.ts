@@ -21,7 +21,7 @@ import {
 	saveLayout,
 	THREADS_COMPONENT,
 } from "../lib/dockviewLayout";
-import { SigmaDisassemblyGraphView } from "./SigmaDisassemblyGraphView";
+import { DisassemblyGraphView } from "./DisassemblyGraphView";
 import { VanillaCommandView } from "./VanillaCommandView";
 import { VanillaDisassemblyView } from "./VanillaDisassemblyView";
 import { VanillaDumpSummary } from "./VanillaDumpSummary";
@@ -95,7 +95,7 @@ export class DockviewDumpLayout {
 				};
 			}
 			case DISASSEMBLY_GRAPH_COMPONENT: {
-				const view = new SigmaDisassemblyGraphView({
+				const view = new DisassemblyGraphView({
 					container: el,
 					panelId: options.id,
 				});

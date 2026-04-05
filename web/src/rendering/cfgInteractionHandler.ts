@@ -1,5 +1,3 @@
-import type Graph from "graphology";
-import type Sigma from "sigma";
 import type { CfgNode, CfgTextSegment } from "../lib/disassemblyGraph";
 import {
 	CARD_PADDING_X,
@@ -8,6 +6,8 @@ import {
 	ESTIMATED_LINE_HEIGHT,
 } from "../lib/disassemblyGraph";
 import type { BlockTextRenderer } from "./blockTextProgram";
+import type { CfgGraphRenderer } from "./cfgGraphRenderer";
+import type { CfgRenderGraph } from "./cfgRenderGraph";
 
 const SELECTED_BORDER_COLOR = "#3575fe";
 const DEFAULT_BORDER_COLOR = "#d1d5db";
@@ -21,8 +21,8 @@ type NodePos = {
 };
 
 export class CfgInteractionHandler {
-	private readonly sigma: Sigma;
-	private readonly graph: Graph;
+	private readonly renderer: CfgGraphRenderer;
+	private readonly graph: CfgRenderGraph;
 	private readonly textRenderer: BlockTextRenderer;
 	private readonly nodesById: Map<string, CfgNode>;
 	private readonly statusCallback: (status: string) => void;
@@ -35,13 +35,13 @@ export class CfgInteractionHandler {
 	private readonly boundOnClick: (event: MouseEvent) => void;
 
 	constructor(
-		sigma: Sigma,
-		graph: Graph,
+		renderer: CfgGraphRenderer,
+		graph: CfgRenderGraph,
 		textRenderer: BlockTextRenderer,
 		nodesById: Map<string, CfgNode>,
 		statusCallback: (status: string) => void,
 	) {
-		this.sigma = sigma;
+		this.renderer = renderer;
 		this.graph = graph;
 		this.textRenderer = textRenderer;
 		this.nodesById = nodesById;
@@ -49,16 +49,18 @@ export class CfgInteractionHandler {
 
 		this.termCounts = this.buildTermCounts();
 
-		graph.forEachNode((nodeId) => {
-			const x = graph.getNodeAttribute(nodeId, "x") as number;
-			const y = -(graph.getNodeAttribute(nodeId, "y") as number);
-			const w = (graph.getNodeAttribute(nodeId, "width") as number) ?? 0;
-			const h = (graph.getNodeAttribute(nodeId, "height") as number) ?? 0;
-			this.nodePositions.push({ id: nodeId, x, y, w, h });
-		});
+		for (const node of graph.nodes) {
+			this.nodePositions.push({
+				id: node.id,
+				x: node.x,
+				y: -node.y,
+				w: node.width,
+				h: node.height,
+			});
+		}
 
 		this.boundOnClick = (e) => this.handleClick(e);
-		const container = sigma.getContainer();
+		const container = renderer.getContainer();
 		container.addEventListener("click", this.boundOnClick);
 	}
 
@@ -71,11 +73,10 @@ export class CfgInteractionHandler {
 	}
 
 	fitToView(): void {
-		const { width, height } = this.sigma.getDimensions();
+		const { width, height } = this.renderer.getDimensions();
 		if (width <= 0 || height <= 0) return;
 
-		const bbox = this.sigma.getCustomBBox();
-		if (!bbox) return;
+		const bbox = this.renderer.getBBox();
 		const bboxW = bbox.x[1] - bbox.x[0];
 		const bboxH = bbox.y[1] - bbox.y[0];
 		const bboxRange = Math.max(bboxW, bboxH, 1);
@@ -86,16 +87,15 @@ export class CfgInteractionHandler {
 		const ratioX = (normW * width) / Math.max(width - padding * 2, 1);
 		const ratioY = (normH * height) / Math.max(height - padding * 2, 1);
 
-		this.sigma.getCamera().setState({
+		this.renderer.setCameraState({
 			x: 0.5,
 			y: 0.5,
 			ratio: Math.max(ratioX, ratioY, 0.1),
-			angle: 0,
 		});
 	}
 
 	dispose(): void {
-		const container = this.sigma.getContainer();
+		const container = this.renderer.getContainer();
 		container.removeEventListener("click", this.boundOnClick);
 	}
 
@@ -103,11 +103,11 @@ export class CfgInteractionHandler {
 		const sel = window.getSelection();
 		if (sel && !sel.isCollapsed) return;
 
-		const rect = this.sigma.getContainer().getBoundingClientRect();
+		const rect = this.renderer.getContainer().getBoundingClientRect();
 		const vx = event.clientX - rect.left;
 		const vy = event.clientY - rect.top;
 
-		const graphPos = this.sigma.viewportToGraph({ x: vx, y: vy });
+		const graphPos = this.renderer.viewportToGraph({ x: vx, y: vy });
 		const gx = graphPos.x;
 		const gy = -graphPos.y;
 
@@ -170,14 +170,16 @@ export class CfgInteractionHandler {
 		const prev = this._selectedNodeId;
 		if (prev === nodeId) return;
 
-		if (prev !== null && this.graph.hasNode(prev)) {
-			this.graph.setNodeAttribute(prev, "borderColor", DEFAULT_BORDER_COLOR);
+		if (prev !== null) {
+			const prevNode = this.graph.nodeMap.get(prev);
+			if (prevNode) prevNode.borderColor = DEFAULT_BORDER_COLOR;
 		}
 
 		this._selectedNodeId = nodeId;
 
-		if (nodeId !== null && this.graph.hasNode(nodeId)) {
-			this.graph.setNodeAttribute(nodeId, "borderColor", SELECTED_BORDER_COLOR);
+		if (nodeId !== null) {
+			const nextNode = this.graph.nodeMap.get(nodeId);
+			if (nextNode) nextNode.borderColor = SELECTED_BORDER_COLOR;
 		}
 
 		this.textRenderer.markDirtyAndRender();

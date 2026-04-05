@@ -22,7 +22,8 @@ export type FontAtlas = {
 
 export function createFontAtlas(gl: WebGL2RenderingContext): FontAtlas {
 	const canvas = document.createElement("canvas");
-	const ctx = canvas.getContext("2d")!;
+	const ctx = canvas.getContext("2d");
+	if (!ctx) throw new Error("Canvas 2D not supported");
 
 	ctx.font = `${RENDER_FONT_SIZE}px ${FONT_FAMILY}`;
 	const metrics = ctx.measureText("M");
@@ -47,7 +48,8 @@ export function createFontAtlas(gl: WebGL2RenderingContext): FontAtlas {
 		ctx.fillText(String.fromCharCode(code), x, y);
 	}
 
-	const texture = gl.createTexture()!;
+	const texture = gl.createTexture();
+	if (!texture) throw new Error("Failed to create WebGL texture");
 	gl.bindTexture(gl.TEXTURE_2D, texture);
 	gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, canvas);
 	gl.generateMipmap(gl.TEXTURE_2D);

@@ -140,7 +140,7 @@ describe("AMD64 formatted instruction text", () => {
 			(s) => s.syntaxKind === "number" && s.targetAddress !== undefined,
 		);
 		expect(numSeg).toBeDefined();
-		expect(numSeg!.targetAddress).toBe(0x1015n);
+		expect(numSeg?.targetAddress).toBe(0x1015n);
 	});
 });
 

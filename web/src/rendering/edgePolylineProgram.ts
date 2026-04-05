@@ -1,5 +1,6 @@
-import type Graph from "graphology";
-import type Sigma from "sigma";
+import type { CfgGraphRenderer } from "./cfgGraphRenderer";
+import type { CfgRenderGraph } from "./cfgRenderGraph";
+import { trimPolylineEnd } from "./cfgRenderGraph";
 
 const VERTEX_SHADER = `
 attribute vec2 a_position;
@@ -40,11 +41,6 @@ const ARROW_HEIGHT = 6;
 const ARROW_TRIM = ARROW_WIDTH;
 
 type PolylinePoint = { x: number; y: number };
-
-type EdgeAttributes = {
-	color: string;
-	polylinePoints: PolylinePoint[];
-};
 
 function parseColor(hex: string): [number, number, number, number] {
 	const r = Number.parseInt(hex.slice(1, 3), 16) / 255;
@@ -90,38 +86,6 @@ function createProgram(
 	gl.deleteShader(vert);
 	gl.deleteShader(frag);
 	return program;
-}
-
-function trimPolylineEnd(
-	points: PolylinePoint[],
-	trimLength: number,
-): PolylinePoint[] {
-	if (points.length < 2) return points;
-
-	const result = points.slice();
-	let remaining = trimLength;
-
-	while (remaining > 0 && result.length >= 2) {
-		const last = result[result.length - 1];
-		const prev = result[result.length - 2];
-		const dx = last.x - prev.x;
-		const dy = last.y - prev.y;
-		const segLen = Math.sqrt(dx * dx + dy * dy);
-
-		if (segLen <= remaining) {
-			remaining -= segLen;
-			result.pop();
-		} else {
-			const ratio = (segLen - remaining) / segLen;
-			result[result.length - 1] = {
-				x: prev.x + dx * ratio,
-				y: prev.y + dy * ratio,
-			};
-			remaining = 0;
-		}
-	}
-
-	return result;
 }
 
 function writeVertex(
@@ -231,8 +195,8 @@ function writeSegmentQuad(
 }
 
 export class EdgePolylineRenderer {
-	private sigma: Sigma;
-	private graph: Graph;
+	private renderer: CfgGraphRenderer;
+	private graph: CfgRenderGraph;
 	private canvas: HTMLCanvasElement;
 	private gl: WebGL2RenderingContext;
 	private program: WebGLProgram;
@@ -250,11 +214,15 @@ export class EdgePolylineRenderer {
 	private boundRender: () => void;
 	private resizeObserver: ResizeObserver;
 
-	constructor(sigma: Sigma, graph: Graph) {
-		this.sigma = sigma;
+	private bboxCenterX = 0;
+	private bboxCenterY = 0;
+	private bboxRange = 1;
+
+	constructor(renderer: CfgGraphRenderer, graph: CfgRenderGraph) {
+		this.renderer = renderer;
 		this.graph = graph;
 
-		const container = sigma.getContainer();
+		const container = renderer.getContainer();
 		this.canvas = document.createElement("canvas");
 		this.canvas.style.position = "absolute";
 		this.canvas.style.inset = "0";
@@ -290,40 +258,26 @@ export class EdgePolylineRenderer {
 		this.vbo = vbo;
 
 		this.boundRender = () => this.render();
-		sigma.on("afterRender", this.boundRender);
+		renderer.onRender(this.boundRender);
 
 		this.resizeObserver = new ResizeObserver(() => {
 			if (this.syncCanvasSize()) {
-				this.sigma.refresh();
+				this.renderer.requestRender();
 			}
 		});
 		this.resizeObserver.observe(container);
 		this.syncCanvasSize();
-
-		graph.on("edgeAdded", () => {
-			this.dirty = true;
-		});
-		graph.on("edgeDropped", () => {
-			this.dirty = true;
-		});
-		graph.on("edgeAttributesUpdated", () => {
-			this.dirty = true;
-		});
-		graph.on("cleared", () => {
-			this.dirty = true;
-		});
 	}
 
 	private syncCanvasSize(): boolean {
-		const container = this.sigma.getContainer();
+		const container = this.renderer.getContainer();
 		const width = container.clientWidth;
 		const height = container.clientHeight;
 		const dpr = window.devicePixelRatio || 1;
 		const targetW = Math.round(width * dpr);
 		const targetH = Math.round(height * dpr);
-		if (this.canvas.width === targetW && this.canvas.height === targetH) {
+		if (this.canvas.width === targetW && this.canvas.height === targetH)
 			return false;
-		}
 		this.canvas.width = targetW;
 		this.canvas.height = targetH;
 		this.canvas.style.width = `${width}px`;
@@ -338,29 +292,19 @@ export class EdgePolylineRenderer {
 	}
 
 	private normalizePoint(p: PolylinePoint): PolylinePoint {
-		const cx = this.bboxCenterX;
-		const cy = this.bboxCenterY;
-		const r = this.bboxRange;
 		return {
-			x: 0.5 + (p.x - cx) / r,
-			y: 0.5 + (p.y - cy) / r,
+			x: 0.5 + (p.x - this.bboxCenterX) / this.bboxRange,
+			y: 0.5 + (p.y - this.bboxCenterY) / this.bboxRange,
 		};
 	}
 
-	private bboxCenterX = 0;
-	private bboxCenterY = 0;
-	private bboxRange = 1;
-
 	private updateBBox() {
-		const bbox = this.sigma.getCustomBBox();
-		if (!bbox) return;
+		const bbox = this.renderer.getBBox();
 		const prevRange = this.bboxRange;
 		this.bboxCenterX = (bbox.x[0] + bbox.x[1]) / 2;
 		this.bboxCenterY = (bbox.y[0] + bbox.y[1]) / 2;
 		this.bboxRange = Math.max(bbox.x[1] - bbox.x[0], bbox.y[1] - bbox.y[0], 1);
-		if (this.bboxRange !== prevRange) {
-			this.dirty = true;
-		}
+		if (this.bboxRange !== prevRange) this.dirty = true;
 	}
 
 	private rebuildBuffer() {
@@ -369,12 +313,11 @@ export class EdgePolylineRenderer {
 		let totalSegments = 0;
 		let totalArrows = 0;
 
-		this.graph.forEachEdge((_edge, attrs) => {
-			const { polylinePoints } = attrs as unknown as EdgeAttributes;
-			if (!polylinePoints || polylinePoints.length < 2) return;
-			totalSegments += Math.max(0, polylinePoints.length - 2);
+		for (const edge of this.graph.edges) {
+			if (!edge.polylinePoints || edge.polylinePoints.length < 2) continue;
+			totalSegments += Math.max(0, edge.polylinePoints.length - 2);
 			totalArrows += 1;
-		});
+		}
 
 		const vertexCount = (totalSegments + totalArrows) * 6 + totalArrows * 3;
 		const buf = new Float32Array(vertexCount * FLOATS_PER_VERTEX);
@@ -382,13 +325,12 @@ export class EdgePolylineRenderer {
 
 		const normTrim = ARROW_TRIM / this.bboxRange;
 
-		this.graph.forEachEdge((_edge, attrs) => {
-			const { polylinePoints, color } = attrs as unknown as EdgeAttributes;
-			if (!polylinePoints || polylinePoints.length < 2) return;
+		for (const edge of this.graph.edges) {
+			if (!edge.polylinePoints || edge.polylinePoints.length < 2) continue;
 
-			const [r, g, b, a] = parseColor(color);
+			const [r, g, b, a] = parseColor(edge.color);
 
-			const npts = polylinePoints.map((p: PolylinePoint) =>
+			const npts = edge.polylinePoints.map((p: PolylinePoint) =>
 				this.normalizePoint(p),
 			);
 			const trimmed = trimPolylineEnd(npts, normTrim);
@@ -416,7 +358,7 @@ export class EdgePolylineRenderer {
 				a,
 				1 / this.bboxRange,
 			);
-		});
+		}
 
 		const gl = this.gl;
 		gl.bindBuffer(gl.ARRAY_BUFFER, this.vbo);
@@ -433,7 +375,7 @@ export class EdgePolylineRenderer {
 		if (this.vertexCount === 0) return;
 
 		const gl = this.gl;
-		const params = this.sigma.getRenderParams();
+		const params = this.renderer.getRenderParams();
 
 		gl.clear(gl.COLOR_BUFFER_BIT);
 		gl.enable(gl.BLEND);
@@ -461,7 +403,7 @@ export class EdgePolylineRenderer {
 	}
 
 	dispose() {
-		this.sigma.off("afterRender", this.boundRender);
+		this.renderer.offRender(this.boundRender);
 		this.resizeObserver.disconnect();
 		this.gl.deleteBuffer(this.vbo);
 		this.gl.deleteProgram(this.program);

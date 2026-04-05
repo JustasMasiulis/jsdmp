@@ -1,8 +1,29 @@
-import Graph from "graphology";
-import type { CfgBuildResult } from "./disassemblyGraph";
-import type { GraphLayoutCore } from "./graph-layout-core";
+import type { CfgBuildResult } from "../lib/disassemblyGraph";
+import type { GraphLayoutCore } from "../lib/graph-layout-core";
 
 type Point = { x: number; y: number };
+
+export type CfgRenderNode = {
+	id: string;
+	x: number;
+	y: number;
+	width: number;
+	height: number;
+	borderColor: string;
+};
+
+export type CfgRenderEdge = {
+	key: string;
+	color: string;
+	polylinePoints: Array<Point>;
+};
+
+export type CfgRenderGraph = {
+	nodes: CfgRenderNode[];
+	edges: CfgRenderEdge[];
+	nodeMap: Map<string, CfgRenderNode>;
+	bbox: { x: [number, number]; y: [number, number] };
+};
 
 const EDGE_COLOR_CSS: Record<string, string> = {
 	red: "#f30c00",
@@ -15,9 +36,7 @@ export function trimPolylineEnd(
 	points: Array<Point>,
 	trimDistance: number,
 ): Array<Point> {
-	if (points.length < 2 || trimDistance <= 0) {
-		return points;
-	}
+	if (points.length < 2 || trimDistance <= 0) return points;
 
 	let totalLength = 0;
 	for (let i = 1; i < points.length; i += 1) {
@@ -26,9 +45,7 @@ export function trimPolylineEnd(
 		totalLength += Math.hypot(end.x - start.x, end.y - start.y);
 	}
 
-	if (totalLength <= trimDistance) {
-		return points;
-	}
+	if (totalLength <= trimDistance) return points;
 
 	const trimmed = points.map((point) => ({ ...point }));
 	let remaining = trimDistance;
@@ -48,9 +65,7 @@ export function trimPolylineEnd(
 		if (length <= remaining) {
 			trimmed.splice(i, 1);
 			remaining -= length;
-			if (remaining === 0) {
-				return trimmed;
-			}
+			if (remaining === 0) return trimmed;
 			continue;
 		}
 
@@ -65,11 +80,13 @@ export function trimPolylineEnd(
 	return points;
 }
 
-export function buildGraphologyGraph(
+export function buildRenderGraph(
 	_result: CfgBuildResult,
 	layout: GraphLayoutCore,
-): Graph {
-	const graph = new Graph();
+): CfgRenderGraph {
+	const nodes: CfgRenderNode[] = [];
+	const edges: CfgRenderEdge[] = [];
+	const nodeMap = new Map<string, CfgRenderNode>();
 
 	const blockIdByIndex = new Map<number, string>();
 	for (const [i, block] of layout.blocks.entries()) {
@@ -77,20 +94,19 @@ export function buildGraphologyGraph(
 	}
 
 	for (const block of layout.blocks) {
-		const { id, width, height, label } = block.data;
+		const { id, width, height } = block.data;
 		const { x, y } = block.coordinates;
 
-		graph.addNode(id, {
+		const node: CfgRenderNode = {
+			id,
 			x,
 			y: -y,
 			width,
 			height,
-			label,
-			color: "#f8f9fa",
-			borderColor: "#9ca3af",
-			type: "rectangle",
-			size: Math.max(width, height),
-		});
+			borderColor: "#d1d5db",
+		};
+		nodes.push(node);
+		nodeMap.set(id, node);
 	}
 
 	for (const block of layout.blocks) {
@@ -116,16 +132,36 @@ export function buildGraphologyGraph(
 			}
 
 			const cssColor = EDGE_COLOR_CSS[edge.color] ?? "#B45309";
-			const edgeKey = `${fromId}→${toId}`;
-
-			graph.addEdgeWithKey(edgeKey, fromId, toId, {
+			edges.push({
+				key: `${fromId}\u2192${toId}`,
 				color: cssColor,
-				arrowColor: cssColor,
 				polylinePoints,
-				hidden: true,
 			});
 		}
 	}
 
-	return graph;
+	let xMin = Number.POSITIVE_INFINITY;
+	let xMax = Number.NEGATIVE_INFINITY;
+	let yMin = Number.POSITIVE_INFINITY;
+	let yMax = Number.NEGATIVE_INFINITY;
+	for (const node of nodes) {
+		xMin = Math.min(xMin, node.x);
+		xMax = Math.max(xMax, node.x + node.width);
+		yMin = Math.min(yMin, node.y - node.height);
+		yMax = Math.max(yMax, node.y);
+	}
+
+	if (nodes.length === 0) {
+		xMin = 0;
+		xMax = 0;
+		yMin = 0;
+		yMax = 0;
+	}
+
+	return {
+		nodes,
+		edges,
+		nodeMap,
+		bbox: { x: [xMin, xMax], y: [yMin, yMax] },
+	};
 }
