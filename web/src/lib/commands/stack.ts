@@ -1,8 +1,9 @@
 import type { CommandOutput } from "../commandEngine";
-import { Context } from "../cpu_context";
+import { Arm64Context, Context } from "../cpu_context";
 import { fmtHex } from "../formatting";
 import type { MinidumpDebugInterface } from "../minidump_debug_interface";
 import { resolveSymbol } from "../symbolication";
+import type { WalkStackResult } from "../unwinder";
 
 export async function stackCommand(
 	dbg: MinidumpDebugInterface,
@@ -11,18 +12,24 @@ export async function stackCommand(
 	if (!ctx) {
 		return { lines: ["No thread context available"], isError: true };
 	}
-	if (!(ctx instanceof Context)) {
-		return {
-			lines: ["Stack walking is only supported for AMD64"],
-			isError: true,
-		};
-	}
 
 	try {
-		const { walkStack } = await import("../unwinder");
 		const modules = dbg.modules.state;
 		const reader = (addr: bigint, size: number) => dbg.read(addr, size);
-		const result = await walkStack(reader, modules, ctx.clone(), 64);
+
+		let result: WalkStackResult;
+		if (ctx instanceof Context) {
+			const { walkStack } = await import("../unwinder");
+			result = await walkStack(reader, modules, ctx.clone(), 64);
+		} else if (ctx instanceof Arm64Context) {
+			const { arm64WalkStack } = await import("../arm64_unwinder");
+			result = await arm64WalkStack(reader, modules, ctx.clone(), 64);
+		} else {
+			return {
+				lines: ["Stack walking is not supported for this architecture"],
+				isError: true,
+			};
+		}
 
 		const lines: string[] = [];
 		lines.push(" # Child-SP          RetAddr           Call Site");

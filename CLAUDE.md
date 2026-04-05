@@ -7,6 +7,6 @@ This repository is a windbg like debugger/dump file explorer built for the web.
 
 ## Commands
 
-- `bun lint` - run linter that formats code and finds code quality issues.
-- `bun typecheck` - run typescript check. NEVER invoke tsc directly.
+- `bun run lint` - run linter that formats code and finds code quality issues.
+- `bun run typecheck` - run typescript check. NEVER invoke tsc directly.
 - `bun test` - run all tests.
