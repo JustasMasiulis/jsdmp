@@ -97,7 +97,7 @@ function replaceAddressSegment(
 	symbolText: string,
 	segments: InstrTextSegment[],
 ): void {
-	const hex = "0x" + address.toString(16).toUpperCase();
+	const hex = "0x" + address.toString(16);
 	const idx = segments.findIndex(
 		(s) => s.syntaxKind === "number" && s.text === hex,
 	);

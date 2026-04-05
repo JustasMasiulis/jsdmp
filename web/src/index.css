@@ -53,6 +53,12 @@ Design language notes for future re-additions:
 
 	body {
 		margin: 0;
+		display: flex;
+		flex-direction: column;
+		font-family: "PT Root UI VF", serif;
+		font-size: 13px;
+		color: var(--color-fg);
+		background: var(--color-bg);
 	}
 
 	html,
@@ -142,15 +148,6 @@ Design language notes for future re-additions:
 	h5,
 	h6 {
 		text-wrap: balance;
-	}
-
-	body {
-		display: flex;
-		flex-direction: column;
-		font-family: "PT Root UI VF", serif;
-		font-size: 13px;
-		color: var(--color-fg);
-		background: var(--color-bg);
 	}
 }
 
@@ -390,8 +387,14 @@ Design language notes for future re-additions:
 		background: color-mix(in oklab, var(--color-sidebar-indicator) 10%, white);
 	}
 
-	.memory-view-table__row.dump-disassembly-table__fn-boundary {
+	.memory-view-table__row.dump-disassembly-table__fn-label {
 		border-top: 1px solid var(--color-fg2);
+	}
+
+	.memory-view-table__row.dump-disassembly-table__fn-label code {
+		color: var(--color-fg2);
+		overflow: hidden;
+		text-overflow: ellipsis;
 	}
 
 	.memory-view-table__cell--instruction .s-m {
@@ -607,10 +610,14 @@ Design language notes for future re-additions:
 		min-width: 0;
 	}
 
-	.memory-view-table__cell--address,
 	.memory-view-table__cell--ascii {
 		user-select: none;
 		-webkit-user-select: none;
+	}
+
+	.memory-view-table__cell--address {
+		user-select: text;
+		-webkit-user-select: text;
 	}
 
 	.memory-view-table__cell--hex {

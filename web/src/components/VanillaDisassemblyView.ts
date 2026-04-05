@@ -45,6 +45,10 @@ type DisassemblyViewPanelOptions = {
 	panelId: string;
 };
 
+type ViewRow =
+	| { kind: "instruction"; line: DisassemblyLine; lineIndex: number }
+	| { kind: "label"; text: string };
+
 type DisassemblyRowState = {
 	addressCode: HTMLElement;
 	bytesCode: HTMLElement;
@@ -94,6 +98,8 @@ export class VanillaDisassemblyView {
 	private isLoadingListing = false;
 	private isDisposed = false;
 	private reloadToken = 0;
+	private viewRows: ViewRow[] = [];
+	private anchorViewIndex = -1;
 
 	private readonly root: HTMLElement;
 	private readonly addressInput: HTMLInputElement;
@@ -217,18 +223,10 @@ export class VanillaDisassemblyView {
 				this.fillRow(rowState, rowIndex);
 			},
 			getRowClassName: (rowIndex) => {
-				const lines = this.lines();
-				const line = lines[rowIndex];
-				if (!line) return "";
-				const current = line.isCurrent ? "dump-disassembly-table__current" : "";
-				const boundary =
-					line.symbol &&
-					rowIndex > 0 &&
-					symbolBase(lines[rowIndex - 1]?.symbol) !== symbolBase(line.symbol)
-						? "dump-disassembly-table__fn-boundary"
-						: "";
-				if (current && boundary) return `${current} ${boundary}`;
-				return current || boundary;
+				const vr = this.viewRows[rowIndex];
+				if (!vr) return "";
+				if (vr.kind === "label") return "dump-disassembly-table__fn-label";
+				return vr.line.isCurrent ? "dump-disassembly-table__current" : "";
 			},
 		};
 	}
@@ -434,23 +432,25 @@ export class VanillaDisassemblyView {
 	}
 
 	private recomputeRows(scrollToCurrent: boolean) {
-		const lines = this.lines();
-		this.table.setRowCount(lines.length);
-		if (!scrollToCurrent || lines.length === 0) {
+		this.buildViewRows();
+		this.table.setRowCount(this.viewRows.length);
+		if (!scrollToCurrent || this.viewRows.length === 0) {
 			return;
 		}
 
-		const currentIndex =
-			this.listing?.anchorLineIndex >= 0
-				? this.listing.anchorLineIndex
-				: lines.findIndex((line) => line.isCurrent);
-		if (currentIndex >= 0) {
-			this.table.scrollToRow(Math.max(0, currentIndex - 6));
+		let scrollTarget = this.anchorViewIndex;
+		if (scrollTarget < 0) {
+			scrollTarget = this.viewRows.findIndex(
+				(vr) => vr.kind === "instruction" && vr.line.isCurrent,
+			);
+		}
+		if (scrollTarget >= 0) {
+			this.table.scrollToRow(Math.max(0, scrollTarget - 6));
 		}
 	}
 
 	private syncControlState() {
-		const hasRows = this.lines().length > 0;
+		const hasRows = this.viewRows.length > 0;
 		this.followCheckbox.checked = this.followInstructionPointer;
 		this.addressInput.disabled = this.followInstructionPointer;
 		this.jumpButton.disabled = this.followInstructionPointer;
@@ -533,8 +533,11 @@ export class VanillaDisassemblyView {
 			if (currentListing.anchorLineIndex >= 0) {
 				currentListing.anchorLineIndex += previousLoad.lines.length;
 			}
-			this.table.setRowCount(currentListing.lines.length);
-			this.table.shiftViewportRows(previousLoad.lines.length);
+			const prevViewCount = this.viewRows.length;
+			this.buildViewRows();
+			const viewDelta = this.viewRows.length - prevViewCount;
+			this.table.setRowCount(this.viewRows.length);
+			this.table.shiftViewportRows(viewDelta);
 		} catch {
 			const currentListing = this.listing;
 			if (currentListing) {
@@ -577,7 +580,8 @@ export class VanillaDisassemblyView {
 			}
 
 			currentListing.lines.push(...nextLoad.lines);
-			this.table.setRowCount(currentListing.lines.length);
+			this.buildViewRows();
+			this.table.setRowCount(this.viewRows.length);
 			this.requestRender(true);
 		} catch {
 			const currentListing = this.listing;
@@ -604,9 +608,33 @@ export class VanillaDisassemblyView {
 		this.refreshView(true);
 	};
 
+	private buildViewRows() {
+		const lines = this.lines();
+		const rows: ViewRow[] = [];
+		const anchorLineIndex = this.listing?.anchorLineIndex ?? -1;
+		let anchorViewIndex = -1;
+		let prevSymBase = "";
+
+		for (let i = 0; i < lines.length; i++) {
+			const line = lines[i];
+			const curSymBase = symbolBase(line.symbol);
+			if (curSymBase && curSymBase !== prevSymBase) {
+				rows.push({ kind: "label", text: curSymBase + ":" });
+			}
+			if (i === anchorLineIndex) {
+				anchorViewIndex = rows.length;
+			}
+			rows.push({ kind: "instruction", line, lineIndex: i });
+			prevSymBase = curSymBase;
+		}
+
+		this.viewRows = rows;
+		this.anchorViewIndex = anchorViewIndex;
+	}
+
 	private fillRow(row: DisassemblyRowState, rowIndex: number) {
-		const line = this.lines()[rowIndex];
-		if (!line) {
+		const vr = this.viewRows[rowIndex];
+		if (!vr) {
 			row.addressCode.textContent = "";
 			row.addressCode.title = "";
 			row.bytesCode.textContent = "";
@@ -614,6 +642,15 @@ export class VanillaDisassemblyView {
 			return;
 		}
 
+		if (vr.kind === "label") {
+			row.addressCode.textContent = vr.text;
+			row.addressCode.title = "";
+			row.bytesCode.textContent = "";
+			row.instructionCode.textContent = "";
+			return;
+		}
+
+		const line = vr.line;
 		row.addressCode.textContent = fmtHex16(line.address);
 		row.addressCode.title = line.symbol ?? "";
 		row.bytesCode.textContent = line.bytesHex;
