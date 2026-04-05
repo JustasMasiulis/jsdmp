@@ -3,75 +3,29 @@ import type {
 	DockviewApi,
 	SerializedDockview,
 } from "dockview-core";
-import type { DumpSection } from "./dumpSections";
 
 export const LAYOUT_STORAGE_KEY = "wasm-dump-debugger:dockview:v1";
-export const MEMORY_COMPONENT = "memory-view";
-export const DISASSEMBLY_COMPONENT = "disassembly";
-export const DISASSEMBLY_GRAPH_COMPONENT = "disassembly-graph";
-export const SUMMARY_COMPONENT = "summary";
-export const EXCEPTION_COMPONENT = "exception";
-export const MODULES_COMPONENT = "modules";
-export const THREADS_COMPONENT = "threads";
-export const COMMAND_COMPONENT = "command";
 export const MEMORY_BASE_ID = "memory";
 
 type PanelSpec = {
 	id: string;
 	component: string;
-	section: DumpSection;
 	title: string;
 };
 
 export const PANEL_SPECS = [
-	{
-		id: "summary",
-		component: SUMMARY_COMPONENT,
-		section: "summary",
-		title: "Summary",
-	},
-	{
-		id: "exception",
-		component: EXCEPTION_COMPONENT,
-		section: "exception",
-		title: "Exception",
-	},
-	{
-		id: "disassembly",
-		component: "disassembly",
-		section: "disassembly",
-		title: "Disassembly",
-	},
+	{ id: "summary", component: "summary", title: "Summary" },
+	{ id: "exception", component: "exception", title: "Exception" },
+	{ id: "disassembly", component: "disassembly", title: "Disassembly" },
 	{
 		id: "disassembly-graph",
-		component: DISASSEMBLY_GRAPH_COMPONENT,
-		section: "disassembly",
+		component: "disassembly-graph",
 		title: "Disassembly Graph",
 	},
-	{
-		id: "modules",
-		component: MODULES_COMPONENT,
-		section: "modules",
-		title: "Modules",
-	},
-	{
-		id: "threads",
-		component: "threads",
-		section: "threads",
-		title: "Threads",
-	},
-	{
-		id: MEMORY_BASE_ID,
-		component: MEMORY_COMPONENT,
-		section: "memory",
-		title: "Memory",
-	},
-	{
-		id: "command",
-		component: "command",
-		section: "command",
-		title: "Command",
-	},
+	{ id: "modules", component: "modules", title: "Modules" },
+	{ id: "threads", component: "threads", title: "Threads" },
+	{ id: MEMORY_BASE_ID, component: "memory-view", title: "Memory" },
+	{ id: "command", component: "command", title: "Command" },
 ] as const satisfies ReadonlyArray<PanelSpec>;
 
 export type PanelId = (typeof PANEL_SPECS)[number]["id"];
@@ -103,7 +57,7 @@ const getActivePanelPosition = (
 		: undefined;
 };
 
-export const parseMemoryPanelNumber = (panelId: string): number | null => {
+const parseMemoryPanelNumber = (panelId: string): number | null => {
 	if (panelId === MEMORY_BASE_ID) {
 		return 1;
 	}
@@ -116,7 +70,7 @@ export const parseMemoryPanelNumber = (panelId: string): number | null => {
 	return Number.parseInt(match[1], 10);
 };
 
-export const getNextMemoryPanelNumber = (dockview: DockviewApi): number => {
+const getNextMemoryPanelNumber = (dockview: DockviewApi): number => {
 	let maxPanelNumber = 1;
 
 	for (const panel of dockview.panels) {
@@ -210,7 +164,7 @@ export const addMemoryPanel = (dockview: DockviewApi): string => {
 	const panelId = `memory-${panelNumber}`;
 
 	dockview.addPanel({
-		component: MEMORY_COMPONENT,
+		component: "memory-view",
 		id: panelId,
 		position: getActivePanelPosition(dockview),
 		title: `Memory #${panelNumber}`,

@@ -2,25 +2,16 @@ import {
 	createDockview,
 	type DockviewApi,
 	type IContentRenderer,
-	type IDockviewPanel,
 	themeLight,
 } from "dockview-core";
 import {
 	addMemoryPanel,
 	applyDefaultLayout,
-	COMMAND_COMPONENT,
-	DISASSEMBLY_COMPONENT,
-	DISASSEMBLY_GRAPH_COMPONENT,
-	EXCEPTION_COMPONENT,
-	MEMORY_COMPONENT,
-	MODULES_COMPONENT,
 	openPanel,
 	PANEL_SPECS,
 	type PanelId,
 	restoreLayout,
-	SUMMARY_COMPONENT,
 	saveLayout,
-	THREADS_COMPONENT,
 } from "../lib/dockviewLayout";
 import { CommandView } from "./CommandView";
 import { DisassemblyGraphView } from "./DisassemblyGraphView";
@@ -30,6 +21,19 @@ import { MemoryView } from "./MemoryView";
 import { ModulesView } from "./ModulesView";
 import { SummaryView } from "./SummaryView";
 import { ThreadsView } from "./ThreadsView";
+
+type ComponentFactory = (el: HTMLElement, panelId: string) => IContentRenderer;
+
+const COMPONENT_FACTORIES = new Map<string, ComponentFactory>([
+	["disassembly", (el, id) => new DisassemblyView(el, id)],
+	["disassembly-graph", (el, id) => new DisassemblyGraphView(el, id)],
+	["memory-view", (el, id) => new MemoryView(el, id)],
+	["exception", (el) => new ExceptionView(el)],
+	["modules", (el) => new ModulesView(el)],
+	["threads", (el) => new ThreadsView(el)],
+	["command", (el) => new CommandView(el)],
+	["summary", (el) => new SummaryView(el)],
+]);
 
 export class DockviewDumpLayout {
 	private dockview: DockviewApi;
@@ -53,15 +57,8 @@ export class DockviewDumpLayout {
 			theme: themeLight,
 		});
 
-		const onDidAddPanel = (_: IDockviewPanel) => {
-			onLayoutChange();
-		};
-
-		const onLayoutChange = () => {
-			saveLayout(this.dockview);
-			this.refreshToolbar();
-		};
-		this.dockview.onDidAddPanel(onDidAddPanel);
+		const onLayoutChange = () => this.saveAndRefresh();
+		this.dockview.onDidAddPanel(onLayoutChange);
 		this.dockview.onDidRemovePanel(onLayoutChange);
 		this.dockview.onDidLayoutChange(onLayoutChange);
 
@@ -79,38 +76,29 @@ export class DockviewDumpLayout {
 		const el = document.createElement("div");
 		el.className = "dump-dockview-panel size-full";
 
-		switch (options.name) {
-			case DISASSEMBLY_COMPONENT:
-				return new DisassemblyView(el, options.id);
-			case DISASSEMBLY_GRAPH_COMPONENT:
-				return new DisassemblyGraphView(el, options.id);
-			case MEMORY_COMPONENT:
-				return new MemoryView(el, options.id);
-			case EXCEPTION_COMPONENT:
-				return new ExceptionView(el);
-			case MODULES_COMPONENT:
-				return new ModulesView(el);
-			case THREADS_COMPONENT:
-				return new ThreadsView(el);
-			case COMMAND_COMPONENT:
-				return new CommandView(el);
-			case SUMMARY_COMPONENT:
-				return new SummaryView(el);
-			default:
-				throw new Error(`Unknown component ${options.name}`);
+		const factory = COMPONENT_FACTORIES.get(options.name);
+		if (!factory) {
+			throw new Error(`Unknown component: ${options.name}`);
 		}
+		return factory(el, options.id);
 	};
+
+	private saveAndRefresh(): void {
+		saveLayout(this.dockview);
+		this.refreshToolbar();
+	}
 
 	private buildToolbar(): HTMLElement {
 		const toolbar = document.createElement("div");
 		toolbar.className = "dump-dockview-toolbar";
 		toolbar.addEventListener("click", this.onToolbarClick);
-		this.populateToolbar(toolbar);
+		this.refreshToolbar(toolbar);
 		return toolbar;
 	}
 
-	private populateToolbar(toolbar: HTMLElement): void {
-		toolbar.innerHTML = "";
+	private refreshToolbar(toolbar?: HTMLElement): void {
+		const target = toolbar ?? this.toolbar;
+		target.innerHTML = "";
 
 		for (const panel of PANEL_SPECS) {
 			const btn = document.createElement("button");
@@ -120,7 +108,7 @@ export class DockviewDumpLayout {
 			btn.dataset.panelId = panel.id;
 			btn.textContent = `Open ${panel.title}`;
 			btn.disabled = !!this.dockview?.getPanel(panel.id);
-			toolbar.append(btn);
+			target.append(btn);
 		}
 
 		const resetBtn = document.createElement("button");
@@ -128,18 +116,14 @@ export class DockviewDumpLayout {
 		resetBtn.className = "dump-dockview-toolbar__button";
 		resetBtn.dataset.action = "reset-layout";
 		resetBtn.textContent = "Reset Layout";
-		toolbar.append(resetBtn);
+		target.append(resetBtn);
 
 		const memBtn = document.createElement("button");
 		memBtn.type = "button";
 		memBtn.className = "dump-dockview-toolbar__button";
 		memBtn.dataset.action = "add-memory-view";
 		memBtn.textContent = "Add Memory View";
-		toolbar.append(memBtn);
-	}
-
-	private refreshToolbar(): void {
-		this.populateToolbar(this.toolbar);
+		target.append(memBtn);
 	}
 
 	private onToolbarClick = (event: MouseEvent): void => {
@@ -152,20 +136,17 @@ export class DockviewDumpLayout {
 			case "open-panel": {
 				const panelId = btn.dataset.panelId as PanelId | undefined;
 				if (panelId && openPanel(this.dockview, panelId)) {
-					saveLayout(this.dockview);
-					this.refreshToolbar();
+					this.saveAndRefresh();
 				}
 				break;
 			}
 			case "reset-layout":
 				applyDefaultLayout(this.dockview);
-				saveLayout(this.dockview);
-				this.refreshToolbar();
+				this.saveAndRefresh();
 				break;
 			case "add-memory-view":
 				addMemoryPanel(this.dockview);
-				saveLayout(this.dockview);
-				this.refreshToolbar();
+				this.saveAndRefresh();
 				break;
 		}
 	};
