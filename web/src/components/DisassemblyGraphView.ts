@@ -1,4 +1,7 @@
-import type { IContentRenderer } from "dockview-core";
+import type {
+	GroupPanelPartInitParameters,
+	IContentRenderer,
+} from "dockview-core";
 import {
 	loadAddressPanelState,
 	parseHexAddress,
@@ -30,11 +33,6 @@ import { CfgSelectionLayer } from "../rendering/cfgSelectionLayer";
 import { EdgePolylineRenderer } from "../rendering/edgePolylineProgram";
 
 const PANEL_STATE_KEY = "wasm-dump-debugger:disassembly-graph-panel-state:v1";
-
-type GraphViewOptions = {
-	container: HTMLElement;
-	panelId: string;
-};
 
 const cfgEdgeKindToColor = (kind: CfgEdgeKind): EdgeColor => {
 	switch (kind) {
@@ -98,6 +96,8 @@ export class DisassemblyGraphView implements IContentRenderer {
 	private resizeObserver: ResizeObserver | null = null;
 	private pendingSetup: (() => void) | null = null;
 
+	element: HTMLElement;
+
 	private readonly onFollowChange = () => {
 		const next = this.followCheckbox.checked;
 		this.followInstructionPointer = next;
@@ -135,9 +135,10 @@ export class DisassemblyGraphView implements IContentRenderer {
 		this.refreshView(true);
 	};
 
-	constructor(options: GraphViewOptions) {
-		this.panelId = options.panelId;
-		this.root = this.createRoot(options.panelId);
+	constructor(element: HTMLElement, panelId: string) {
+		this.element = element;
+		this.panelId = panelId;
+		this.root = this.createRoot(panelId);
 		const dom = this.createDomTree();
 		this.addressInput = dom.addressInput;
 		this.jumpButton = dom.jumpButton;
@@ -146,7 +147,7 @@ export class DisassemblyGraphView implements IContentRenderer {
 		this.errorNode = dom.errorNode;
 		this.emptyNode = dom.emptyNode;
 		this.graphHost = dom.graphHost;
-		options.container.replaceChildren(this.root);
+		this.element.replaceChildren(this.root);
 
 		this.root.addEventListener("submit", this.onAddressSubmit);
 		this.root.addEventListener("click", this.onDisasmLinkClick);
@@ -160,11 +161,7 @@ export class DisassemblyGraphView implements IContentRenderer {
 		this.refreshView(true);
 	}
 
-	get element() {
-		return this.root;
-	}
-
-	init() {}
+	init(_: GroupPanelPartInitParameters): void {}
 
 	private onContextChanged() {
 		if (this.isDisposed) return;

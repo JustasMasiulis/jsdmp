@@ -9,6 +9,9 @@ export const LAYOUT_STORAGE_KEY = "wasm-dump-debugger:dockview:v1";
 export const MEMORY_COMPONENT = "memory-view";
 export const DISASSEMBLY_COMPONENT = "disassembly";
 export const DISASSEMBLY_GRAPH_COMPONENT = "disassembly-graph";
+export const SUMMARY_COMPONENT = "summary";
+export const EXCEPTION_COMPONENT = "exception";
+export const MODULES_COMPONENT = "modules";
 export const THREADS_COMPONENT = "threads";
 export const COMMAND_COMPONENT = "command";
 export const MEMORY_BASE_ID = "memory";
@@ -23,13 +26,13 @@ type PanelSpec = {
 export const PANEL_SPECS = [
 	{
 		id: "summary",
-		component: "summary",
+		component: SUMMARY_COMPONENT,
 		section: "summary",
 		title: "Summary",
 	},
 	{
 		id: "exception",
-		component: "exception",
+		component: EXCEPTION_COMPONENT,
 		section: "exception",
 		title: "Exception",
 	},
@@ -47,7 +50,7 @@ export const PANEL_SPECS = [
 	},
 	{
 		id: "modules",
-		component: "modules",
+		component: MODULES_COMPONENT,
 		section: "modules",
 		title: "Modules",
 	},
@@ -77,10 +80,6 @@ const PANEL_SPECS_BY_ID = new Map(
 	PANEL_SPECS.map((panel) => [panel.id, panel] as const),
 );
 
-const PANEL_SECTIONS_BY_COMPONENT = new Map<string, DumpSection>(
-	PANEL_SPECS.map((panel) => [panel.component, panel.section]),
-);
-
 type LayoutStorage = Pick<Storage, "getItem" | "removeItem" | "setItem">;
 
 const getLayoutStorage = (
@@ -103,9 +102,6 @@ const getActivePanelPosition = (
 			}
 		: undefined;
 };
-
-export const getPanelSection = (component: string): DumpSection =>
-	PANEL_SECTIONS_BY_COMPONENT.get(component) ?? "summary";
 
 export const parseMemoryPanelNumber = (panelId: string): number | null => {
 	if (panelId === MEMORY_BASE_ID) {

@@ -1,3 +1,7 @@
+import type {
+	GroupPanelPartInitParameters,
+	IContentRenderer,
+} from "dockview-core";
 import {
 	loadAddressPanelState,
 	parseHexAddress,
@@ -40,11 +44,6 @@ const FORWARD_LOAD_THRESHOLD_ROWS = 4;
 const DISASSEMBLY_PANEL_STATE_KEY =
 	"wasm-dump-debugger:disassembly-panel-state:v1";
 
-type DisassemblyViewPanelOptions = {
-	container: HTMLElement;
-	panelId: string;
-};
-
 type ViewRow =
 	| { kind: "instruction"; line: DisassemblyLine; lineIndex: number }
 	| { kind: "label"; text: string };
@@ -86,7 +85,8 @@ const toDecodeErrorListing = (
 	lines: [],
 });
 
-export class VanillaDisassemblyView {
+export class DisassemblyView implements IContentRenderer {
+	element: HTMLElement;
 	private readonly panelId: string;
 	private readonly contextHandle: SignalHandle<CpuContext | null>;
 	private listing: DebugDisassemblyListing | null = null;
@@ -144,9 +144,10 @@ export class VanillaDisassemblyView {
 		}
 	};
 
-	constructor(options: DisassemblyViewPanelOptions) {
-		this.panelId = options.panelId;
-		this.root = this.createRoot(options.panelId);
+	constructor(element: HTMLElement, panelId: string) {
+		this.element = element;
+		this.panelId = panelId;
+		this.root = this.createRoot(panelId);
 		this.table = new FixedRowVirtualTable<DisassemblyRowState>({
 			adapter: this.createDisassemblyAdapter(),
 			rowHeightPx: ROW_HEIGHT_PX,
@@ -162,17 +163,21 @@ export class VanillaDisassemblyView {
 		this.errorNode = dom.errorNode;
 		this.emptyNode = dom.emptyNode;
 		this.tableNode = dom.tableNode;
-		options.container.replaceChildren(this.root);
+		this.element.replaceChildren(this.root);
 
 		this.root.addEventListener("submit", this.onAddressSubmit);
 		this.followCheckbox.addEventListener("change", this.onFollowChange);
-		this.contextHandle = DBG.currentContext.subscribe(() => this.update());
+		this.contextHandle = DBG.currentContext.subscribe(() =>
+			this.onContextChanged(),
+		);
 
 		this.restoreState();
 		this.refreshView(true);
 	}
 
-	private update() {
+	init(_: GroupPanelPartInitParameters): void {}
+
+	private onContextChanged() {
 		if (this.isDisposed) {
 			return;
 		}

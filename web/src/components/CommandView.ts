@@ -1,3 +1,7 @@
+import type {
+	GroupPanelPartInitParameters,
+	IContentRenderer,
+} from "dockview-core";
 import {
 	type CommandOutputLine,
 	createCommandEngine,
@@ -7,12 +11,8 @@ import { DBG } from "../lib/debugState";
 import type { SignalHandle } from "../lib/reactive";
 import { renderSegments } from "../lib/syntaxHighlight";
 
-export type VanillaCommandViewOptions = {
-	container: HTMLElement;
-	panelId: string;
-};
-
-export class VanillaCommandView {
+export class CommandView implements IContentRenderer {
+	element: HTMLElement;
 	private section: HTMLElement;
 	private output: HTMLElement;
 	private input: HTMLInputElement;
@@ -28,7 +28,8 @@ export class VanillaCommandView {
 	private savedInput = "";
 	private outputLineCount = 0;
 
-	constructor(options: VanillaCommandViewOptions) {
+	constructor(element: HTMLElement) {
+		this.element = element;
 		this.engine = createCommandEngine(DBG);
 
 		this.section = document.createElement("section");
@@ -52,13 +53,15 @@ export class VanillaCommandView {
 
 		inputRow.append(this.promptSpan, this.input);
 		this.section.append(this.output, inputRow);
-		options.container.append(this.section);
+		this.element.append(this.section);
 
 		this.handle = DBG.currentThread.subscribe(() => this.updatePrompt());
 		this.updatePrompt();
 
 		this.appendOutputLine("Type .help for a list of commands");
 	}
+
+	init(_: GroupPanelPartInitParameters): void {}
 
 	private updatePrompt(): void {
 		const threads = DBG.threads.state;
@@ -86,7 +89,7 @@ export class VanillaCommandView {
 		this.outputLineCount++;
 
 		while (
-			this.outputLineCount > VanillaCommandView.MAX_OUTPUT_LINES &&
+			this.outputLineCount > CommandView.MAX_OUTPUT_LINES &&
 			this.output.firstChild
 		) {
 			this.output.firstChild.remove();
@@ -104,11 +107,8 @@ export class VanillaCommandView {
 
 			if (value.length > 0) {
 				this.history.push(value);
-				if (this.history.length > VanillaCommandView.MAX_HISTORY) {
-					this.history.splice(
-						0,
-						this.history.length - VanillaCommandView.MAX_HISTORY,
-					);
+				if (this.history.length > CommandView.MAX_HISTORY) {
+					this.history.splice(0, this.history.length - CommandView.MAX_HISTORY);
 				}
 			}
 			this.historyIndex = this.history.length;

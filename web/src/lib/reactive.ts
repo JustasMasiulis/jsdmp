@@ -29,6 +29,22 @@ export class Signal<T> {
 			handle.invoke();
 		});
 	}
+
+	static subscribeAll(
+		signals: Signal<unknown>[],
+		callback: () => void,
+	): SignalHandle<unknown>[] {
+		let pending = false;
+		const coalesced = () => {
+			if (pending) return;
+			pending = true;
+			queueMicrotask(() => {
+				pending = false;
+				callback();
+			});
+		};
+		return signals.map((s) => s.subscribe(coalesced));
+	}
 }
 
 export class SignalHandle<T> {

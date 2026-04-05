@@ -1,3 +1,7 @@
+import type {
+	GroupPanelPartInitParameters,
+	IContentRenderer,
+} from "dockview-core";
 import {
 	loadAddressPanelState,
 	parseHexAddress,
@@ -19,11 +23,6 @@ const OVERSCAN_ROWS = 10;
 const DEFAULT_VIEWPORT_HEIGHT_PX = 320;
 const WHEEL_ROWS_PER_TICK = 2;
 const MEMORY_PANEL_STATE_KEY = "wasm-dump-debugger:memory-panel-state:v1";
-
-type MemoryViewPanelOptions = {
-	container: HTMLElement;
-	panelId: string;
-};
 
 type MemorySpan = {
 	start: bigint;
@@ -81,7 +80,8 @@ const alignDownToRow = (address: bigint, spanStart: bigint): bigint => {
 const getPanelStorageKey = (panelId: string) =>
 	`${MEMORY_PANEL_STATE_KEY}:${panelId}`;
 
-export class VanillaMemoryView {
+export class MemoryView implements IContentRenderer {
+	element: HTMLElement;
 	private readonly panelId: string;
 	private readonly panelIndex: number;
 	private readonly contextHandle: SignalHandle<CpuContext | null>;
@@ -130,9 +130,10 @@ export class VanillaMemoryView {
 		this.jumpToAddress(parsed, false);
 	};
 
-	constructor(options: MemoryViewPanelOptions) {
-		this.panelId = options.panelId;
-		this.panelIndex = parsePanelIndex(options.panelId);
+	constructor(element: HTMLElement, panelId: string) {
+		this.element = element;
+		this.panelId = panelId;
+		this.panelIndex = parsePanelIndex(panelId);
 		this.root = this.createRoot();
 		this.table = new FixedRowVirtualTable<MemoryRowState>({
 			adapter: this.createMemoryAdapter(),
@@ -148,7 +149,7 @@ export class VanillaMemoryView {
 		this.errorNode = dom.errorNode;
 		this.emptyNode = dom.emptyNode;
 		this.tableNode = dom.tableNode;
-		options.container.replaceChildren(this.root);
+		this.element.replaceChildren(this.root);
 
 		this.root.addEventListener("submit", this.onAddressSubmit);
 		this.followCheckbox.addEventListener("change", this.onFollowChange);
@@ -163,6 +164,8 @@ export class VanillaMemoryView {
 		this.syncControlState();
 		this.requestRender(true);
 	}
+
+	init(_: GroupPanelPartInitParameters): void {}
 
 	dispose() {
 		if (this.isDisposed) {

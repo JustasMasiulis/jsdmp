@@ -4,7 +4,6 @@ import {
 	type IContentRenderer,
 	type IDockviewPanel,
 	themeLight,
-	type VisibilityEvent,
 } from "dockview-core";
 import {
 	addMemoryPanel,
@@ -12,21 +11,25 @@ import {
 	COMMAND_COMPONENT,
 	DISASSEMBLY_COMPONENT,
 	DISASSEMBLY_GRAPH_COMPONENT,
-	getPanelSection,
+	EXCEPTION_COMPONENT,
 	MEMORY_COMPONENT,
+	MODULES_COMPONENT,
 	openPanel,
 	PANEL_SPECS,
 	type PanelId,
 	restoreLayout,
+	SUMMARY_COMPONENT,
 	saveLayout,
 	THREADS_COMPONENT,
 } from "../lib/dockviewLayout";
+import { CommandView } from "./CommandView";
 import { DisassemblyGraphView } from "./DisassemblyGraphView";
-import { VanillaCommandView } from "./VanillaCommandView";
-import { VanillaDisassemblyView } from "./VanillaDisassemblyView";
-import { VanillaDumpSummary } from "./VanillaDumpSummary";
-import { VanillaMemoryView } from "./VanillaMemoryView";
-import { VanillaThreadsView } from "./VanillaThreadsView";
+import { DisassemblyView } from "./DisassemblyView";
+import { ExceptionView } from "./ExceptionView";
+import { MemoryView } from "./MemoryView";
+import { ModulesView } from "./ModulesView";
+import { SummaryView } from "./SummaryView";
+import { ThreadsView } from "./ThreadsView";
 
 export class DockviewDumpLayout {
 	private dockview: DockviewApi;
@@ -50,11 +53,7 @@ export class DockviewDumpLayout {
 			theme: themeLight,
 		});
 
-		const onDidAddPanel = (panel: IDockviewPanel) => {
-			panel.api.onDidVisibilityChange((e: VisibilityEvent) => {
-				console.log("visibility changed", e.isVisible);
-			});
-
+		const onDidAddPanel = (_: IDockviewPanel) => {
 			onLayoutChange();
 		};
 
@@ -73,8 +72,6 @@ export class DockviewDumpLayout {
 		this.refreshToolbar();
 	}
 
-	// ─── panel factory ────────────────────────────────────────────────────────
-
 	private createComponent = (options: {
 		id: string;
 		name: string;
@@ -83,76 +80,26 @@ export class DockviewDumpLayout {
 		el.className = "dump-dockview-panel size-full";
 
 		switch (options.name) {
-			case DISASSEMBLY_COMPONENT: {
-				const view = new VanillaDisassemblyView({
-					container: el,
-					panelId: options.id,
-				});
-				return {
-					element: el,
-					init: () => {},
-					dispose: () => view.dispose(),
-				};
-			}
-			case DISASSEMBLY_GRAPH_COMPONENT: {
-				const view = new DisassemblyGraphView({
-					container: el,
-					panelId: options.id,
-				});
-				return {
-					element: el,
-					init: () => {},
-					dispose: () => view.dispose(),
-				};
-			}
-			case MEMORY_COMPONENT: {
-				const view = new VanillaMemoryView({
-					container: el,
-					panelId: options.id,
-				});
-				return {
-					element: el,
-					init: () => {},
-					dispose: () => view.dispose(),
-				};
-			}
-			case THREADS_COMPONENT: {
-				const view = new VanillaThreadsView({
-					container: el,
-					panelId: options.id,
-				});
-				return {
-					element: el,
-					init: () => {},
-					dispose: () => view.dispose(),
-				};
-			}
-			case COMMAND_COMPONENT: {
-				const view = new VanillaCommandView({
-					container: el,
-					panelId: options.id,
-				});
-				return {
-					element: el,
-					init: () => {},
-					dispose: () => view.dispose(),
-				};
-			}
-			default: {
-				const summary = new VanillaDumpSummary({
-					container: el,
-					sections: [getPanelSection(options.name)],
-				});
-				return {
-					element: el,
-					init: () => {},
-					dispose: () => summary.dispose(),
-				};
-			}
+			case DISASSEMBLY_COMPONENT:
+				return new DisassemblyView(el, options.id);
+			case DISASSEMBLY_GRAPH_COMPONENT:
+				return new DisassemblyGraphView(el, options.id);
+			case MEMORY_COMPONENT:
+				return new MemoryView(el, options.id);
+			case EXCEPTION_COMPONENT:
+				return new ExceptionView(el);
+			case MODULES_COMPONENT:
+				return new ModulesView(el);
+			case THREADS_COMPONENT:
+				return new ThreadsView(el);
+			case COMMAND_COMPONENT:
+				return new CommandView(el);
+			case SUMMARY_COMPONENT:
+				return new SummaryView(el);
+			default:
+				throw new Error(`Unknown component ${options.name}`);
 		}
 	};
-
-	// ─── toolbar ──────────────────────────────────────────────────────────────
 
 	private buildToolbar(): HTMLElement {
 		const toolbar = document.createElement("div");
@@ -222,8 +169,6 @@ export class DockviewDumpLayout {
 				break;
 		}
 	};
-
-	// ─── lifecycle ────────────────────────────────────────────────────────────
 
 	dispose(): void {
 		this.dockview.dispose();
