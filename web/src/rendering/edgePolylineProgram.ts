@@ -1,6 +1,7 @@
 import type { CfgGraphRenderer } from "./cfgGraphRenderer";
 import type { CfgRenderGraph } from "./cfgRenderGraph";
 import { trimPolylineEnd } from "./cfgRenderGraph";
+import { compileSimpleProgram } from "./utils.";
 
 const VERTEX_SHADER = `
 attribute vec2 a_position;
@@ -47,45 +48,6 @@ function parseColor(hex: string): [number, number, number, number] {
 	const g = Number.parseInt(hex.slice(3, 5), 16) / 255;
 	const b = Number.parseInt(hex.slice(5, 7), 16) / 255;
 	return [r, g, b, 1.0];
-}
-
-function compileShader(
-	gl: WebGL2RenderingContext,
-	type: number,
-	source: string,
-): WebGLShader {
-	const shader = gl.createShader(type);
-	if (!shader) throw new Error("Failed to create shader");
-	gl.shaderSource(shader, source);
-	gl.compileShader(shader);
-	if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) {
-		const info = gl.getShaderInfoLog(shader);
-		gl.deleteShader(shader);
-		throw new Error(`Shader compilation failed: ${info}`);
-	}
-	return shader;
-}
-
-function createProgram(
-	gl: WebGL2RenderingContext,
-	vertSrc: string,
-	fragSrc: string,
-): WebGLProgram {
-	const vert = compileShader(gl, gl.VERTEX_SHADER, vertSrc);
-	const frag = compileShader(gl, gl.FRAGMENT_SHADER, fragSrc);
-	const program = gl.createProgram();
-	if (!program) throw new Error("Failed to create program");
-	gl.attachShader(program, vert);
-	gl.attachShader(program, frag);
-	gl.linkProgram(program);
-	if (!gl.getProgramParameter(program, gl.LINK_STATUS)) {
-		const info = gl.getProgramInfoLog(program);
-		gl.deleteProgram(program);
-		throw new Error(`Program link failed: ${info}`);
-	}
-	gl.deleteShader(vert);
-	gl.deleteShader(frag);
-	return program;
 }
 
 function writeVertex(
@@ -238,7 +200,7 @@ export class EdgePolylineRenderer {
 		if (!gl) throw new Error("WebGL2 not available");
 		this.gl = gl;
 
-		this.program = createProgram(gl, VERTEX_SHADER, FRAGMENT_SHADER);
+		this.program = compileSimpleProgram(gl, VERTEX_SHADER, FRAGMENT_SHADER);
 
 		this.aPosition = gl.getAttribLocation(this.program, "a_position");
 		this.aNormal = gl.getAttribLocation(this.program, "a_normal");
@@ -249,6 +211,7 @@ export class EdgePolylineRenderer {
 		const uResolution = gl.getUniformLocation(this.program, "u_resolution");
 		if (!uMatrix || !uThickness || !uResolution)
 			throw new Error("Failed to get uniform locations");
+
 		this.uMatrix = uMatrix;
 		this.uThickness = uThickness;
 		this.uResolution = uResolution;

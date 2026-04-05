@@ -8,6 +8,7 @@ import {
 import type { CfgGraphRenderer } from "./cfgGraphRenderer";
 import type { CfgRenderGraph } from "./cfgRenderGraph";
 import { createFontAtlas, type FontAtlas } from "./fontAtlas";
+import { compileSimpleProgram } from "./utils.";
 
 const VERTEX_SHADER = `
 attribute vec2 a_position;
@@ -76,45 +77,6 @@ type NodeEntry = {
 	h: number;
 };
 
-function compileShader(
-	gl: WebGL2RenderingContext,
-	type: number,
-	source: string,
-): WebGLShader {
-	const shader = gl.createShader(type);
-	if (!shader) throw new Error(`Failed to create shader type ${type}`);
-	gl.shaderSource(shader, source);
-	gl.compileShader(shader);
-	if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) {
-		const info = gl.getShaderInfoLog(shader);
-		gl.deleteShader(shader);
-		throw new Error(`Shader compile: ${info}`);
-	}
-	return shader;
-}
-
-function linkProgram(
-	gl: WebGL2RenderingContext,
-	vs: string,
-	fs: string,
-): WebGLProgram {
-	const v = compileShader(gl, gl.VERTEX_SHADER, vs);
-	const f = compileShader(gl, gl.FRAGMENT_SHADER, fs);
-	const p = gl.createProgram();
-	if (!p) throw new Error("Failed to create WebGL program");
-	gl.attachShader(p, v);
-	gl.attachShader(p, f);
-	gl.linkProgram(p);
-	if (!gl.getProgramParameter(p, gl.LINK_STATUS)) {
-		const info = gl.getProgramInfoLog(p);
-		gl.deleteProgram(p);
-		throw new Error(`Program link: ${info}`);
-	}
-	gl.deleteShader(v);
-	gl.deleteShader(f);
-	return p;
-}
-
 export class BlockTextRenderer {
 	private readonly renderer: CfgGraphRenderer;
 	private readonly graph: CfgRenderGraph;
@@ -174,7 +136,7 @@ export class BlockTextRenderer {
 		if (!gl) throw new Error("WebGL2 not supported");
 		this.gl = gl;
 
-		this.program = linkProgram(gl, VERTEX_SHADER, FRAGMENT_SHADER);
+		this.program = compileSimpleProgram(gl, VERTEX_SHADER, FRAGMENT_SHADER);
 		this.aPosition = gl.getAttribLocation(this.program, "a_position");
 		this.aTexcoord = gl.getAttribLocation(this.program, "a_texcoord");
 		this.aColor = gl.getAttribLocation(this.program, "a_color");
