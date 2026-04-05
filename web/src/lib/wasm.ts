@@ -26,7 +26,11 @@ export const __setWasmExportsForTesting = (wasmExports: WasmExports | null) => {
 	WASM_EXPORTS = wasmExports;
 };
 
-const loadWasm = async (): Promise<void> => {
+export const loadWasm = async (): Promise<void> => {
+	if (typeof window === "undefined") {
+		return Promise.resolve();
+	}
+
 	const response = await fetch("/web_dmp.wasm");
 	if (!response.ok) {
 		throw new Error(`HTTP ${response.status} for web_dmp.wasm`);
@@ -48,6 +52,3 @@ const loadWasm = async (): Promise<void> => {
 		disassembly_buffer: exports.wasm_get_disassembly_buffer(),
 	};
 };
-
-export const WASM_PROMISE =
-	typeof window === "undefined" ? Promise.resolve() : loadWasm();
