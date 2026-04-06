@@ -1,5 +1,5 @@
-import "./index.css";
 import "dockview-core/dist/styles/dockview.css";
+import "./index.css";
 import { loadWasm } from "./lib/wasm";
 import { initWasmDumpDebugger } from "./WasmDumpDebugger";
 

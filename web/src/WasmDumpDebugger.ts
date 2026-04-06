@@ -167,6 +167,8 @@ class WasmDumpDebugger {
 		this.dropzone.remove();
 
 		this.layout?.dispose();
-		this.layout = new DockviewDumpLayout(this.shell);
+		this.layout = new DockviewDumpLayout(this.shell, {
+			onOpenFile: () => this.fileInput.click(),
+		});
 	}
 }

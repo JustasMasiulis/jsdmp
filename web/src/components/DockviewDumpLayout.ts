@@ -5,11 +5,9 @@ import {
 	themeLight,
 } from "dockview-core";
 import {
-	addMemoryPanel,
+	addPanelInstance,
 	applyDefaultLayout,
-	openPanel,
 	PANEL_SPECS,
-	type PanelId,
 	restoreLayout,
 	saveLayout,
 } from "../lib/dockviewLayout";
@@ -35,18 +33,26 @@ const COMPONENT_FACTORIES = new Map<string, ComponentFactory>([
 	["summary", (el) => new SummaryView(el)],
 ]);
 
+export type LayoutCallbacks = {
+	onOpenFile?: () => void;
+};
+
 export class DockviewDumpLayout {
 	private dockview: DockviewApi;
-	private toolbar: HTMLElement;
+	private menubar: HTMLElement;
+	private openMenu: HTMLElement | null = null;
 
-	constructor(private container: HTMLElement) {
+	constructor(
+		private container: HTMLElement,
+		private callbacks: LayoutCallbacks = {},
+	) {
+		this.menubar = this.buildMenubar();
+		container.append(this.menubar);
+
 		const shell = document.createElement("section");
 		shell.className = "dump-dockview-shell";
 		shell.setAttribute("aria-label", "Docked dump details");
 		container.append(shell);
-
-		this.toolbar = this.buildToolbar();
-		shell.append(this.toolbar);
 
 		const host = document.createElement("div");
 		host.className = "dump-dockview-host";
@@ -66,7 +72,7 @@ export class DockviewDumpLayout {
 			applyDefaultLayout(this.dockview);
 			saveLayout(this.dockview);
 		}
-		this.refreshToolbar();
+		document.addEventListener("pointerdown", this.onDocumentPointerDown);
 	}
 
 	private createComponent = (options: {
@@ -85,73 +91,141 @@ export class DockviewDumpLayout {
 
 	private saveAndRefresh(): void {
 		saveLayout(this.dockview);
-		this.refreshToolbar();
 	}
 
-	private buildToolbar(): HTMLElement {
-		const toolbar = document.createElement("div");
-		toolbar.className = "dump-dockview-toolbar";
-		toolbar.addEventListener("click", this.onToolbarClick);
-		this.refreshToolbar(toolbar);
-		return toolbar;
-	}
+	private buildMenubar(): HTMLElement {
+		const bar = document.createElement("div");
+		bar.className = "menubar";
+		bar.setAttribute("role", "menubar");
 
-	private refreshToolbar(toolbar?: HTMLElement): void {
-		const target = toolbar ?? this.toolbar;
-		target.innerHTML = "";
-
-		for (const panel of PANEL_SPECS) {
-			const btn = document.createElement("button");
-			btn.type = "button";
-			btn.className = "dump-dockview-toolbar__button";
-			btn.dataset.action = "open-panel";
-			btn.dataset.panelId = panel.id;
-			btn.textContent = `Open ${panel.title}`;
-			btn.disabled = !!this.dockview?.getPanel(panel.id);
-			target.append(btn);
-		}
-
-		const resetBtn = document.createElement("button");
-		resetBtn.type = "button";
-		resetBtn.className = "dump-dockview-toolbar__button";
-		resetBtn.dataset.action = "reset-layout";
-		resetBtn.textContent = "Reset Layout";
-		target.append(resetBtn);
-
-		const memBtn = document.createElement("button");
-		memBtn.type = "button";
-		memBtn.className = "dump-dockview-toolbar__button";
-		memBtn.dataset.action = "add-memory-view";
-		memBtn.textContent = "Add Memory View";
-		target.append(memBtn);
-	}
-
-	private onToolbarClick = (event: MouseEvent): void => {
-		const btn = (event.target as HTMLElement).closest<HTMLButtonElement>(
-			"button[data-action]",
+		bar.append(
+			this.buildDropdown("File", this.buildFileMenu),
+			this.buildDropdown("View", this.buildViewMenu),
+			this.buildResetButton(),
 		);
-		if (!btn) return;
 
-		switch (btn.dataset.action) {
-			case "open-panel": {
-				const panelId = btn.dataset.panelId as PanelId | undefined;
-				if (panelId && openPanel(this.dockview, panelId)) {
-					this.saveAndRefresh();
-				}
-				break;
+		return bar;
+	}
+
+	private buildDropdown(
+		label: string,
+		buildItems: () => HTMLElement,
+	): HTMLElement {
+		const wrapper = document.createElement("div");
+		wrapper.className = "menubar__dropdown";
+
+		const trigger = document.createElement("button");
+		trigger.type = "button";
+		trigger.className = "menubar__trigger";
+		trigger.textContent = label;
+		trigger.setAttribute("aria-haspopup", "true");
+		trigger.setAttribute("aria-expanded", "false");
+		wrapper.append(trigger);
+
+		const menu = buildItems();
+		menu.className = "menubar__menu";
+		menu.setAttribute("role", "menu");
+		menu.hidden = true;
+		wrapper.append(menu);
+
+		trigger.addEventListener("pointerdown", (e) => {
+			e.preventDefault();
+			if (this.openMenu === menu) {
+				this.closeMenus();
+			} else {
+				this.closeMenus();
+				this.showMenu(trigger, menu);
 			}
-			case "reset-layout":
-				applyDefaultLayout(this.dockview);
-				this.saveAndRefresh();
-				break;
-			case "add-memory-view":
-				addMemoryPanel(this.dockview);
-				this.saveAndRefresh();
-				break;
+		});
+
+		trigger.addEventListener("pointerenter", () => {
+			if (this.openMenu && this.openMenu !== menu) {
+				this.closeMenus();
+				this.showMenu(trigger, menu);
+			}
+		});
+
+		return wrapper;
+	}
+
+	private showMenu(trigger: HTMLButtonElement, menu: HTMLElement): void {
+		trigger.setAttribute("aria-expanded", "true");
+		trigger.classList.add("menubar__trigger--active");
+		menu.hidden = false;
+		this.openMenu = menu;
+	}
+
+	private closeMenus(): void {
+		if (!this.openMenu) return;
+		this.openMenu.hidden = true;
+		this.openMenu = null;
+		for (const trigger of this.menubar.querySelectorAll(".menubar__trigger")) {
+			trigger.setAttribute("aria-expanded", "false");
+			trigger.classList.remove("menubar__trigger--active");
+		}
+	}
+
+	private onDocumentPointerDown = (e: PointerEvent): void => {
+		if (!this.openMenu) return;
+		if (!(e.target instanceof Node) || !this.menubar.contains(e.target)) {
+			this.closeMenus();
 		}
 	};
 
+	private buildFileMenu = (): HTMLElement => {
+		const menu = document.createElement("div");
+
+		const openItem = this.menuItem("Open File\u2026", () => {
+			this.callbacks.onOpenFile?.();
+		});
+		openItem.dataset.menuId = "open-file";
+		menu.append(openItem);
+
+		return menu;
+	};
+
+	private buildViewMenu = (): HTMLElement => {
+		const menu = document.createElement("div");
+
+		for (const panel of PANEL_SPECS) {
+			menu.append(
+				this.menuItem(panel.title, () => {
+					addPanelInstance(this.dockview, panel.id);
+					this.saveAndRefresh();
+				}),
+			);
+		}
+
+		return menu;
+	};
+
+	private buildResetButton(): HTMLElement {
+		const btn = document.createElement("button");
+		btn.type = "button";
+		btn.className = "menubar__trigger";
+		btn.textContent = "Reset Layout";
+		btn.addEventListener("click", () => {
+			applyDefaultLayout(this.dockview);
+			this.saveAndRefresh();
+		});
+		return btn;
+	}
+
+	private menuItem(label: string, action: () => void): HTMLButtonElement {
+		const btn = document.createElement("button");
+		btn.type = "button";
+		btn.className = "menubar__item";
+		btn.setAttribute("role", "menuitem");
+		btn.textContent = label;
+		btn.addEventListener("click", () => {
+			action();
+			this.closeMenus();
+		});
+		return btn;
+	}
+
 	dispose(): void {
+		document.removeEventListener("pointerdown", this.onDocumentPointerDown);
 		this.dockview.dispose();
 		this.container.innerHTML = "";
 	}

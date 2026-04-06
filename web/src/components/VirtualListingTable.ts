@@ -267,14 +267,6 @@ export class FixedRowVirtualTable<TRowState> {
 		const tableNode = document.createElement("div");
 		tableNode.className = "memory-view-table";
 
-		const headerNode = document.createElement("div");
-		headerNode.className = "memory-view-table__header";
-		for (const column of this.adapter.columns) {
-			const span = document.createElement("span");
-			span.textContent = column.title;
-			headerNode.append(span);
-		}
-
 		const viewportNode = document.createElement("div");
 		viewportNode.className = "memory-view-table__viewport";
 
@@ -288,7 +280,7 @@ export class FixedRowVirtualTable<TRowState> {
 		rowsNode.className = "memory-view-table__rows";
 		clipNode.append(rowsNode);
 		viewportNode.append(virtualPanelNode, clipNode);
-		tableNode.append(headerNode, viewportNode);
+		tableNode.append(viewportNode);
 
 		return {
 			tableNode,

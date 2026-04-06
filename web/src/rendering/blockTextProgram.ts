@@ -54,12 +54,12 @@ const SYNTAX_COLORS: Record<CfgTextSyntaxKind, [number, number, number]> = {
 	number: [0.78, 0.26, 0.16],
 };
 
-const BLOCK_BG_R = 0.973;
-const BLOCK_BG_G = 0.976;
-const BLOCK_BG_B = 0.98;
-const BORDER_R = 0.61;
-const BORDER_G = 0.64;
-const BORDER_B = 0.68;
+const BLOCK_BG_R = 0.992156862745098;
+const BLOCK_BG_G = 0.996078431372549;
+const BLOCK_BG_B = 1;
+const BORDER_R = 0.8705882352941176;
+const BORDER_G = 0.8745098039215686;
+const BORDER_B = 0.8784313725490196;
 const SEL_BORDER_R = 0.21;
 const SEL_BORDER_G = 0.46;
 const SEL_BORDER_B = 0.99;

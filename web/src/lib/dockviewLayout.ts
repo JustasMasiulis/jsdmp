@@ -5,8 +5,6 @@ import type {
 } from "dockview-core";
 
 export const LAYOUT_STORAGE_KEY = "wasm-dump-debugger:dockview:v1";
-export const MEMORY_BASE_ID = "memory";
-
 type PanelSpec = {
 	id: string;
 	component: string;
@@ -20,11 +18,11 @@ export const PANEL_SPECS = [
 	{
 		id: "disassembly-graph",
 		component: "disassembly-graph",
-		title: "Disassembly Graph",
+		title: "Graph",
 	},
 	{ id: "modules", component: "modules", title: "Modules" },
 	{ id: "threads", component: "threads", title: "Threads" },
-	{ id: MEMORY_BASE_ID, component: "memory-view", title: "Memory" },
+	{ id: "memory", component: "memory-view", title: "Memory" },
 	{ id: "command", component: "command", title: "Command" },
 ] as const satisfies ReadonlyArray<PanelSpec>;
 
@@ -57,30 +55,23 @@ const getActivePanelPosition = (
 		: undefined;
 };
 
-const parseMemoryPanelNumber = (panelId: string): number | null => {
-	if (panelId === MEMORY_BASE_ID) {
-		return 1;
-	}
+const parsePanelNumber = (panelId: string, baseId: string): number | null => {
+	if (panelId === baseId) return 1;
 
-	const match = /^memory-(\d+)$/.exec(panelId);
-	if (!match) {
-		return null;
-	}
-
-	return Number.parseInt(match[1], 10);
+	const suffix = panelId.slice(baseId.length);
+	const match = /^-(\d+)$/.exec(suffix);
+	return match ? Number.parseInt(match[1], 10) : null;
 };
 
-const getNextMemoryPanelNumber = (dockview: DockviewApi): number => {
-	let maxPanelNumber = 1;
+const getNextPanelNumber = (dockview: DockviewApi, baseId: string): number => {
+	let max = 0;
 
 	for (const panel of dockview.panels) {
-		const panelNumber = parseMemoryPanelNumber(panel.id);
-		if (panelNumber) {
-			maxPanelNumber = Math.max(maxPanelNumber, panelNumber);
-		}
+		const n = parsePanelNumber(panel.id, baseId);
+		if (n !== null) max = Math.max(max, n);
 	}
 
-	return maxPanelNumber + 1;
+	return max + 1;
 };
 
 export const saveLayout = (
@@ -149,25 +140,22 @@ export const addPanelIfMissing = (
 	return true;
 };
 
-export const openPanel = (dockview: DockviewApi, panelId: PanelId): boolean => {
-	const existingPanel = dockview.getPanel(panelId);
-	if (existingPanel) {
-		existingPanel.api.setActive();
-		return false;
-	}
+export const addPanelInstance = (
+	dockview: DockviewApi,
+	baseId: PanelId,
+): string => {
+	const spec = PANEL_SPECS_BY_ID.get(baseId);
+	if (!spec) throw new Error(`Unknown panel: ${baseId}`);
 
-	return addPanelIfMissing(dockview, panelId, getActivePanelPosition(dockview));
-};
-
-export const addMemoryPanel = (dockview: DockviewApi): string => {
-	const panelNumber = getNextMemoryPanelNumber(dockview);
-	const panelId = `memory-${panelNumber}`;
+	const n = getNextPanelNumber(dockview, baseId);
+	const panelId = n === 1 ? baseId : `${baseId}-${n}`;
+	const title = n === 1 ? spec.title : `${spec.title} #${n}`;
 
 	dockview.addPanel({
-		component: "memory-view",
+		component: spec.component,
 		id: panelId,
 		position: getActivePanelPosition(dockview),
-		title: `Memory #${panelNumber}`,
+		title,
 	});
 
 	return panelId;
@@ -201,7 +189,7 @@ export const applyDefaultLayout = (dockview: DockviewApi) => {
 		direction: "below",
 		referencePanel: "exception",
 	});
-	addPanelIfMissing(dockview, MEMORY_BASE_ID, {
+	addPanelIfMissing(dockview, "memory", {
 		direction: "within",
 		referencePanel: "summary",
 	});

@@ -79,7 +79,6 @@ export class DisassemblyGraphView implements IContentRenderer {
 	private isDisposed = false;
 	private reloadToken = 0;
 
-	private readonly root: HTMLElement;
 	private readonly addressInput: HTMLInputElement;
 	private readonly jumpButton: HTMLButtonElement;
 	private readonly followCheckbox: HTMLInputElement;
@@ -137,8 +136,12 @@ export class DisassemblyGraphView implements IContentRenderer {
 
 	constructor(element: HTMLElement, panelId: string) {
 		this.element = element;
+		this.element.setAttribute(
+			"aria-label",
+			`Disassembly graph view ${panelId}`,
+		);
+
 		this.panelId = panelId;
-		this.root = this.createRoot(panelId);
 		const dom = this.createDomTree();
 		this.addressInput = dom.addressInput;
 		this.jumpButton = dom.jumpButton;
@@ -147,10 +150,9 @@ export class DisassemblyGraphView implements IContentRenderer {
 		this.errorNode = dom.errorNode;
 		this.emptyNode = dom.emptyNode;
 		this.graphHost = dom.graphHost;
-		this.element.replaceChildren(this.root);
 
-		this.root.addEventListener("submit", this.onAddressSubmit);
-		this.root.addEventListener("click", this.onDisasmLinkClick);
+		this.element.addEventListener("submit", this.onAddressSubmit);
+		this.element.addEventListener("click", this.onDisasmLinkClick);
 		this.followCheckbox.addEventListener("change", this.onFollowChange);
 
 		this.contextHandle = DBG.currentContext.subscribe(() =>
@@ -174,18 +176,11 @@ export class DisassemblyGraphView implements IContentRenderer {
 		if (this.isDisposed) return;
 		this.isDisposed = true;
 		this.contextHandle.dispose();
-		this.root.removeEventListener("submit", this.onAddressSubmit);
-		this.root.removeEventListener("click", this.onDisasmLinkClick);
+		this.element.removeEventListener("submit", this.onAddressSubmit);
+		this.element.removeEventListener("click", this.onDisasmLinkClick);
 		this.followCheckbox.removeEventListener("change", this.onFollowChange);
 		this.disposeGraph();
-		this.root.replaceChildren();
-	}
-
-	private createRoot(panelId: string) {
-		const root = document.createElement("section");
-		root.className = "memory-view-panel disassembly-graph-view-panel";
-		root.setAttribute("aria-label", `Disassembly graph view ${panelId}`);
-		return root;
+		this.element.replaceChildren();
 	}
 
 	private createDomTree() {
@@ -194,11 +189,6 @@ export class DisassemblyGraphView implements IContentRenderer {
 
 		const jumpForm = document.createElement("form");
 		jumpForm.className = "memory-view-panel__jump";
-
-		const jumpLabel = document.createElement("label");
-		jumpLabel.className = "memory-view-panel__label";
-		jumpLabel.htmlFor = `disassembly-graph-jump-${this.panelId}`;
-		jumpLabel.textContent = "Address";
 
 		const addressInput = document.createElement("input");
 		addressInput.id = `disassembly-graph-jump-${this.panelId}`;
@@ -211,7 +201,7 @@ export class DisassemblyGraphView implements IContentRenderer {
 		jumpButton.className = "memory-view-panel__button";
 		jumpButton.textContent = "Jump";
 
-		jumpForm.append(jumpLabel, addressInput, jumpButton);
+		jumpForm.append(addressInput, jumpButton);
 
 		const followLabel = document.createElement("label");
 		followLabel.className = "memory-view-panel__toggle";
@@ -239,7 +229,7 @@ export class DisassemblyGraphView implements IContentRenderer {
 		graphHost.hidden = true;
 		graphHost.style.position = "relative";
 
-		this.root.append(toolbar, statusNode, errorNode, emptyNode, graphHost);
+		this.element.append(toolbar, statusNode, errorNode, emptyNode, graphHost);
 		return {
 			addressInput,
 			jumpButton,

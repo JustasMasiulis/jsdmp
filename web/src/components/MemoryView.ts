@@ -132,9 +132,11 @@ export class MemoryView implements IContentRenderer {
 
 	constructor(element: HTMLElement, panelId: string) {
 		this.element = element;
+
 		this.panelId = panelId;
 		this.panelIndex = parsePanelIndex(panelId);
-		this.root = this.createRoot();
+		this.element.setAttribute("aria-label", `Memory view ${this.panelIndex}`);
+
 		this.table = new FixedRowVirtualTable<MemoryRowState>({
 			adapter: this.createMemoryAdapter(),
 			rowHeightPx: ROW_HEIGHT_PX,
@@ -149,9 +151,8 @@ export class MemoryView implements IContentRenderer {
 		this.errorNode = dom.errorNode;
 		this.emptyNode = dom.emptyNode;
 		this.tableNode = dom.tableNode;
-		this.element.replaceChildren(this.root);
 
-		this.root.addEventListener("submit", this.onAddressSubmit);
+		this.element.addEventListener("submit", this.onAddressSubmit);
 		this.followCheckbox.addEventListener("change", this.onFollowChange);
 		this.contextHandle = DBG.currentContext.subscribe(() =>
 			this.maybeFollowInstructionPointer(),
@@ -174,10 +175,10 @@ export class MemoryView implements IContentRenderer {
 
 		this.isDisposed = true;
 		this.contextHandle.dispose();
-		this.root.removeEventListener("submit", this.onAddressSubmit);
+		this.element.removeEventListener("submit", this.onAddressSubmit);
 		this.followCheckbox.removeEventListener("change", this.onFollowChange);
 		this.table.dispose();
-		this.root.replaceChildren();
+		this.element.replaceChildren();
 	}
 
 	private createMemoryAdapter(): VirtualListingAdapter<MemoryRowState> {
@@ -211,24 +212,12 @@ export class MemoryView implements IContentRenderer {
 		};
 	}
 
-	private createRoot() {
-		const root = document.createElement("section");
-		root.className = "memory-view-panel";
-		root.setAttribute("aria-label", `Memory view ${this.panelIndex}`);
-		return root;
-	}
-
 	private createDomTree(tableNode: HTMLDivElement) {
 		const toolbar = document.createElement("div");
 		toolbar.className = "memory-view-panel__toolbar";
 
 		const jumpForm = document.createElement("form");
 		jumpForm.className = "memory-view-panel__jump";
-
-		const jumpLabel = document.createElement("label");
-		jumpLabel.className = "memory-view-panel__label";
-		jumpLabel.htmlFor = `memory-jump-${this.panelId}`;
-		jumpLabel.textContent = "Address";
 
 		const addressInput = document.createElement("input");
 		addressInput.id = `memory-jump-${this.panelId}`;
@@ -241,7 +230,7 @@ export class MemoryView implements IContentRenderer {
 		jumpButton.className = "memory-view-panel__button";
 		jumpButton.textContent = "Jump";
 
-		jumpForm.append(jumpLabel, addressInput, jumpButton);
+		jumpForm.append(addressInput, jumpButton);
 
 		const followLabel = document.createElement("label");
 		followLabel.className = "memory-view-panel__toggle";
@@ -262,7 +251,7 @@ export class MemoryView implements IContentRenderer {
 		emptyNode.textContent = "No memory ranges available.";
 		emptyNode.hidden = true;
 
-		this.root.append(toolbar, errorNode, emptyNode, tableNode);
+		this.element.append(toolbar, errorNode, emptyNode, tableNode);
 		return {
 			addressInput,
 			jumpButton,

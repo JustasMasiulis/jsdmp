@@ -24,7 +24,7 @@ Design language notes for future re-additions:
 	--color-status-ok: oklch(0.6728 0.1722 266.11);
 	--color-status-warn: oklch(0.8124 0.170378 76.3908);
 
-	--border-radius: 2px;
+	--border-radius: 0;
 
 	--btn-padding: 0.25rem 0.375rem;
 	--sidebar-btn-size: 2.25rem;
@@ -87,7 +87,6 @@ Design language notes for future re-additions:
 		margin: 0;
 		font-family: inherit;
 		font-size: 100%;
-		line-height: 1.5;
 		color: unset;
 	}
 
@@ -213,12 +212,6 @@ Design language notes for future re-additions:
 /* general styles */
 
 @layer component {
-	.wasm-debugger-shell,
-	.wasm-test-shell {
-		padding: 1rem;
-		padding-top: 0;
-	}
-
 	.wasm-debugger-shell {
 		display: flex;
 		flex-direction: column;
@@ -291,8 +284,6 @@ Design language notes for future re-additions:
 	.dump-info-panel {
 		padding: 0.75rem;
 		margin-top: 0.75rem;
-		border: 1px solid var(--color-border);
-		border-radius: var(--border-radius);
 	}
 
 	.dump-info-panel__title {
@@ -388,10 +379,6 @@ Design language notes for future re-additions:
 		background: color-mix(in oklab, var(--color-sidebar-indicator) 10%, white);
 	}
 
-	.memory-view-table__row.dump-disassembly-table__fn-label {
-		border-top: 1px solid var(--color-fg2);
-	}
-
 	.memory-view-table__row.dump-disassembly-table__fn-label code {
 		color: var(--color-fg2);
 		overflow: hidden;
@@ -420,41 +407,59 @@ Design language notes for future re-additions:
 		display: flex;
 		flex: 1;
 		flex-direction: column;
-		gap: 0.5rem;
 		min-height: 0;
-		margin-top: 0.75rem;
 	}
 
-	.dump-dockview-toolbar {
+	/* ── menubar ────────────────────────────────────────────── */
+
+	.menubar {
 		display: flex;
-		flex-wrap: wrap;
-		gap: 0.375rem;
+		user-select: none;
 	}
 
-	.dump-dockview-toolbar__button {
+	.menubar__dropdown {
+		position: relative;
+	}
+
+	.menubar__trigger {
 		padding: var(--btn-padding);
-		background: var(--color-bg);
-		border: 1px solid var(--color-border2);
-		border-radius: var(--border-radius);
-		transition:
-			background-color 0.15s ease,
-			border-color 0.15s ease;
+		cursor: pointer;
 	}
 
-	.dump-dockview-toolbar__button:hover {
+	.menubar__trigger:hover,
+	.menubar__trigger--active {
 		background: var(--color-bg2);
-	}
-
-	.dump-dockview-toolbar__button:disabled {
 		color: var(--color-fg2);
-		cursor: not-allowed;
-		background: var(--color-bg2);
+	}
+
+	.menubar__menu {
+		position: absolute;
+		top: 100%;
+		left: 0;
+		z-index: 1000;
+		min-width: 8rem;
+		background: var(--color-bg);
+		border: 1px solid var(--color-border);
+	}
+
+	.menubar__item {
+		display: flex;
+		align-items: center;
+		width: 100%;
+		padding: var(--btn-padding);
+		cursor: pointer;
+		white-space: nowrap;
+	}
+
+	.menubar__item:hover:not(:disabled) {
+		background: var(--color-sidebar-indicator);
+		color: #fff;
 	}
 
 	.dump-dockview-host {
 		flex: 1;
 		min-height: 0;
-		border: 1px solid var(--color-border);
+		border-top: 1px solid var(--color-border);
 		border-radius: var(--border-radius);
 		overflow: hidden;
 	}
@@ -462,6 +467,8 @@ Design language notes for future re-additions:
 	.dump-dockview-panel {
 		height: 100%;
 		overflow: auto;
+		display: flex;
+		flex-direction: column;
 	}
 
 	.dump-dockview-panel .dump-info-panel {
@@ -491,6 +498,7 @@ Design language notes for future re-additions:
 		flex-wrap: wrap;
 		gap: 0.5rem;
 		align-items: center;
+		padding: 0.25rem 0.5rem;
 	}
 
 	.memory-view-panel__jump {
@@ -505,9 +513,8 @@ Design language notes for future re-additions:
 
 	.memory-view-panel__input {
 		width: 18rem;
-		padding: 0.2rem 0.35rem;
+		padding: var(--btn-padding);
 		font-family: var(--font-mono);
-		font-size: 12px;
 		border: 1px solid var(--color-border2);
 		border-radius: var(--border-radius);
 	}
@@ -552,7 +559,7 @@ Design language notes for future re-additions:
 		flex: 1;
 		flex-direction: column;
 		min-height: 0;
-		border: 1px solid var(--color-border);
+		height: 100%;
 	}
 
 	.memory-view-table__header,
@@ -645,16 +652,16 @@ Design language notes for future re-additions:
 .disassembly-graph-view-panel__status {
 	margin: 0;
 	color: var(--color-fg2);
+	padding: 0.25rem 0.5rem;
 }
 
 .disassembly-graph-view-panel__graph {
 	position: relative;
 	flex: 1;
 	min-height: 0;
-	border: 1px solid var(--color-border);
-	background: var(--color-bg2);
 	overflow: hidden;
 	cursor: grab;
+	height: 100%;
 }
 
 .disassembly-graph-view-panel__graph--panning {
@@ -758,7 +765,6 @@ Design language notes for future re-additions:
 	flex-direction: column;
 	height: 100%;
 	font-family: var(--font-mono);
-	font-size: 0.8125rem;
 	color: var(--color-fg);
 	background: var(--color-bg);
 }
@@ -819,11 +825,40 @@ Design language notes for future re-additions:
 	outline: none;
 	color: var(--color-fg);
 	font-family: var(--font-mono);
-	font-size: 0.8125rem;
 	padding: 0;
 	line-height: 1.4;
 }
 
 .command-view__input:disabled {
 	opacity: 0.5;
+}
+
+div.dockview-theme-light {
+	--dv-tabs-and-actions-container-height: 24px;
+	--dv-tabs-and-actions-container-background-color: var(--color-bg);
+
+	--dv-activegroup-hiddenpanel-tab-background-color: var(--color-bg);
+	--dv-activegroup-hiddenpanel-tab-color: var(--color-fg2);
+
+	--dv-inactivegroup-hiddenpanel-tab-background-color: var(--color-bg);
+	--dv-inactivegroup-hiddenpanel-tab-color: var(--color-fg2);
+
+	--dv-inactivegroup-visiblepanel-tab-color: var(--color-fg);
+	--dv-activegroup-visiblepanel-tab-color: var(--color-fg);
+
+	--dv-separator-border: var(--color-border);
+
+	.dv-tab {
+		padding: var(--btn-padding);
+		border-bottom: 1px solid transparent;
+
+		&:hover {
+			border-bottom: 1px solid var(--color-border2);
+		}
+
+		&.dv-active-tab {
+			border-bottom: 1px solid var(--color-sidebar-indicator);
+			color: var(--color-sidebar-indicator);
+		}
+	}
 }

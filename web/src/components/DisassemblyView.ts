@@ -101,7 +101,6 @@ export class DisassemblyView implements IContentRenderer {
 	private viewRows: ViewRow[] = [];
 	private anchorViewIndex = -1;
 
-	private readonly root: HTMLElement;
 	private readonly addressInput: HTMLInputElement;
 	private readonly jumpButton: HTMLButtonElement;
 	private readonly followCheckbox: HTMLInputElement;
@@ -146,8 +145,9 @@ export class DisassemblyView implements IContentRenderer {
 
 	constructor(element: HTMLElement, panelId: string) {
 		this.element = element;
+		this.element.setAttribute("aria-label", `Disassembly view ${panelId}`);
+
 		this.panelId = panelId;
-		this.root = this.createRoot(panelId);
 		this.table = new FixedRowVirtualTable<DisassemblyRowState>({
 			adapter: this.createDisassemblyAdapter(),
 			rowHeightPx: ROW_HEIGHT_PX,
@@ -163,9 +163,8 @@ export class DisassemblyView implements IContentRenderer {
 		this.errorNode = dom.errorNode;
 		this.emptyNode = dom.emptyNode;
 		this.tableNode = dom.tableNode;
-		this.element.replaceChildren(this.root);
 
-		this.root.addEventListener("submit", this.onAddressSubmit);
+		this.element.addEventListener("submit", this.onAddressSubmit);
 		this.followCheckbox.addEventListener("change", this.onFollowChange);
 		this.contextHandle = DBG.currentContext.subscribe(() =>
 			this.onContextChanged(),
@@ -196,10 +195,10 @@ export class DisassemblyView implements IContentRenderer {
 
 		this.isDisposed = true;
 		this.contextHandle.dispose();
-		this.root.removeEventListener("submit", this.onAddressSubmit);
+		this.element.removeEventListener("submit", this.onAddressSubmit);
 		this.followCheckbox.removeEventListener("change", this.onFollowChange);
 		this.table.dispose();
-		this.root.replaceChildren();
+		this.element.replaceChildren();
 	}
 
 	private createDisassemblyAdapter(): VirtualListingAdapter<DisassemblyRowState> {
@@ -236,24 +235,12 @@ export class DisassemblyView implements IContentRenderer {
 		};
 	}
 
-	private createRoot(panelId: string) {
-		const root = document.createElement("section");
-		root.className = "memory-view-panel disassembly-view-panel";
-		root.setAttribute("aria-label", `Disassembly view ${panelId}`);
-		return root;
-	}
-
 	private createDomTree(tableNode: HTMLDivElement) {
 		const toolbar = document.createElement("div");
 		toolbar.className = "memory-view-panel__toolbar";
 
 		const jumpForm = document.createElement("form");
 		jumpForm.className = "memory-view-panel__jump";
-
-		const jumpLabel = document.createElement("label");
-		jumpLabel.className = "memory-view-panel__label";
-		jumpLabel.htmlFor = `disassembly-jump-${this.panelId}`;
-		jumpLabel.textContent = "Address";
 
 		const addressInput = document.createElement("input");
 		addressInput.id = `disassembly-jump-${this.panelId}`;
@@ -266,7 +253,7 @@ export class DisassemblyView implements IContentRenderer {
 		jumpButton.className = "memory-view-panel__button";
 		jumpButton.textContent = "Jump";
 
-		jumpForm.append(jumpLabel, addressInput, jumpButton);
+		jumpForm.append(addressInput, jumpButton);
 
 		const followLabel = document.createElement("label");
 		followLabel.className = "memory-view-panel__toggle";
@@ -286,7 +273,7 @@ export class DisassemblyView implements IContentRenderer {
 		emptyNode.className = "memory-view-panel__empty";
 		emptyNode.hidden = true;
 
-		this.root.append(toolbar, errorNode, emptyNode, tableNode);
+		this.element.append(toolbar, errorNode, emptyNode, tableNode);
 		return {
 			addressInput,
 			jumpButton,
