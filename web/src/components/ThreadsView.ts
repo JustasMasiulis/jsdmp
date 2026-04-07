@@ -8,23 +8,6 @@ import { DBG } from "../lib/debugState";
 import { fmtHex8, fmtHex16, fmtPriority } from "../lib/formatting";
 import type { SignalHandle } from "../lib/reactive";
 
-const HEADERS = [
-	"Thread ID",
-	"Suspended",
-	"Priority",
-	"TEB",
-	"Stack Start",
-	"Dump Flags",
-	"Dump Error",
-	"Exit Status",
-	"Create Time",
-	"Exit Time",
-	"Kernel Time",
-	"User Time",
-	"Start Address",
-	"Affinity",
-];
-
 import { EMPTY_CELL } from "../lib/templates";
 
 const threadToRow = (t: DebugThread): string[] => [
@@ -63,39 +46,40 @@ export class ThreadsView implements IContentRenderer {
 		const selectedId = DBG.currentThread.state?.id;
 		render(
 			html`
-				<section class="dump-info-panel" aria-label="Threads">
-					<div class="dump-info-panel__table-wrap">
-						<table class="dump-info-table">
-							<thead>
-								<tr>
-									${HEADERS.map((h) => html`<th>${h}</th>`)}
-								</tr>
-							</thead>
-							<tbody>
-								${
-									threads.length === 0
-										? html`<tr>
-											<td colspan=${HEADERS.length}>
-												<code>none</code>
-											</td>
-										</tr>`
-										: threads.map(
-												(thread, i) => html`
-												<tr
-													class=${`is-clickable${thread.id === selectedId ? " is-selected" : ""}`}
-													@click=${() => DBG.selectThread(thread)}
-												>
-													${rows[i].map(
-														(cell) => html`<td><code>${cell}</code></td>`,
-													)}
-												</tr>
-											`,
-											)
-								}
-							</tbody>
-						</table>
-					</div>
-				</section>
+				<table class="dump-info-table" aria-label="Threads">
+					<thead>
+						<tr>
+							<th>Thread ID</th>
+							<th>Suspended</th>
+							<th>Priority</th>
+							<th>TEB</th>
+							<th>Stack Start</th>
+							<th>Dump Flags</th>
+							<th>Dump Error</th>
+							<th>Exit Status</th>
+							<th>Create Time</th>
+							<th>Exit Time</th>
+							<th>Kernel Time</th>
+							<th>User Time</th>
+							<th>Start Address</th>
+							<th>Affinity</th>
+						</tr>
+					</thead>
+					<tbody>
+						${threads.map(
+							(thread, i) => html`
+										<tr
+											class=${`is-clickable${thread.id === selectedId ? " is-selected" : ""}`}
+											@click=${() => DBG.selectThread(thread)}
+										>
+											${rows[i].map(
+												(cell) => html`<td><code>${cell}</code></td>`,
+											)}
+										</tr>
+									`,
+						)}
+					</tbody>
+				</table>
 			`,
 			this.element,
 		);

@@ -9,70 +9,65 @@ import { fmtHex8, fmtHex16 } from "../lib/formatting";
 import { Signal, type SignalHandle } from "../lib/reactive";
 import { EMPTY_CELL } from "../lib/templates";
 
-const MODULE_HEADERS = [
-	"Base",
-	"Size",
-	"Checksum",
-	"TimeDateStamp",
-	"Name",
-	"PDB",
-	"GUID",
-	"Age",
-];
+const moduleToRow = (m: DebugModule) => html`
+<tr>
+	<td><code>${fmtHex16(m.address)}</code></td>
+	<td><code>${fmtHex8(m.size)}</code></td>
+	<td><code>${fmtHex8(m.checksum)}</code></td>
+	<td><code>${fmtHex8(m.timeDateStamp)}</code></td>
+	<td><code>${m.path || EMPTY_CELL}</code></td>
+	<td><code>${m.pdb?.path || EMPTY_CELL}</code></td>
+	<td><code>${m.pdb?.guid || EMPTY_CELL}</code></td>
+	<td><code>${m.pdb ? String(m.pdb.age) : EMPTY_CELL}</code></td>
+</tr>
+`;
 
-const UNLOADED_HEADERS = ["Base", "Size", "Checksum", "TimeDateStamp", "Name"];
+const unloadedModuleToRow = (m: DebugUnloadedModule) => html`
+<tr>
+	<td><code>${fmtHex16(m.address)}</code></td>
+	<td><code>${fmtHex8(m.size)}</code></td>
+	<td><code>${fmtHex8(m.checksum)}</code></td>
+	<td><code>${fmtHex8(m.timeDateStamp)}</code></td>
+	<td><code>${m.path || EMPTY_CELL}</code></td>
+</tr>
+`;
 
-const moduleToRow = (m: DebugModule): string[] => [
-	fmtHex16(m.address),
-	fmtHex8(m.size),
-	fmtHex8(m.checksum),
-	fmtHex8(m.timeDateStamp),
-	m.path || EMPTY_CELL,
-	m.pdb?.path || EMPTY_CELL,
-	m.pdb?.guid || EMPTY_CELL,
-	m.pdb ? String(m.pdb.age) : EMPTY_CELL,
-];
-
-const unloadedModuleToRow = (m: DebugUnloadedModule): string[] => [
-	fmtHex16(m.address),
-	fmtHex8(m.size),
-	fmtHex8(m.checksum),
-	fmtHex8(m.timeDateStamp),
-	m.path || EMPTY_CELL,
-];
-
-const tableTemplate = (
-	headers: string[],
-	rows: string[][],
-	title?: string,
-) => html`
-	<div class="dump-info-panel__table-wrap">
-		${title ? html`<p class="dump-info-panel__table-title text-medium">${title}</p>` : ""}
+const loadedModulesTemplate = (modules: DebugModule[]) => html`
 		<table class="dump-info-table">
 			<thead>
 				<tr>
-					${headers.map((h) => html`<th>${h}</th>`)}
+					<th>Base</th>
+					<th>Size</th>
+					<th>Checksum</th>
+					<th>TimeDateStamp</th>
+					<th>Name</th>
+					<th>PDB</th>
+					<th>GUID</th>
+					<th>Age</th>
 				</tr>
 			</thead>
 			<tbody>
-				${
-					rows.length === 0
-						? html`<tr>
-							<td colspan=${headers.length}>
-								<code>none</code>
-							</td>
-						</tr>`
-						: rows.map(
-								(row) => html`
-								<tr>
-									${row.map((cell) => html`<td><code>${cell}</code></td>`)}
-								</tr>
-							`,
-							)
-				}
+				${modules.map((m) => moduleToRow(m))}
 			</tbody>
 		</table>
-	</div>
+`;
+
+const unloadedModulesTemplate = (modules: DebugUnloadedModule[]) => html`
+<p class="dump-info-panel__table-title text-medium">Unloaded Modules</p>
+<table class="dump-info-table">
+	<thead>
+		<tr>
+			<th>Base</th>
+			<th>Size</th>
+			<th>Checksum</th>
+			<th>TimeDateStamp</th>
+			<th>Name</th>
+		</tr>
+	</thead>
+	<tbody>
+		${modules.map((m) => unloadedModuleToRow(m))}
+	</tbody>
+</table>
 `;
 
 export class ModulesView implements IContentRenderer {
@@ -93,14 +88,12 @@ export class ModulesView implements IContentRenderer {
 	private doRender(): void {
 		const modules = DBG.modules.state;
 		const unloadedModules = DBG.unloadedModules.state;
-		const moduleRows = modules.map(moduleToRow);
-		const unloadedRows = unloadedModules.map(unloadedModuleToRow);
 
 		render(
 			html`
 				<section class="dump-info-panel" aria-label="Modules">
-					${tableTemplate(MODULE_HEADERS, moduleRows, modules.length > 0 ? "Loaded Modules" : undefined)}
-					${unloadedModules.length > 0 ? tableTemplate(UNLOADED_HEADERS, unloadedRows, "Unloaded Modules") : ""}
+					${loadedModulesTemplate(modules)}
+					${unloadedModulesTemplate(unloadedModules)}
 				</section>
 			`,
 			this.element,
