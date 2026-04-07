@@ -102,6 +102,10 @@ export class CfgGraphRenderer {
 		this.requestRender();
 	}
 
+	getCameraRatio(): number {
+		return this.camera.ratio;
+	}
+
 	getDimensions(): Dimensions {
 		return { width: this.width, height: this.height };
 	}

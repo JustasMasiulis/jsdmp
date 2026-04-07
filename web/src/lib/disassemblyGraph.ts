@@ -35,6 +35,16 @@ export type CfgTextLine = {
 	segments: CfgTextSegment[];
 };
 
+export const getCfgLineAddress = (line: CfgTextLine): bigint | null => {
+	const text = line.segments[0]?.text;
+	if (!text || text.length < 16) return null;
+	try {
+		return BigInt(`0x${text}`);
+	} catch {
+		return null;
+	}
+};
+
 export type CfgNode = {
 	id: string;
 	title: string;

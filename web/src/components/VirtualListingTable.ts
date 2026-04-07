@@ -346,6 +346,7 @@ export class FixedRowVirtualTable<TRowState> {
 
 			const rowIndex = renderStart + i;
 			rowDom.element.hidden = false;
+			rowDom.element.dataset.rowIndex = String(rowIndex);
 			const extraRowClass = this.adapter.getRowClassName?.(
 				rowIndex,
 				rowDom.state,

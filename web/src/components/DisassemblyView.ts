@@ -2,11 +2,7 @@ import type {
 	GroupPanelPartInitParameters,
 	IContentRenderer,
 } from "dockview-core";
-import {
-	loadAddressPanelState,
-	parseHexAddress,
-	saveAddressPanelState,
-} from "../lib/addressPanelState";
+import { AddressToolbar } from "../lib/addressToolbar";
 import type { CpuContext } from "../lib/cpu_context";
 import {
 	buildDisassemblyListing,
@@ -87,12 +83,9 @@ const toDecodeErrorListing = (
 
 export class DisassemblyView implements IContentRenderer {
 	element: HTMLElement;
-	private readonly panelId: string;
+	private readonly toolbar: AddressToolbar;
 	private readonly contextHandle: SignalHandle<CpuContext | null>;
 	private listing: DebugDisassemblyListing | null = null;
-	private followInstructionPointer = true;
-	private manualAddress: bigint | null = null;
-	private addressError = "";
 	private isLoadingPrevious = false;
 	private isLoadingNext = false;
 	private isLoadingListing = false;
@@ -100,32 +93,27 @@ export class DisassemblyView implements IContentRenderer {
 	private reloadToken = 0;
 	private viewRows: ViewRow[] = [];
 	private anchorViewIndex = -1;
+	private selectedAddress: bigint | null = null;
 
-	private readonly addressInput: HTMLInputElement;
-	private readonly jumpButton: HTMLButtonElement;
-	private readonly followCheckbox: HTMLInputElement;
-	private readonly errorNode: HTMLParagraphElement;
-	private readonly emptyNode: HTMLParagraphElement;
 	private readonly tableNode: HTMLDivElement;
 	private readonly table: FixedRowVirtualTable<DisassemblyRowState>;
+	private readonly navigateToAddress = (addr: bigint) =>
+		this.toolbar.navigateToAddress(addr);
 
-	private readonly onFollowChange = () => {
-		const next = this.followCheckbox.checked;
-		this.followInstructionPointer = next;
-		if (!next && this.manualAddress === null) {
-			const ip = DBG.currentContext.state?.ip ?? null;
-			if (ip !== null) {
-				this.manualAddress = ip;
-			}
-		}
-		this.clearAddressError();
-		this.saveState();
-		this.refreshView(true);
-	};
+	private readonly onRowClick = (event: MouseEvent) => {
+		const row = (event.target as HTMLElement).closest<HTMLElement>(
+			".memory-view-table__row[data-row-index]",
+		);
+		if (!row) return;
 
-	private readonly onAddressSubmit = (event: Event) => {
-		event.preventDefault();
-		void this.submitAddress();
+		const rowIndex = Number.parseInt(row.dataset.rowIndex ?? "", 10);
+		if (Number.isNaN(rowIndex)) return;
+		const vr = this.viewRows[rowIndex];
+		if (!vr || vr.kind !== "instruction") return;
+
+		this.selectedAddress = vr.line.address;
+		this.toolbar.selectAddress(vr.line.address);
+		this.requestRender(true);
 	};
 
 	private readonly onViewportChange = (
@@ -147,7 +135,15 @@ export class DisassemblyView implements IContentRenderer {
 		this.element = element;
 		this.element.setAttribute("aria-label", `Disassembly view ${panelId}`);
 
-		this.panelId = panelId;
+		this.toolbar = new AddressToolbar(this.element, {
+			panelId,
+			storageKey: getPanelStorageKey(panelId),
+			defaultSync: true,
+			onNavigate: () => this.refreshView(true),
+			onFocusAddress: (addr) => this.focusAddress(addr),
+			emptyMessage: () => this.emptyMessage(),
+		});
+
 		this.table = new FixedRowVirtualTable<DisassemblyRowState>({
 			adapter: this.createDisassemblyAdapter(),
 			rowHeightPx: ROW_HEIGHT_PX,
@@ -156,47 +152,40 @@ export class DisassemblyView implements IContentRenderer {
 			wheelRowsPerTick: WHEEL_ROWS_PER_TICK,
 			onViewportChange: this.onViewportChange,
 		});
-		const dom = this.createDomTree(this.table.element);
-		this.addressInput = dom.addressInput;
-		this.jumpButton = dom.jumpButton;
-		this.followCheckbox = dom.followCheckbox;
-		this.errorNode = dom.errorNode;
-		this.emptyNode = dom.emptyNode;
-		this.tableNode = dom.tableNode;
+		this.tableNode = this.table.element;
+		this.element.appendChild(this.tableNode);
 
-		this.element.addEventListener("submit", this.onAddressSubmit);
-		this.followCheckbox.addEventListener("change", this.onFollowChange);
+		this.element.tabIndex = 0;
+		this.element.addEventListener("keydown", this.toolbar.onKeyDown);
+		this.tableNode.addEventListener("click", this.onRowClick);
+
 		this.contextHandle = DBG.currentContext.subscribe(() =>
 			this.onContextChanged(),
 		);
 
-		this.restoreState();
 		this.refreshView(true);
 	}
 
 	init(_: GroupPanelPartInitParameters): void {}
 
 	private onContextChanged() {
-		if (this.isDisposed) {
-			return;
-		}
+		if (this.isDisposed) return;
 
+		this.selectedAddress = null;
 		this.listing = null;
 		this.isLoadingPrevious = false;
 		this.isLoadingNext = false;
-		this.clearAddressError();
 		this.refreshView(true);
 	}
 
 	dispose() {
-		if (this.isDisposed) {
-			return;
-		}
+		if (this.isDisposed) return;
 
 		this.isDisposed = true;
 		this.contextHandle.dispose();
-		this.element.removeEventListener("submit", this.onAddressSubmit);
-		this.followCheckbox.removeEventListener("change", this.onFollowChange);
+		this.element.removeEventListener("keydown", this.toolbar.onKeyDown);
+		this.tableNode.removeEventListener("click", this.onRowClick);
+		this.toolbar.dispose();
 		this.table.dispose();
 		this.element.replaceChildren();
 	}
@@ -230,102 +219,17 @@ export class DisassemblyView implements IContentRenderer {
 				const vr = this.viewRows[rowIndex];
 				if (!vr) return "";
 				if (vr.kind === "label") return "dump-disassembly-table__fn-label";
-				return vr.line.isCurrent ? "dump-disassembly-table__current" : "";
+				const classes: string[] = [];
+				if (vr.line.isCurrent) classes.push("dump-disassembly-table__current");
+				if (vr.line.address === this.selectedAddress)
+					classes.push("dump-disassembly-table__selected");
+				return classes.join(" ");
 			},
 		};
 	}
 
-	private createDomTree(tableNode: HTMLDivElement) {
-		const toolbar = document.createElement("div");
-		toolbar.className = "memory-view-panel__toolbar";
-
-		const jumpForm = document.createElement("form");
-		jumpForm.className = "memory-view-panel__jump";
-
-		const addressInput = document.createElement("input");
-		addressInput.id = `disassembly-jump-${this.panelId}`;
-		addressInput.className = "memory-view-panel__input";
-		addressInput.type = "text";
-		addressInput.placeholder = "0x0000000000000000";
-
-		const jumpButton = document.createElement("button");
-		jumpButton.type = "submit";
-		jumpButton.className = "memory-view-panel__button";
-		jumpButton.textContent = "Jump";
-
-		jumpForm.append(addressInput, jumpButton);
-
-		const followLabel = document.createElement("label");
-		followLabel.className = "memory-view-panel__toggle";
-		const followCheckbox = document.createElement("input");
-		followCheckbox.type = "checkbox";
-		const followText = document.createElement("span");
-		followText.textContent = "Follow IP";
-		followLabel.append(followCheckbox, followText);
-
-		toolbar.append(jumpForm, followLabel);
-
-		const errorNode = document.createElement("p");
-		errorNode.className = "memory-view-panel__error";
-		errorNode.hidden = true;
-
-		const emptyNode = document.createElement("p");
-		emptyNode.className = "memory-view-panel__empty";
-		emptyNode.hidden = true;
-
-		this.element.append(toolbar, errorNode, emptyNode, tableNode);
-		return {
-			addressInput,
-			jumpButton,
-			followCheckbox,
-			errorNode,
-			emptyNode,
-			tableNode,
-		};
-	}
-
-	private restoreState() {
-		const storageKey = getPanelStorageKey(this.panelId);
-		const saved = loadAddressPanelState(storageKey);
-		if (typeof saved.followInstructionPointer === "boolean") {
-			this.followInstructionPointer = saved.followInstructionPointer;
-		}
-
-		if (saved.manualAddressHex) {
-			const parsed = parseHexAddress(saved.manualAddressHex);
-			if (parsed !== null) {
-				this.manualAddress = parsed;
-			}
-		}
-	}
-
-	private saveState() {
-		const storageKey = getPanelStorageKey(this.panelId);
-		saveAddressPanelState(storageKey, {
-			manualAddressHex:
-				this.manualAddress !== null ? `0x${fmtHex16(this.manualAddress)}` : "",
-			followInstructionPointer: this.followInstructionPointer,
-		});
-	}
-
-	private syncInputWithAddress(address: bigint | null) {
-		this.addressInput.value = address === null ? "" : `0x${fmtHex16(address)}`;
-	}
-
-	private currentAnchor() {
-		if (this.followInstructionPointer) {
-			return DBG.currentContext.state?.ip ?? null;
-		}
-
-		if (this.manualAddress === null) {
-			return null;
-		}
-
-		return this.manualAddress;
-	}
-
 	private refreshView(reloadListing: boolean) {
-		this.syncDisplayedAddress();
+		this.toolbar.syncDisplayedAddress();
 		if (reloadListing) {
 			void this.reloadListing();
 			return;
@@ -351,7 +255,7 @@ export class DisassemblyView implements IContentRenderer {
 			return;
 		}
 
-		const anchorAddress = this.currentAnchor();
+		const anchorAddress = this.toolbar.currentAnchor();
 		if (anchorAddress === null) {
 			this.listing = null;
 			this.isLoadingListing = false;
@@ -367,14 +271,10 @@ export class DisassemblyView implements IContentRenderer {
 				anchorAddress,
 				DBG.arch,
 			);
-			if (this.isDisposed || token !== this.reloadToken) {
-				return;
-			}
+			if (this.isDisposed || token !== this.reloadToken) return;
 			this.listing = nextListing;
 		} catch (error) {
-			if (this.isDisposed || token !== this.reloadToken) {
-				return;
-			}
+			if (this.isDisposed || token !== this.reloadToken) return;
 			const message = error instanceof Error ? error.message : String(error);
 			this.listing = toDecodeErrorListing(
 				`Disassembly loading failed: ${message}`,
@@ -390,21 +290,6 @@ export class DisassemblyView implements IContentRenderer {
 		}
 	}
 
-	private syncDisplayedAddress() {
-		const address = this.currentAnchor();
-		if (address !== null) {
-			this.syncInputWithAddress(address);
-			return;
-		}
-
-		if (!this.followInstructionPointer && this.manualAddress !== null) {
-			this.syncInputWithAddress(this.manualAddress);
-			return;
-		}
-
-		this.syncInputWithAddress(null);
-	}
-
 	private lines(): readonly DisassemblyLine[] {
 		return this.listing?.lines ?? [];
 	}
@@ -416,19 +301,14 @@ export class DisassemblyView implements IContentRenderer {
 	private lastLoadedEndAddress() {
 		const lines = this.lines();
 		const lastLine = lines[lines.length - 1];
-		if (!lastLine) {
-			return null;
-		}
-
+		if (!lastLine) return null;
 		return lastLine.address + BigInt(lastLine.byteLength);
 	}
 
 	private recomputeRows(scrollToCurrent: boolean) {
 		this.buildViewRows();
 		this.table.setRowCount(this.viewRows.length);
-		if (!scrollToCurrent || this.viewRows.length === 0) {
-			return;
-		}
+		if (!scrollToCurrent || this.viewRows.length === 0) return;
 
 		let scrollTarget = this.anchorViewIndex;
 		if (scrollTarget < 0) {
@@ -443,61 +323,50 @@ export class DisassemblyView implements IContentRenderer {
 
 	private syncControlState() {
 		const hasRows = this.viewRows.length > 0;
-		this.followCheckbox.checked = this.followInstructionPointer;
-		this.addressInput.disabled = this.followInstructionPointer;
-		this.jumpButton.disabled = this.followInstructionPointer;
-		this.errorNode.hidden = this.addressError.length === 0;
-		this.errorNode.textContent = this.addressError;
-		this.emptyNode.hidden = hasRows;
+		this.toolbar.syncControlState(hasRows);
 		this.tableNode.hidden = !hasRows;
-		if (!hasRows) {
-			this.emptyNode.textContent = this.emptyMessage();
-		}
 	}
 
 	private emptyMessage() {
-		if (this.addressError) {
-			return this.listing?.message || "No disassembly instructions available.";
-		}
 		if (this.isLoadingListing) {
 			return "Loading disassembly...";
 		}
 		if (this.listing) {
 			return this.listing.message || "No disassembly instructions available.";
 		}
-		if (!this.followInstructionPointer && this.manualAddress !== null) {
+		if (
+			!this.toolbar.followInstructionPointer &&
+			this.toolbar.manualAddress !== null
+		) {
 			return "Enter an address that exists in dump memory to view disassembly.";
 		}
-		if (this.followInstructionPointer && DBG.currentContext.state?.ip == null) {
+		if (
+			this.toolbar.followInstructionPointer &&
+			DBG.currentContext.state?.ip == null
+		) {
 			return "No instruction pointer available.";
 		}
 		return "Disassembly view is unavailable for this dump.";
 	}
 
-	private setAddressError(message: string) {
-		this.addressError = message;
+	private focusAddress(address: bigint): boolean {
+		const idx = this.viewRows.findIndex(
+			(vr) => vr.kind === "instruction" && vr.line.address === address,
+		);
+		if (idx < 0) return false;
+		this.selectedAddress = address;
+		this.toolbar.syncDisplayedAddress();
 		this.syncControlState();
-	}
-
-	private clearAddressError() {
-		if (!this.addressError) {
-			return;
-		}
-
-		this.addressError = "";
-		this.syncControlState();
+		this.table.scrollToRow(Math.max(0, idx - 6));
+		return true;
 	}
 
 	private async maybeLoadPreviousLines() {
-		if (this.isDisposed || this.isLoadingPrevious || this.isLoadingNext) {
-			return;
-		}
+		if (this.isDisposed || this.isLoadingPrevious || this.isLoadingNext) return;
 
 		const listing = this.listing;
 		const beforeAddress = this.firstLoadedAddress();
-		if (!listing || beforeAddress === null || !listing.hasMorePrevious) {
-			return;
-		}
+		if (!listing || beforeAddress === null || !listing.hasMorePrevious) return;
 
 		this.isLoadingPrevious = true;
 
@@ -517,9 +386,7 @@ export class DisassemblyView implements IContentRenderer {
 				DBG.arch,
 			);
 			currentListing.hasMorePrevious = previousLoad.hasMoreBefore;
-			if (previousLoad.lines.length === 0) {
-				return;
-			}
+			if (previousLoad.lines.length === 0) return;
 
 			currentListing.lines.unshift(...previousLoad.lines);
 			if (currentListing.anchorLineIndex >= 0) {
@@ -543,23 +410,18 @@ export class DisassemblyView implements IContentRenderer {
 	}
 
 	private async maybeLoadNextLines() {
-		if (this.isDisposed || this.isLoadingPrevious || this.isLoadingNext) {
-			return;
-		}
+		if (this.isDisposed || this.isLoadingPrevious || this.isLoadingNext) return;
 
 		const listing = this.listing;
 		const startAddress = this.lastLoadedEndAddress();
-		if (!listing || startAddress === null || !listing.hasMoreNext) {
-			return;
-		}
+		if (!listing || startAddress === null || !listing.hasMoreNext) return;
 
 		this.isLoadingNext = true;
 
 		try {
 			const currentListing = this.listing;
-			if (!currentListing || this.lastLoadedEndAddress() !== startAddress) {
+			if (!currentListing || this.lastLoadedEndAddress() !== startAddress)
 				return;
-			}
 
 			const nextLoad = await loadNextDisassemblyLines(
 				DBG,
@@ -567,9 +429,7 @@ export class DisassemblyView implements IContentRenderer {
 				DBG.arch,
 			);
 			currentListing.hasMoreNext = nextLoad.hasMoreAfter;
-			if (nextLoad.lines.length === 0) {
-				return;
-			}
+			if (nextLoad.lines.length === 0) return;
 
 			currentListing.lines.push(...nextLoad.lines);
 			this.buildViewRows();
@@ -590,15 +450,6 @@ export class DisassemblyView implements IContentRenderer {
 	private requestRender(forceRows: boolean) {
 		this.table.requestRender(forceRows);
 	}
-
-	private readonly navigateToAddress: AddressNavigator = (address: bigint) => {
-		this.manualAddress = address;
-		this.followInstructionPointer = false;
-		this.followCheckbox.checked = false;
-		this.clearAddressError();
-		this.saveState();
-		this.refreshView(true);
-	};
 
 	private buildViewRows() {
 		const lines = this.lines();
@@ -647,21 +498,5 @@ export class DisassemblyView implements IContentRenderer {
 		row.addressCode.title = line.symbol ?? "";
 		row.bytesCode.textContent = line.bytesHex;
 		renderInstructionLine(row.instructionCode, line, this.navigateToAddress);
-	}
-
-	private async submitAddress() {
-		const parsed = parseHexAddress(this.addressInput.value);
-		if (parsed === null) {
-			this.setAddressError(
-				"Address must be hexadecimal (for example: 0x7FF612340000).",
-			);
-			return;
-		}
-
-		this.manualAddress = parsed;
-		this.followInstructionPointer = false;
-		this.clearAddressError();
-		this.saveState();
-		this.refreshView(true);
 	}
 }

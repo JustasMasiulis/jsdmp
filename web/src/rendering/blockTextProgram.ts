@@ -110,6 +110,7 @@ export class BlockTextRenderer {
 	private invBBoxRange = 1;
 
 	private highlightedTerm: string | null = null;
+	private highlightedLineAddr: string | null = null;
 
 	constructor(
 		renderer: CfgGraphRenderer,
@@ -167,8 +168,16 @@ export class BlockTextRenderer {
 		this.onFrame();
 	}
 
+	highlightLineAddress(hexAddress: string | null): void {
+		if (this.highlightedLineAddr === hexAddress) return;
+		this.highlightedLineAddr = hexAddress;
+		this.dirty = true;
+		this.onFrame();
+	}
+
 	markDirtyAndRender(): void {
 		this.dirty = true;
+		this.lastCullTime = 0;
 		this.onFrame();
 	}
 
@@ -303,11 +312,19 @@ export class BlockTextRenderer {
 			for (const line of cfgNode.lines) {
 				totalQuads += line.text.length;
 			}
-			if (this.highlightedTerm) {
+			if (this.highlightedTerm || this.highlightedLineAddr) {
 				for (const line of cfgNode.lines) {
-					for (const seg of line.segments) {
-						if (seg.term === this.highlightedTerm)
-							totalQuads += seg.text.length;
+					if (
+						this.highlightedLineAddr &&
+						line.segments[0]?.text === this.highlightedLineAddr
+					) {
+						totalQuads++;
+					}
+					if (this.highlightedTerm) {
+						for (const seg of line.segments) {
+							if (seg.term === this.highlightedTerm)
+								totalQuads += seg.text.length;
+						}
 					}
 				}
 			}
@@ -357,6 +374,23 @@ export class BlockTextRenderer {
 				const lineGY = baseGY - li * charH;
 				const lineNY = 0.5 + (lineGY - cy) * inv;
 				let charIdx = 0;
+
+				if (
+					this.highlightedLineAddr &&
+					line.segments[0]?.text === this.highlightedLineAddr
+				) {
+					o = solidQuad(
+						buf,
+						o,
+						nx0 + nBorderW,
+						lineNY,
+						nw - 2 * nBorderW,
+						nCharH,
+						HIGHLIGHT_R,
+						HIGHLIGHT_G,
+						HIGHLIGHT_B,
+					);
+				}
 
 				const segs = line.segments.length > 0 ? line.segments : null;
 				if (segs) {

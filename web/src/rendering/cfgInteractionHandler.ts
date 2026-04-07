@@ -4,6 +4,7 @@ import {
 	CARD_PADDING_Y,
 	ESTIMATED_CHAR_WIDTH,
 	ESTIMATED_LINE_HEIGHT,
+	getCfgLineAddress,
 } from "../lib/disassemblyGraph";
 import type { BlockTextRenderer } from "./blockTextProgram";
 import type { CfgGraphRenderer } from "./cfgGraphRenderer";
@@ -26,6 +27,7 @@ export class CfgInteractionHandler {
 	private readonly textRenderer: BlockTextRenderer;
 	private readonly nodesById: Map<string, CfgNode>;
 	private readonly statusCallback: (status: string) => void;
+	private readonly addressCallback: ((address: bigint) => void) | null;
 	private readonly nodePositions: NodePos[] = [];
 	private readonly termCounts: Map<string, number>;
 
@@ -40,12 +42,14 @@ export class CfgInteractionHandler {
 		textRenderer: BlockTextRenderer,
 		nodesById: Map<string, CfgNode>,
 		statusCallback: (status: string) => void,
+		addressCallback?: (address: bigint) => void,
 	) {
 		this.renderer = renderer;
 		this.graph = graph;
 		this.textRenderer = textRenderer;
 		this.nodesById = nodesById;
 		this.statusCallback = statusCallback;
+		this.addressCallback = addressCallback ?? null;
 
 		this.termCounts = this.buildTermCounts();
 
@@ -94,6 +98,33 @@ export class CfgInteractionHandler {
 		});
 	}
 
+	focusLine(nodeId: string, lineIndex: number): void {
+		this.applyNodeSelection(nodeId);
+
+		const renderNode = this.graph.nodeMap.get(nodeId);
+		if (!renderNode) return;
+
+		const bbox = this.renderer.getBBox();
+		const bboxRange = Math.max(bbox.x[1] - bbox.x[0], bbox.y[1] - bbox.y[0], 1);
+		const bboxCenterX = (bbox.x[0] + bbox.x[1]) / 2;
+		const bboxCenterY = (bbox.y[0] + bbox.y[1]) / 2;
+
+		const centerX = renderNode.x + renderNode.width / 2;
+		const lineY =
+			renderNode.y -
+			CARD_PADDING_Y / 2 -
+			lineIndex * ESTIMATED_LINE_HEIGHT -
+			ESTIMATED_LINE_HEIGHT / 2;
+
+		this.renderer.setCameraState({
+			x: 0.5 + (centerX - bboxCenterX) / bboxRange,
+			y: 0.5 + (lineY - bboxCenterY) / bboxRange,
+			ratio: this.renderer.getCameraRatio(),
+		});
+
+		this.textRenderer.markDirtyAndRender();
+	}
+
 	dispose(): void {
 		const container = this.renderer.getContainer();
 		container.removeEventListener("click", this.boundOnClick);
@@ -115,6 +146,7 @@ export class CfgInteractionHandler {
 		if (!block) {
 			this.selectNode(null);
 			this.selectTerm(null);
+			this.textRenderer.highlightLineAddress(null);
 			return;
 		}
 
@@ -122,6 +154,11 @@ export class CfgInteractionHandler {
 
 		const seg = this.findSegmentAtPoint(block, gx, gy);
 		this.selectTerm(seg?.term ?? null);
+
+		if (this.addressCallback) {
+			const address = this.findClickedLineAddress(block, gy);
+			if (address !== null) this.addressCallback(address);
+		}
 	}
 
 	private findBlockAtPoint(gx: number, gy: number): NodePos | null {
@@ -166,7 +203,7 @@ export class CfgInteractionHandler {
 		return null;
 	}
 
-	private selectNode(nodeId: string | null): void {
+	private applyNodeSelection(nodeId: string | null): void {
 		const prev = this._selectedNodeId;
 		if (prev === nodeId) return;
 
@@ -182,8 +219,12 @@ export class CfgInteractionHandler {
 			if (nextNode) nextNode.borderColor = SELECTED_BORDER_COLOR;
 		}
 
-		this.textRenderer.markDirtyAndRender();
 		this.emitStatus();
+	}
+
+	private selectNode(nodeId: string | null): void {
+		this.applyNodeSelection(nodeId);
+		this.textRenderer.markDirtyAndRender();
 	}
 
 	private selectTerm(term: string | null): void {
@@ -203,6 +244,17 @@ export class CfgInteractionHandler {
 			parts.push(`Highlighting "${this._selectedTerm}" (${count} matches).`);
 		}
 		this.statusCallback(parts.join(" "));
+	}
+
+	private findClickedLineAddress(block: NodePos, gy: number): bigint | null {
+		const cfgNode = this.nodesById.get(block.id);
+		if (!cfgNode) return null;
+
+		const localY = gy - block.y - CARD_PADDING_Y / 2;
+		const lineIdx = Math.floor(localY / ESTIMATED_LINE_HEIGHT);
+		if (lineIdx < 0 || lineIdx >= cfgNode.lines.length) return null;
+
+		return getCfgLineAddress(cfgNode.lines[lineIdx]);
 	}
 
 	private buildTermCounts(): Map<string, number> {

@@ -379,6 +379,10 @@ Design language notes for future re-additions:
 		background: color-mix(in oklab, var(--color-sidebar-indicator) 10%, white);
 	}
 
+	.memory-view-table__row.dump-disassembly-table__selected {
+		background: color-mix(in oklab, var(--color-sidebar-indicator) 25%, transparent);
+	}
+
 	.memory-view-table__row.dump-disassembly-table__fn-label code {
 		color: var(--color-fg2);
 		overflow: hidden;

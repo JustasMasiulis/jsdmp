@@ -2,11 +2,7 @@ import type {
 	GroupPanelPartInitParameters,
 	IContentRenderer,
 } from "dockview-core";
-import {
-	loadAddressPanelState,
-	parseHexAddress,
-	saveAddressPanelState,
-} from "../lib/addressPanelState";
+import { AddressToolbar } from "../lib/addressToolbar";
 import type { CpuContext } from "../lib/cpu_context";
 import type { DebugMemoryRange } from "../lib/debug_interface";
 import { DBG } from "../lib/debugState";
@@ -82,60 +78,30 @@ const getPanelStorageKey = (panelId: string) =>
 
 export class MemoryView implements IContentRenderer {
 	element: HTMLElement;
-	private readonly panelId: string;
-	private readonly panelIndex: number;
 	private readonly contextHandle: SignalHandle<CpuContext | null>;
+	private readonly toolbar: AddressToolbar;
+	private readonly table: FixedRowVirtualTable<MemoryRowState>;
 	private ranges: DebugMemoryRange[] = [];
 	private span: MemorySpan | null = null;
 	private totalRows = 0;
-	private followInstructionPointer = true;
-	private manualAddress: bigint | null = null;
-	private addressError = "";
 	private lastFollowAddress: bigint | null = null;
 	private isDisposed = false;
 
-	private readonly root: HTMLElement;
-	private readonly addressInput: HTMLInputElement;
-	private readonly jumpButton: HTMLButtonElement;
-	private readonly followCheckbox: HTMLInputElement;
-	private readonly errorNode: HTMLParagraphElement;
-	private readonly emptyNode: HTMLParagraphElement;
-	private readonly tableNode: HTMLDivElement;
-	private readonly table: FixedRowVirtualTable<MemoryRowState>;
-
-	private readonly onFollowChange = () => {
-		const next = this.followCheckbox.checked;
-		this.followInstructionPointer = next;
-		if (next) {
-			const ip = this.instructionPointer();
-			if (ip !== null) {
-				this.jumpToAddress(ip, true);
-			}
-		}
-		this.syncControlState();
-		this.saveState();
-		this.requestRender(false);
-	};
-
-	private readonly onAddressSubmit = (event: Event) => {
-		event.preventDefault();
-		const parsed = parseHexAddress(this.addressInput.value);
-		if (parsed === null) {
-			this.setAddressError(
-				"Address must be hexadecimal (for example: 0x7FF612340000).",
-			);
-			return;
-		}
-
-		this.jumpToAddress(parsed, false);
-	};
-
 	constructor(element: HTMLElement, panelId: string) {
 		this.element = element;
+		this.element.setAttribute(
+			"aria-label",
+			`Memory view ${parsePanelIndex(panelId)}`,
+		);
+		this.element.tabIndex = 0;
 
-		this.panelId = panelId;
-		this.panelIndex = parsePanelIndex(panelId);
-		this.element.setAttribute("aria-label", `Memory view ${this.panelIndex}`);
+		this.toolbar = new AddressToolbar(this.element, {
+			panelId,
+			storageKey: getPanelStorageKey(panelId),
+			defaultSync: false,
+			onNavigate: () => this.onToolbarNavigate(),
+			emptyMessage: () => "No memory ranges available.",
+		});
 
 		this.table = new FixedRowVirtualTable<MemoryRowState>({
 			adapter: this.createMemoryAdapter(),
@@ -144,26 +110,19 @@ export class MemoryView implements IContentRenderer {
 			defaultViewportHeightPx: DEFAULT_VIEWPORT_HEIGHT_PX,
 			wheelRowsPerTick: WHEEL_ROWS_PER_TICK,
 		});
-		const dom = this.createDomTree(this.table.element);
-		this.addressInput = dom.addressInput;
-		this.jumpButton = dom.jumpButton;
-		this.followCheckbox = dom.followCheckbox;
-		this.errorNode = dom.errorNode;
-		this.emptyNode = dom.emptyNode;
-		this.tableNode = dom.tableNode;
+		this.element.append(this.table.element);
 
-		this.element.addEventListener("submit", this.onAddressSubmit);
-		this.followCheckbox.addEventListener("change", this.onFollowChange);
+		this.element.addEventListener("keydown", this.toolbar.onKeyDown);
+
 		this.contextHandle = DBG.currentContext.subscribe(() =>
 			this.maybeFollowInstructionPointer(),
 		);
 
-		this.restoreState();
 		this.recomputeRangeState();
 		this.ensureAddressState();
 		this.maybeFollowInstructionPointer();
-		this.syncControlState();
-		this.requestRender(true);
+		this.toolbar.syncControlState(this.span !== null);
+		this.table.requestRender(true);
 	}
 
 	init(_: GroupPanelPartInitParameters): void {}
@@ -174,11 +133,38 @@ export class MemoryView implements IContentRenderer {
 		}
 
 		this.isDisposed = true;
+		this.toolbar.dispose();
 		this.contextHandle.dispose();
-		this.element.removeEventListener("submit", this.onAddressSubmit);
-		this.followCheckbox.removeEventListener("change", this.onFollowChange);
+		this.element.removeEventListener("keydown", this.toolbar.onKeyDown);
 		this.table.dispose();
 		this.element.replaceChildren();
+	}
+
+	private onToolbarNavigate(): void {
+		const address = this.toolbar.manualAddress;
+		if (address === null || !this.span) return;
+		this.scrollToAligned(address);
+		this.toolbar.syncDisplayedAddress();
+		this.toolbar.syncControlState(this.span !== null);
+		this.table.requestRender(false);
+	}
+
+	private scrollToAligned(address: bigint): void {
+		if (!this.span) return;
+
+		const aligned = alignDownToRow(
+			clampAddressToSpan(address, this.span),
+			this.span.start,
+		);
+		this.toolbar.manualAddress = aligned;
+
+		const rowOffsetBig = (aligned - this.span.start) / BigInt(BYTES_PER_ROW);
+		const rowOffset = Number(
+			rowOffsetBig > BigInt(Number.MAX_SAFE_INTEGER)
+				? BigInt(Number.MAX_SAFE_INTEGER)
+				: rowOffsetBig,
+		);
+		this.table.scrollToRow(rowOffset);
 	}
 
 	private createMemoryAdapter(): VirtualListingAdapter<MemoryRowState> {
@@ -209,56 +195,6 @@ export class MemoryView implements IContentRenderer {
 			renderRow: (rowIndex, rowState) => {
 				this.fillRow(rowState, rowIndex);
 			},
-		};
-	}
-
-	private createDomTree(tableNode: HTMLDivElement) {
-		const toolbar = document.createElement("div");
-		toolbar.className = "memory-view-panel__toolbar";
-
-		const jumpForm = document.createElement("form");
-		jumpForm.className = "memory-view-panel__jump";
-
-		const addressInput = document.createElement("input");
-		addressInput.id = `memory-jump-${this.panelId}`;
-		addressInput.className = "memory-view-panel__input";
-		addressInput.type = "text";
-		addressInput.placeholder = "0x0000000000000000";
-
-		const jumpButton = document.createElement("button");
-		jumpButton.type = "submit";
-		jumpButton.className = "memory-view-panel__button";
-		jumpButton.textContent = "Jump";
-
-		jumpForm.append(addressInput, jumpButton);
-
-		const followLabel = document.createElement("label");
-		followLabel.className = "memory-view-panel__toggle";
-		const followCheckbox = document.createElement("input");
-		followCheckbox.type = "checkbox";
-		const followText = document.createElement("span");
-		followText.textContent = "Follow IP";
-		followLabel.append(followCheckbox, followText);
-
-		toolbar.append(jumpForm, followLabel);
-
-		const errorNode = document.createElement("p");
-		errorNode.className = "memory-view-panel__error";
-		errorNode.hidden = true;
-
-		const emptyNode = document.createElement("p");
-		emptyNode.className = "memory-view-panel__empty";
-		emptyNode.textContent = "No memory ranges available.";
-		emptyNode.hidden = true;
-
-		this.element.append(toolbar, errorNode, emptyNode, tableNode);
-		return {
-			addressInput,
-			jumpButton,
-			followCheckbox,
-			errorNode,
-			emptyNode,
-			tableNode,
 		};
 	}
 
@@ -299,131 +235,30 @@ export class MemoryView implements IContentRenderer {
 	private ensureAddressState() {
 		const span = this.span;
 		if (!span) {
-			this.manualAddress = null;
-			this.addressInput.value = "";
+			this.toolbar.manualAddress = null;
+			this.toolbar.syncDisplayedAddress();
 			return;
 		}
 
-		if (this.manualAddress === null || !isInSpan(this.manualAddress, span)) {
-			this.manualAddress = span.start;
+		if (
+			this.toolbar.manualAddress === null ||
+			!isInSpan(this.toolbar.manualAddress, span)
+		) {
+			this.toolbar.manualAddress = span.start;
 		}
 
-		this.syncInputWithAddress(this.manualAddress);
-	}
-
-	private instructionPointer() {
-		return DBG.currentContext.state?.ip ?? null;
+		this.toolbar.syncDisplayedAddress();
 	}
 
 	private maybeFollowInstructionPointer() {
-		if (!this.followInstructionPointer) {
-			return;
-		}
+		if (!this.toolbar.followInstructionPointer) return;
 
-		const ip = this.instructionPointer();
-		if (ip === null || ip === this.lastFollowAddress) {
-			return;
-		}
+		const ip = DBG.currentContext.state?.ip ?? null;
+		if (ip === null || ip === this.lastFollowAddress) return;
 
 		this.lastFollowAddress = ip;
-		this.jumpToAddress(ip, true);
-	}
-
-	private restoreState() {
-		const storageKey = getPanelStorageKey(this.panelId);
-		const saved = loadAddressPanelState(storageKey);
-		if (typeof saved.followInstructionPointer === "boolean") {
-			this.followInstructionPointer = saved.followInstructionPointer;
-		}
-
-		if (saved.manualAddressHex) {
-			const parsed = parseHexAddress(saved.manualAddressHex);
-			if (parsed !== null) {
-				this.manualAddress = parsed;
-			}
-		}
-	}
-
-	private saveState() {
-		const storageKey = getPanelStorageKey(this.panelId);
-		saveAddressPanelState(storageKey, {
-			manualAddressHex:
-				this.manualAddress !== null ? `0x${fmtHex16(this.manualAddress)}` : "",
-			followInstructionPointer: this.followInstructionPointer,
-		});
-	}
-
-	private syncInputWithAddress(address: bigint | null) {
-		if (address === null) {
-			this.addressInput.value = "";
-			return;
-		}
-
-		this.addressInput.value = `0x${fmtHex16(address)}`;
-	}
-
-	private syncControlState() {
-		const hasSpan = this.span !== null;
-		this.followCheckbox.checked = this.followInstructionPointer;
-		this.addressInput.disabled = this.followInstructionPointer || !hasSpan;
-		this.jumpButton.disabled = this.followInstructionPointer || !hasSpan;
-		this.errorNode.hidden = this.addressError.length === 0;
-		this.errorNode.textContent = this.addressError;
-		this.emptyNode.hidden = hasSpan;
-		this.tableNode.hidden = !hasSpan;
-	}
-
-	private setAddressError(message: string) {
-		this.addressError = message;
-		this.syncControlState();
-	}
-
-	private clearAddressError() {
-		if (!this.addressError) {
-			return;
-		}
-
-		this.addressError = "";
-		this.syncControlState();
-	}
-
-	private jumpToAddress(address: bigint, keepFollow: boolean) {
-		const span = this.span;
-		if (!span) {
-			return;
-		}
-
-		const aligned = alignDownToRow(
-			clampAddressToSpan(address, span),
-			span.start,
-		);
-		this.manualAddress = aligned;
-		this.syncInputWithAddress(aligned);
-		this.clearAddressError();
-
-		if (!keepFollow) {
-			this.followInstructionPointer = false;
-		}
-
-		this.followCheckbox.checked = this.followInstructionPointer;
-		this.syncControlState();
-		this.saveState();
-
-		const rowOffsetBig = (aligned - span.start) / BigInt(BYTES_PER_ROW);
-		const rowOffset = Number(
-			rowOffsetBig > BigInt(Number.MAX_SAFE_INTEGER)
-				? BigInt(Number.MAX_SAFE_INTEGER)
-				: rowOffsetBig,
-		);
-		this.scrollToRow(rowOffset);
-	}
-
-	private scrollToRow(rowOffset: number) {
-		this.table.scrollToRow(rowOffset);
-	}
-
-	private requestRender(forceRows: boolean) {
-		this.table.requestRender(forceRows);
+		this.scrollToAligned(ip);
+		this.toolbar.syncDisplayedAddress();
 	}
 
 	private fillRow(row: MemoryRowState, rowIndex: number) {

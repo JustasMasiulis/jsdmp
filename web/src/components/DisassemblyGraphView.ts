@@ -2,11 +2,7 @@ import type {
 	GroupPanelPartInitParameters,
 	IContentRenderer,
 } from "dockview-core";
-import {
-	loadAddressPanelState,
-	parseHexAddress,
-	saveAddressPanelState,
-} from "../lib/addressPanelState";
+import { AddressToolbar } from "../lib/addressToolbar";
 import type { CpuContext } from "../lib/cpu_context";
 import { DBG } from "../lib/debugState";
 import {
@@ -15,6 +11,7 @@ import {
 	type CfgEdgeKind,
 	type CfgNode,
 	estimateNodeDimensions,
+	getCfgLineAddress,
 } from "../lib/disassemblyGraph";
 import { fmtHex16 } from "../lib/formatting";
 import {
@@ -69,24 +66,17 @@ const cfgResultToAnnotatedDescriptor = (
 };
 
 export class DisassemblyGraphView implements IContentRenderer {
-	private readonly panelId: string;
+	private readonly toolbar: AddressToolbar;
 	private readonly contextHandle: SignalHandle<CpuContext | null>;
 	private graphResult: CfgBuildResult | null = null;
-	private followInstructionPointer = true;
-	private manualAddress: bigint | null = null;
-	private addressError = "";
 	private isLoadingGraph = false;
 	private isDisposed = false;
 	private reloadToken = 0;
 
-	private readonly addressInput: HTMLInputElement;
-	private readonly jumpButton: HTMLButtonElement;
-	private readonly followCheckbox: HTMLInputElement;
 	private readonly statusNode: HTMLParagraphElement;
-	private readonly errorNode: HTMLParagraphElement;
-	private readonly emptyNode: HTMLParagraphElement;
 	private readonly graphHost: HTMLDivElement;
 
+	private nodesById: Map<string, CfgNode> | null = null;
 	private graphRenderer: CfgGraphRenderer | null = null;
 	private edgeRenderer: EdgePolylineRenderer | null = null;
 	private textRenderer: BlockTextRenderer | null = null;
@@ -97,25 +87,6 @@ export class DisassemblyGraphView implements IContentRenderer {
 
 	element: HTMLElement;
 
-	private readonly onFollowChange = () => {
-		const next = this.followCheckbox.checked;
-		this.followInstructionPointer = next;
-		if (!next && this.manualAddress === null) {
-			const ip = DBG.currentContext.state?.ip ?? null;
-			if (ip !== null) {
-				this.manualAddress = ip;
-			}
-		}
-		this.clearAddressError();
-		this.saveState();
-		this.refreshView(true);
-	};
-
-	private readonly onAddressSubmit = (event: Event) => {
-		event.preventDefault();
-		void this.submitAddress();
-	};
-
 	private readonly onDisasmLinkClick = (event: MouseEvent) => {
 		const target = (event.target as HTMLElement).closest<HTMLElement>(
 			".disasm-link[data-target-address]",
@@ -125,13 +96,8 @@ export class DisassemblyGraphView implements IContentRenderer {
 		if (!hex) return;
 		event.preventDefault();
 		event.stopPropagation();
-		const address = BigInt("0x" + hex);
-		this.manualAddress = address;
-		this.followInstructionPointer = false;
-		this.followCheckbox.checked = false;
-		this.clearAddressError();
-		this.saveState();
-		this.refreshView(true);
+		const address = BigInt(`0x${hex}`);
+		this.toolbar.navigateToAddress(address);
 	};
 
 	constructor(element: HTMLElement, panelId: string) {
@@ -141,25 +107,35 @@ export class DisassemblyGraphView implements IContentRenderer {
 			`Disassembly graph view ${panelId}`,
 		);
 
-		this.panelId = panelId;
-		const dom = this.createDomTree();
-		this.addressInput = dom.addressInput;
-		this.jumpButton = dom.jumpButton;
-		this.followCheckbox = dom.followCheckbox;
-		this.statusNode = dom.statusNode;
-		this.errorNode = dom.errorNode;
-		this.emptyNode = dom.emptyNode;
-		this.graphHost = dom.graphHost;
+		this.toolbar = new AddressToolbar(this.element, {
+			panelId,
+			storageKey: `${PANEL_STATE_KEY}:${panelId}`,
+			defaultSync: true,
+			onNavigate: () => this.refreshView(true),
+			onFocusAddress: (addr) => this.focusAddress(addr),
+			emptyMessage: () => this.emptyMessage(),
+		});
 
-		this.element.addEventListener("submit", this.onAddressSubmit);
+		const statusNode = document.createElement("p");
+		statusNode.className = "disassembly-graph-view-panel__status";
+		this.statusNode = statusNode;
+
+		const graphHost = document.createElement("div");
+		graphHost.className = "disassembly-graph-view-panel__graph";
+		graphHost.hidden = true;
+		graphHost.style.position = "relative";
+		this.graphHost = graphHost;
+
+		this.element.append(statusNode, graphHost);
+
+		this.element.tabIndex = 0;
+		this.element.addEventListener("keydown", this.toolbar.onKeyDown);
 		this.element.addEventListener("click", this.onDisasmLinkClick);
-		this.followCheckbox.addEventListener("change", this.onFollowChange);
 
 		this.contextHandle = DBG.currentContext.subscribe(() =>
 			this.onContextChanged(),
 		);
 
-		this.restoreState();
 		this.refreshView(true);
 	}
 
@@ -168,100 +144,18 @@ export class DisassemblyGraphView implements IContentRenderer {
 	private onContextChanged() {
 		if (this.isDisposed) return;
 		this.graphResult = null;
-		this.clearAddressError();
 		this.refreshView(true);
 	}
 
 	dispose() {
 		if (this.isDisposed) return;
 		this.isDisposed = true;
+		this.toolbar.dispose();
 		this.contextHandle.dispose();
-		this.element.removeEventListener("submit", this.onAddressSubmit);
+		this.element.removeEventListener("keydown", this.toolbar.onKeyDown);
 		this.element.removeEventListener("click", this.onDisasmLinkClick);
-		this.followCheckbox.removeEventListener("change", this.onFollowChange);
 		this.disposeGraph();
 		this.element.replaceChildren();
-	}
-
-	private createDomTree() {
-		const toolbar = document.createElement("div");
-		toolbar.className = "memory-view-panel__toolbar";
-
-		const jumpForm = document.createElement("form");
-		jumpForm.className = "memory-view-panel__jump";
-
-		const addressInput = document.createElement("input");
-		addressInput.id = `disassembly-graph-jump-${this.panelId}`;
-		addressInput.className = "memory-view-panel__input";
-		addressInput.type = "text";
-		addressInput.placeholder = "0x0000000000000000";
-
-		const jumpButton = document.createElement("button");
-		jumpButton.type = "submit";
-		jumpButton.className = "memory-view-panel__button";
-		jumpButton.textContent = "Jump";
-
-		jumpForm.append(addressInput, jumpButton);
-
-		const followLabel = document.createElement("label");
-		followLabel.className = "memory-view-panel__toggle";
-		const followCheckbox = document.createElement("input");
-		followCheckbox.type = "checkbox";
-		const followText = document.createElement("span");
-		followText.textContent = "Follow IP";
-		followLabel.append(followCheckbox, followText);
-
-		toolbar.append(jumpForm, followLabel);
-
-		const statusNode = document.createElement("p");
-		statusNode.className = "disassembly-graph-view-panel__status";
-
-		const errorNode = document.createElement("p");
-		errorNode.className = "memory-view-panel__error";
-		errorNode.hidden = true;
-
-		const emptyNode = document.createElement("p");
-		emptyNode.className = "memory-view-panel__empty";
-		emptyNode.hidden = true;
-
-		const graphHost = document.createElement("div");
-		graphHost.className = "disassembly-graph-view-panel__graph";
-		graphHost.hidden = true;
-		graphHost.style.position = "relative";
-
-		this.element.append(toolbar, statusNode, errorNode, emptyNode, graphHost);
-		return {
-			addressInput,
-			jumpButton,
-			followCheckbox,
-			statusNode,
-			errorNode,
-			emptyNode,
-			graphHost,
-		};
-	}
-
-	private restoreState() {
-		const storageKey = `${PANEL_STATE_KEY}:${this.panelId}`;
-		const saved = loadAddressPanelState(storageKey);
-		if (typeof saved.followInstructionPointer === "boolean") {
-			this.followInstructionPointer = saved.followInstructionPointer;
-		}
-		if (saved.manualAddressHex) {
-			const parsed = parseHexAddress(saved.manualAddressHex);
-			if (parsed !== null) {
-				this.manualAddress = parsed;
-			}
-		}
-	}
-
-	private saveState() {
-		const storageKey = `${PANEL_STATE_KEY}:${this.panelId}`;
-		saveAddressPanelState(storageKey, {
-			manualAddressHex:
-				this.manualAddress !== null ? `0x${fmtHex16(this.manualAddress)}` : "",
-			followInstructionPointer: this.followInstructionPointer,
-		});
 	}
 
 	private disposeGraph() {
@@ -278,18 +172,12 @@ export class DisassemblyGraphView implements IContentRenderer {
 		this.edgeRenderer = null;
 		this.graphRenderer?.dispose();
 		this.graphRenderer = null;
+		this.nodesById = null;
 		this.graphHost.replaceChildren();
 	}
 
-	private currentAnchor() {
-		if (this.followInstructionPointer) {
-			return DBG.currentContext.state?.ip ?? null;
-		}
-		return this.manualAddress ?? null;
-	}
-
 	private refreshView(reloadGraph: boolean) {
-		this.syncDisplayedAddress();
+		this.toolbar.syncDisplayedAddress();
 		if (reloadGraph) {
 			void this.reloadGraph();
 			return;
@@ -300,7 +188,7 @@ export class DisassemblyGraphView implements IContentRenderer {
 
 	private async reloadGraph() {
 		const token = ++this.reloadToken;
-		const anchorAddress = this.currentAnchor();
+		const anchorAddress = this.toolbar.currentAnchor();
 		this.isLoadingGraph = true;
 
 		if (anchorAddress === null) {
@@ -350,9 +238,10 @@ export class DisassemblyGraphView implements IContentRenderer {
 
 		this.graphHost.hidden = false;
 
-		const nodesById = new Map<string, CfgNode>(
+		this.nodesById = new Map<string, CfgNode>(
 			this.graphResult.blocks.map((node) => [node.id, node]),
 		);
+		const nodesById = this.nodesById;
 
 		const setupRenderer = () => {
 			if (this.isDisposed) return;
@@ -390,6 +279,9 @@ export class DisassemblyGraphView implements IContentRenderer {
 				(selectionStatus) => {
 					this.syncStatus(selectionStatus);
 				},
+				(address) => {
+					this.toolbar.selectAddress(address);
+				},
 			);
 
 			this.interactionHandler.fitToView();
@@ -419,11 +311,6 @@ export class DisassemblyGraphView implements IContentRenderer {
 		this.syncControlState();
 	}
 
-	private syncDisplayedAddress() {
-		const address = this.currentAnchor();
-		this.addressInput.value = address !== null ? `0x${fmtHex16(address)}` : "";
-	}
-
 	private syncStatus(selectionStatus?: string) {
 		const result = this.graphResult;
 		if (!result) {
@@ -440,53 +327,46 @@ export class DisassemblyGraphView implements IContentRenderer {
 
 	private syncControlState() {
 		const hasGraph = (this.graphResult?.blocks.length ?? 0) > 0;
-		this.followCheckbox.checked = this.followInstructionPointer;
-		this.addressInput.disabled = this.followInstructionPointer;
-		this.jumpButton.disabled = this.followInstructionPointer;
-		this.errorNode.hidden = this.addressError.length === 0;
-		this.errorNode.textContent = this.addressError;
-		this.emptyNode.hidden = hasGraph;
+		this.toolbar.syncControlState(hasGraph);
 		this.graphHost.hidden = !hasGraph;
-		if (!hasGraph) {
-			this.emptyNode.textContent = this.emptyMessage();
+	}
+
+	private focusAddress(address: bigint): boolean {
+		if (!this.interactionHandler || !this.nodesById || !this.textRenderer)
+			return false;
+		const hit = this.findLineForAddress(address);
+		if (!hit) return false;
+		this.textRenderer.highlightLineAddress(fmtHex16(address));
+		this.interactionHandler.focusLine(hit.blockId, hit.lineIndex);
+		return true;
+	}
+
+	private findLineForAddress(
+		address: bigint,
+	): { blockId: string; lineIndex: number } | null {
+		if (!this.nodesById) return null;
+		for (const [id, node] of this.nodesById) {
+			for (let i = 0; i < node.lines.length; i++) {
+				if (getCfgLineAddress(node.lines[i]) === address)
+					return { blockId: id, lineIndex: i };
+			}
 		}
+		return null;
 	}
 
 	private emptyMessage() {
-		if (this.addressError) return "No graph instructions available.";
 		if (this.graphResult) return "No graph instructions available.";
 		if (this.isLoadingGraph) return "Loading graph...";
-		if (!this.followInstructionPointer && this.manualAddress !== null)
+		if (
+			!this.toolbar.followInstructionPointer &&
+			this.toolbar.manualAddress !== null
+		)
 			return "Enter an address that exists in dump memory to view a graph.";
-		if (this.followInstructionPointer && DBG.currentContext.state?.ip == null)
+		if (
+			this.toolbar.followInstructionPointer &&
+			DBG.currentContext.state?.ip == null
+		)
 			return "No instruction pointer available.";
 		return "Disassembly graph view is unavailable for this dump.";
-	}
-
-	private setAddressError(message: string) {
-		this.addressError = message;
-		this.syncControlState();
-	}
-
-	private clearAddressError() {
-		if (!this.addressError) return;
-		this.addressError = "";
-		this.syncControlState();
-	}
-
-	private async submitAddress() {
-		const parsed = parseHexAddress(this.addressInput.value);
-		if (parsed === null) {
-			this.setAddressError(
-				"Address must be hexadecimal (for example: 0x7FF612340000).",
-			);
-			return;
-		}
-
-		this.manualAddress = parsed;
-		this.followInstructionPointer = false;
-		this.clearAddressError();
-		this.saveState();
-		this.refreshView(true);
 	}
 }
