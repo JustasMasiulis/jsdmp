@@ -3,6 +3,7 @@ import {
 	type DebugInterface,
 	type DebugMemoryRange,
 	type DebugModule,
+	type DebugModuleSymInfo,
 	type DebugThread,
 	type DebugThreadException,
 	type DebugUnloadedModule,
@@ -13,7 +14,6 @@ import {
 	type MiniDump,
 	MiniDumpStreamType,
 	type MinidumpAssociatedThread,
-	type MinidumpCodeViewInfo,
 	type MinidumpExceptionStream,
 	type MinidumpMiscInfo,
 	type MinidumpModule,
@@ -21,6 +21,7 @@ import {
 	type MinidumpUnloadedModule,
 } from "./minidump";
 import { Signal } from "./reactive";
+import { SymCache } from "./symbolication";
 import { readFromModuleImage } from "./symbolServer";
 
 export type MinidumpDebugSystemInfo = MinidumpSystemInfo;
@@ -85,28 +86,27 @@ const toDebugMemoryRange = (range: {
 	size: range.dataSize,
 });
 
-const toDebugCodeViewPdb = (
-	codeViewInfo: MinidumpCodeViewInfo | null,
-): DebugModule["pdb"] => {
-	if (!codeViewInfo || codeViewInfo.format !== "RSDS") {
-		return undefined;
+const toDebugModule = (module: MinidumpModule): DebugModule => {
+	let pdb: DebugModuleSymInfo | undefined;
+
+	if (module.codeViewInfo && module.codeViewInfo.format === "RSDS") {
+		pdb = {
+			path: module.codeViewInfo.pdbFileName,
+			guid: module.codeViewInfo.guid,
+			age: module.codeViewInfo.age,
+		};
 	}
 
 	return {
-		path: codeViewInfo.pdbFileName,
-		guid: codeViewInfo.guid,
-		age: codeViewInfo.age,
+		address: module.baseOfImage,
+		size: module.sizeOfImage,
+		checksum: module.checkSum,
+		timeDateStamp: module.timeDateStamp,
+		path: module.moduleName,
+		pdb: pdb,
+		symbols: new SymCache(pdb),
 	};
 };
-
-const toDebugModule = (module: MinidumpModule): DebugModule => ({
-	address: module.baseOfImage,
-	size: module.sizeOfImage,
-	checksum: module.checkSum,
-	timeDateStamp: module.timeDateStamp,
-	path: module.moduleName,
-	pdb: toDebugCodeViewPdb(module.codeViewInfo),
-});
 
 const toDebugUnloadedModule = (
 	module: MinidumpUnloadedModule,

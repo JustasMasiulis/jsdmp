@@ -1,4 +1,9 @@
-import { type DebugModule, findModuleForAddress } from "./debug_interface";
+import IntervalTree from "@flatten-js/interval-tree";
+import {
+	type DebugModule,
+	type DebugModuleSymInfo,
+	findModuleForAddress,
+} from "./debug_interface";
 import { fetchWithRetry } from "./fetchRetry";
 import { fmtHex } from "./formatting";
 import type { InstrTextSegment } from "./instructionParser";
@@ -8,73 +13,28 @@ import { basename } from "./utils";
 export type SymbolInfo = {
 	name: string;
 	rva: number;
+	size: number;
 };
 
-const symbolCache = new Map<string, Map<number, SymbolInfo | null>>();
-const inflight = new Map<string, Promise<SymbolInfo | null>>();
-
-function pdbCacheKey(mod: DebugModule): { name: string; key: string } | null {
-	if (!mod.pdb) return null;
-	const name = basename(mod.pdb.path).toLowerCase();
-	const key = mod.pdb.guid.replaceAll("-", "") + mod.pdb.age.toString(16);
-	return { name, key };
+function pdbCacheKey(info: DebugModuleSymInfo | undefined): string | null {
+	if (!info) return null;
+	const name = basename(info.path).toLowerCase();
+	const key = info.guid.replaceAll("-", "") + info.age.toString(16);
+	return `${name}/${key}`;
 }
 
-async function fetchSymbol(
-	pdbInfo: { name: string; key: string },
-	rva: number,
-): Promise<SymbolInfo | null> {
-	const base = getSymbolServerUrl().replace(/\/+$/, "");
-	const url = `${base}/pdb/${pdbInfo.name}/${pdbInfo.key}/nearest?rva=${rva}`;
-	try {
-		const response = await fetchWithRetry(url);
-		if (!response.ok) return null;
-		return (await response.json()) as SymbolInfo;
-	} catch {
-		return null;
-	}
-}
-
-async function lookupSymbol(
-	pdbInfo: { name: string; key: string },
-	rva: number,
-): Promise<SymbolInfo | null> {
-	const cacheKey = `${pdbInfo.name}/${pdbInfo.key}`;
-	let moduleSymbols = symbolCache.get(cacheKey);
-	if (moduleSymbols) {
-		const cached = moduleSymbols.get(rva);
-		if (cached !== undefined) return cached;
-	}
-
-	const inflightKey = `${pdbInfo.key}@${rva}`;
-	const pending = inflight.get(inflightKey);
-	if (pending) return pending;
-
-	const promise = fetchSymbol(pdbInfo, rva).finally(() => {
-		inflight.delete(inflightKey);
-	});
-	inflight.set(inflightKey, promise);
-	const result = await promise;
-	if (!moduleSymbols) {
-		moduleSymbols = new Map();
-		symbolCache.set(cacheKey, moduleSymbols);
-	}
-	moduleSymbols.set(rva, result);
-	return result;
-}
-
-function formatSymbolResult(
+async function resolveModuleSymbol(
 	mod: DebugModule,
 	rva: number,
-	sym: SymbolInfo | null,
-): string {
-	const modName = basename(mod.path);
-	if (sym) {
-		const offset = rva - sym.rva;
-		if (offset > 0) return `${modName}!${sym.name}+0x${offset.toString(16)}`;
-		return `${modName}!${sym.name}`;
-	}
-	return `${modName}+0x${rva.toString(16)}`;
+): Promise<string> {
+	const sym = await mod.symbols.lookup(rva);
+	const bn = basename(mod.path);
+
+	if (!sym) return `${bn}+0x${rva.toString(16)}`;
+
+	const offset = rva - sym.rva;
+	if (offset > 0) return `${bn}!${sym.name}+0x${offset.toString(16)}`;
+	else return `${bn}!${sym.name}`;
 }
 
 export async function resolveSymbol(
@@ -83,13 +43,7 @@ export async function resolveSymbol(
 ): Promise<string> {
 	const mod = findModuleForAddress(address, modules);
 	if (!mod) return fmtHex(address, 16).toLowerCase();
-
-	const rva = Number(address - mod.address);
-	const pdbInfo = pdbCacheKey(mod);
-	if (!pdbInfo) return `${basename(mod.path)}+0x${rva.toString(16)}`;
-
-	const sym = await lookupSymbol(pdbInfo, rva);
-	return formatSymbolResult(mod, rva, sym);
+	return resolveModuleSymbol(mod, Number(address - mod.address));
 }
 
 function replaceAddressSegment(
@@ -118,12 +72,61 @@ export async function symbolicateSegments(
 ): Promise<void> {
 	const promises: Promise<void>[] = [];
 	for (const addr of addresses) {
-		if (!findModuleForAddress(addr, modules)) continue;
+		const mod = findModuleForAddress(addr, modules);
+		if (!mod) continue;
+
 		promises.push(
-			resolveSymbol(addr, modules).then((sym) =>
+			resolveModuleSymbol(mod, Number(addr - mod.address)).then((sym) =>
 				replaceAddressSegment(addr, sym, segments),
 			),
 		);
 	}
 	await Promise.all(promises);
+}
+
+export class SymCache {
+	private readonly key: string;
+	private readonly cache: IntervalTree<SymbolInfo>;
+	private readonly inflight: Map<string, Promise<SymbolInfo | null>>;
+
+	constructor(pdbInfo: DebugModuleSymInfo | undefined) {
+		this.key = pdbCacheKey(pdbInfo) ?? "";
+		this.cache = new IntervalTree<SymbolInfo>();
+		this.inflight = new Map<string, Promise<SymbolInfo | null>>();
+	}
+
+	async lookup(rva: number): Promise<SymbolInfo | null> {
+		if (!this.key) return null;
+
+		const hits = this.cache.search([rva, rva]) as SymbolInfo[];
+		if (hits.length > 0) {
+			return hits[0];
+		}
+
+		const inflightKey = `${this.key}${rva}`;
+		const pending = this.inflight.get(inflightKey);
+		if (pending) return pending;
+
+		const promise = this.fetchSymbol(rva).finally(() => {
+			this.inflight.delete(inflightKey);
+		});
+		this.inflight.set(inflightKey, promise);
+
+		const result = await promise;
+		if (result) {
+			const lo = result.rva;
+			const hi = result.size > 0 ? result.rva + result.size - 1 : result.rva;
+			this.cache.insert([lo, hi], result);
+		}
+
+		return result;
+	}
+
+	private async fetchSymbol(rva: number) {
+		const base = getSymbolServerUrl().replace(/\/+$/, "");
+		const url = `${base}/pdb/${this.key}/nearest?rva=${rva}`;
+		const response = await fetchWithRetry(url);
+		if (!response.ok) return null;
+		return (await response.json()) as SymbolInfo;
+	}
 }

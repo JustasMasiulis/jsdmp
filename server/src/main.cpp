@@ -490,15 +490,66 @@ int main(int argc, char* argv[]) {
                 }
 
                 auto sym_rva = sym->Address - base;
+                auto sym_size = (DWORD64)sym->Size;
+                std::string original_name(sym->Name);
+
+                if (!sym_size) {
+                    // Walk forward: exponential probe then binary search
+                    DWORD64 fwd_lo = 0, fwd_hi = 0x10;
+                    constexpr DWORD64 MAX_PROBE = 0x100000;
+                    while (fwd_hi <= MAX_PROBE) {
+                        DWORD64 disp;
+                        if (!SymFromAddr(g_sym_handle, sym->Address + fwd_hi, &disp, sym) ||
+                            original_name != sym->Name)
+                            break;
+                        fwd_lo = fwd_hi;
+                        fwd_hi *= 2;
+                    }
+                    fwd_hi = std::min(fwd_hi, MAX_PROBE);
+                    while (fwd_lo + 1 < fwd_hi) {
+                        auto mid = fwd_lo + (fwd_hi - fwd_lo) / 2;
+                        DWORD64 disp;
+                        if (SymFromAddr(g_sym_handle, base + sym_rva + mid, &disp, sym) &&
+                            original_name == sym->Name)
+                            fwd_lo = mid;
+                        else
+                            fwd_hi = mid;
+                    }
+
+                    // Walk backward: exponential probe then binary search
+                    DWORD64 bwd_lo = 0, bwd_hi = 0x10;
+                    while (bwd_hi <= MAX_PROBE && sym_rva >= bwd_hi) {
+                        DWORD64 disp;
+                        if (!SymFromAddr(g_sym_handle, base + sym_rva - bwd_hi, &disp, sym) ||
+                            original_name != sym->Name)
+                            break;
+                        bwd_lo = bwd_hi;
+                        bwd_hi *= 2;
+                    }
+                    bwd_hi = std::min({bwd_hi, MAX_PROBE, sym_rva});
+                    while (bwd_lo + 1 < bwd_hi) {
+                        auto mid = bwd_lo + (bwd_hi - bwd_lo) / 2;
+                        DWORD64 disp;
+                        if (SymFromAddr(g_sym_handle, base + sym_rva - mid, &disp, sym) &&
+                            original_name == sym->Name)
+                            bwd_lo = mid;
+                        else
+                            bwd_hi = mid;
+                    }
+
+                    sym_rva -= bwd_lo;
+                    sym_size = fwd_lo + bwd_lo + 1;
+                }
+
                 std::string escaped_name;
-                for (const char* p = sym->Name; *p; ++p) {
-                    if (*p == '"' || *p == '\\') escaped_name += '\\';
-                    escaped_name += *p;
+                for (auto ch : original_name) {
+                    if (ch == '"' || ch == '\\') escaped_name += '\\';
+                    escaped_name += ch;
                 }
                 char json[4096];
                 snprintf(json, sizeof(json),
-                         R"({"name":"%s","rva":%llu})",
-                         escaped_name.c_str(), sym_rva);
+                         R"({"name":"%s","rva":%llu,"size":%llu})",
+                         escaped_name.c_str(), sym_rva, sym_size);
                 auto json_str = std::string(json);
 
                 loop->defer([res, origin, aborted, json_str]() {

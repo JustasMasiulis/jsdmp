@@ -1,6 +1,7 @@
 import type { CpuContext } from "./cpu_context";
 import type { PeFile } from "./pe";
 import type { Signal } from "./reactive";
+import type { SymCache } from "./symbolication";
 
 export type Address = bigint;
 
@@ -45,6 +46,12 @@ export type DebugThread = {
 	affinity: bigint;
 };
 
+export type DebugModuleSymInfo = {
+	path: string;
+	guid: string;
+	age: number;
+};
+
 export type DebugModule = {
 	address: Address;
 	size: number;
@@ -52,12 +59,9 @@ export type DebugModule = {
 	timeDateStamp: number;
 	path: string;
 	key?: string;
-	pdb?: {
-		path: string;
-		guid: string;
-		age: number;
-	};
+	pdb?: DebugModuleSymInfo;
 	pe?: Promise<PeFile | null>;
+	symbols: SymCache;
 };
 
 export type DebugUnloadedModule = {
