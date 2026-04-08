@@ -24,6 +24,7 @@ export class CfgGraphRenderer {
 	private disposed = false;
 
 	private dragging = false;
+	private didDrag = false;
 	private dragLastX = 0;
 	private dragLastY = 0;
 
@@ -233,35 +234,51 @@ export class CfgGraphRenderer {
 		m[8] = 1;
 	}
 
-	private handleWheel(e: WheelEvent): void {
-		e.preventDefault();
-		const ZOOM_SPEED = 0.0015;
+	private panCamera(dx: number, dy: number): void {
+		const w = this.width;
+		const h = this.height;
+		if (w <= 0 || h <= 0) return;
+		const minDim = Math.min(w, h);
+		const ratio = this.camera.ratio;
+		this.camera.x -= (dx * ratio) / minDim;
+		this.camera.y += (dy * ratio) / minDim;
+	}
 
-		const vx = e.clientX - this.cachedRect.left;
-		const vy = e.clientY - this.cachedRect.top;
+	private zoomAtViewport(vx: number, vy: number, newRatio: number): void {
 		const graphBefore = this.viewportToGraph({ x: vx, y: vy });
-
 		const range = this.bboxRange;
 		const normBefore = {
 			x: 0.5 + (graphBefore.x - this.bboxCenterX) / range,
 			y: 0.5 + (graphBefore.y - this.bboxCenterY) / range,
 		};
-
-		const newRatio = Math.max(
-			this.minRatio,
-			Math.min(
-				this.maxRatio,
-				this.camera.ratio * Math.exp(e.deltaY * ZOOM_SPEED),
-			),
-		);
-
+		const clamped = Math.max(this.minRatio, Math.min(this.maxRatio, newRatio));
 		this.camera.x =
 			normBefore.x -
-			((normBefore.x - this.camera.x) * newRatio) / this.camera.ratio;
+			((normBefore.x - this.camera.x) * clamped) / this.camera.ratio;
 		this.camera.y =
 			normBefore.y -
-			((normBefore.y - this.camera.y) * newRatio) / this.camera.ratio;
-		this.camera.ratio = newRatio;
+			((normBefore.y - this.camera.y) * clamped) / this.camera.ratio;
+		this.camera.ratio = clamped;
+	}
+
+	private handleWheel(e: WheelEvent): void {
+		e.preventDefault();
+		if (e.deltaX === 0 && e.deltaY === 0) return;
+
+		if (e.ctrlKey) {
+			const ZOOM_SPEED = 0.0015;
+			const vx = e.clientX - this.cachedRect.left;
+			const vy = e.clientY - this.cachedRect.top;
+			this.zoomAtViewport(
+				vx,
+				vy,
+				this.camera.ratio * Math.exp(e.deltaY * ZOOM_SPEED),
+			);
+		} else {
+			const dx = e.deltaX + (e.shiftKey ? e.deltaY : 0);
+			const dy = e.shiftKey ? 0 : e.deltaY;
+			this.panCamera(-dx, -dy);
+		}
 
 		this.recomputeMatrix();
 		this.requestRender();
@@ -269,9 +286,12 @@ export class CfgGraphRenderer {
 
 	private handleMouseDown(e: MouseEvent): void {
 		if (e.button !== 0) return;
+		if ((e.target as HTMLElement).closest?.(".cfg-block--selection-layer"))
+			return;
 		e.preventDefault();
 		this.updateCachedRect();
 		this.dragging = true;
+		this.didDrag = false;
 		this.dragLastX = e.clientX;
 		this.dragLastY = e.clientY;
 	}
@@ -279,27 +299,28 @@ export class CfgGraphRenderer {
 	private handleMouseMove(e: MouseEvent): void {
 		if (!this.dragging) return;
 		e.preventDefault();
+		this.didDrag = true;
 		const dx = e.clientX - this.dragLastX;
 		const dy = e.clientY - this.dragLastY;
 		this.dragLastX = e.clientX;
 		this.dragLastY = e.clientY;
 
-		const w = this.width;
-		const h = this.height;
-		if (w <= 0 || h <= 0) return;
-
-		const minDim = Math.min(w, h);
-		const ratio = this.camera.ratio;
-		this.camera.x -= (dx * ratio) / minDim;
-		this.camera.y += (dy * ratio) / minDim;
-
+		this.panCamera(dx, dy);
 		this.recomputeMatrix();
 		this.requestRender();
 	}
 
 	private handleMouseUp(_e: MouseEvent): void {
 		if (!this.dragging) return;
+		const didDrag = this.didDrag;
 		this.dragging = false;
+		this.didDrag = false;
+		if (didDrag) {
+			this.container.addEventListener("click", (e) => e.stopPropagation(), {
+				once: true,
+				capture: true,
+			});
+		}
 	}
 
 	private getTrackedTouches(e: TouchEvent): Touch[] {
@@ -371,40 +392,14 @@ export class CfgGraphRenderer {
 			);
 		}
 
-		const dx = cx - this.touchLastCenterX;
-		const dy = cy - this.touchLastCenterY;
-
-		const w = this.width;
-		const h = this.height;
-		if (w > 0 && h > 0) {
-			const minDim = Math.min(w, h);
-			const ratio = this.camera.ratio;
-			this.camera.x -= (dx * ratio) / minDim;
-			this.camera.y += (dy * ratio) / minDim;
-		}
+		this.panCamera(cx - this.touchLastCenterX, cy - this.touchLastCenterY);
 
 		if (tracked.length >= 2 && this.touchLastDist > 0 && dist > 0) {
-			const graphBefore = this.viewportToGraph({ x: cx, y: cy });
-			const normBefore = {
-				x: 0.5 + (graphBefore.x - this.bboxCenterX) / this.bboxRange,
-				y: 0.5 + (graphBefore.y - this.bboxCenterY) / this.bboxRange,
-			};
-
-			const newRatio = Math.max(
-				this.minRatio,
-				Math.min(
-					this.maxRatio,
-					this.camera.ratio * (this.touchLastDist / dist),
-				),
+			this.zoomAtViewport(
+				cx,
+				cy,
+				this.camera.ratio * (this.touchLastDist / dist),
 			);
-
-			this.camera.x =
-				normBefore.x -
-				((normBefore.x - this.camera.x) * newRatio) / this.camera.ratio;
-			this.camera.y =
-				normBefore.y -
-				((normBefore.y - this.camera.y) * newRatio) / this.camera.ratio;
-			this.camera.ratio = newRatio;
 		}
 
 		this.touchLastCenterX = cx;
