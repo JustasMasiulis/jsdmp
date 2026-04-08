@@ -1,3 +1,4 @@
+import { CfgCanvasLayer } from "./cfgCanvasLayer";
 import type { CfgGraphRenderer } from "./cfgGraphRenderer";
 import type { CfgRenderGraph } from "./cfgRenderGraph";
 import { trimPolylineEnd } from "./cfgRenderGraph";
@@ -156,15 +157,11 @@ function writeSegmentQuad(
 	return offset;
 }
 
-export class EdgePolylineRenderer {
-	private renderer: CfgGraphRenderer;
+export class EdgePolylineRenderer extends CfgCanvasLayer {
 	private graph: CfgRenderGraph;
-	private canvas: HTMLCanvasElement;
-	private gl: WebGL2RenderingContext;
 	private program: WebGLProgram;
 	private vbo: WebGLBuffer;
 	private vertexCount = 0;
-	private dirty = true;
 
 	private aPosition: number;
 	private aNormal: number;
@@ -173,33 +170,11 @@ export class EdgePolylineRenderer {
 	private uThickness: WebGLUniformLocation;
 	private uResolution: WebGLUniformLocation;
 
-	private boundRender: () => void;
-	private resizeObserver: ResizeObserver;
-
-	private bboxCenterX = 0;
-	private bboxCenterY = 0;
-	private bboxRange = 1;
-
 	constructor(renderer: CfgGraphRenderer, graph: CfgRenderGraph) {
-		this.renderer = renderer;
+		super(renderer, "5", true);
 		this.graph = graph;
 
-		const container = renderer.getContainer();
-		this.canvas = document.createElement("canvas");
-		this.canvas.style.position = "absolute";
-		this.canvas.style.inset = "0";
-		this.canvas.style.pointerEvents = "none";
-		this.canvas.style.zIndex = "5";
-		container.appendChild(this.canvas);
-
-		const gl = this.canvas.getContext("webgl2", {
-			alpha: true,
-			premultipliedAlpha: false,
-			antialias: true,
-		});
-		if (!gl) throw new Error("WebGL2 not available");
-		this.gl = gl;
-
+		const gl = this.gl;
 		this.program = compileSimpleProgram(gl, VERTEX_SHADER, FRAGMENT_SHADER);
 
 		this.aPosition = gl.getAttribLocation(this.program, "a_position");
@@ -219,35 +194,6 @@ export class EdgePolylineRenderer {
 		const vbo = gl.createBuffer();
 		if (!vbo) throw new Error("Failed to create buffer");
 		this.vbo = vbo;
-
-		this.boundRender = () => this.render();
-		renderer.onRender(this.boundRender);
-
-		this.resizeObserver = new ResizeObserver(() => {
-			if (this.syncCanvasSize()) {
-				this.renderer.requestRender();
-			}
-		});
-		this.resizeObserver.observe(container);
-		this.syncCanvasSize();
-	}
-
-	private syncCanvasSize(): boolean {
-		const container = this.renderer.getContainer();
-		const width = container.clientWidth;
-		const height = container.clientHeight;
-		const dpr = window.devicePixelRatio || 1;
-		const targetW = Math.round(width * dpr);
-		const targetH = Math.round(height * dpr);
-		if (this.canvas.width === targetW && this.canvas.height === targetH)
-			return false;
-		this.canvas.width = targetW;
-		this.canvas.height = targetH;
-		this.canvas.style.width = `${width}px`;
-		this.canvas.style.height = `${height}px`;
-		this.gl.viewport(0, 0, targetW, targetH);
-		this.dirty = true;
-		return true;
 	}
 
 	markDirty() {
@@ -259,15 +205,6 @@ export class EdgePolylineRenderer {
 			x: 0.5 + (p.x - this.bboxCenterX) / this.bboxRange,
 			y: 0.5 + (p.y - this.bboxCenterY) / this.bboxRange,
 		};
-	}
-
-	private updateBBox() {
-		const bbox = this.renderer.getBBox();
-		const prevRange = this.bboxRange;
-		this.bboxCenterX = (bbox.x[0] + bbox.x[1]) / 2;
-		this.bboxCenterY = (bbox.y[0] + bbox.y[1]) / 2;
-		this.bboxRange = Math.max(bbox.x[1] - bbox.x[0], bbox.y[1] - bbox.y[0], 1);
-		if (this.bboxRange !== prevRange) this.dirty = true;
 	}
 
 	private rebuildBuffer() {
@@ -330,7 +267,7 @@ export class EdgePolylineRenderer {
 		this.dirty = false;
 	}
 
-	render() {
+	protected onRender() {
 		if (this.dirty) {
 			this.rebuildBuffer();
 		}
@@ -366,10 +303,8 @@ export class EdgePolylineRenderer {
 	}
 
 	dispose() {
-		this.renderer.offRender(this.boundRender);
-		this.resizeObserver.disconnect();
 		this.gl.deleteBuffer(this.vbo);
 		this.gl.deleteProgram(this.program);
-		this.canvas.remove();
+		super.dispose();
 	}
 }

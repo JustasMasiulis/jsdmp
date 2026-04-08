@@ -5,6 +5,7 @@ import {
 	ESTIMATED_CHAR_WIDTH,
 	ESTIMATED_LINE_HEIGHT,
 } from "../lib/disassemblyGraph";
+import { CfgCanvasLayer } from "./cfgCanvasLayer";
 import type { CfgGraphRenderer } from "./cfgGraphRenderer";
 import type { CfgRenderGraph } from "./cfgRenderGraph";
 import { createFontAtlas, type FontAtlas } from "./fontAtlas";
@@ -77,13 +78,10 @@ type NodeEntry = {
 	h: number;
 };
 
-export class BlockTextRenderer {
-	private readonly renderer: CfgGraphRenderer;
+export class BlockTextRenderer extends CfgCanvasLayer {
 	private readonly graph: CfgRenderGraph;
 	private readonly nodesById: Map<string, CfgNode>;
 	private readonly atlas: FontAtlas;
-	private readonly canvas: HTMLCanvasElement;
-	private readonly gl: WebGL2RenderingContext;
 	private readonly program: WebGLProgram;
 	private readonly vbo: WebGLBuffer | null;
 
@@ -93,21 +91,12 @@ export class BlockTextRenderer {
 	private readonly uMatrix: WebGLUniformLocation | null;
 	private readonly uAtlas: WebGLUniformLocation | null;
 
-	private readonly boundRender: () => void;
-	private readonly resizeObserver: ResizeObserver;
-
 	private nodeEntries: NodeEntry[] = [];
 	private vertexCount = 0;
-	private dirty = true;
 	private lastCullTime = 0;
 	private visibleIds = new Set<string>();
 	private buf: Float32Array = new Float32Array(0);
 	private bufCapacity = 0;
-
-	private bboxCenterX = 0;
-	private bboxCenterY = 0;
-	private bboxRange = 1;
-	private invBBoxRange = 1;
 
 	private highlightedTerm: string | null = null;
 	private highlightedLineAddr: string | null = null;
@@ -117,26 +106,11 @@ export class BlockTextRenderer {
 		graph: CfgRenderGraph,
 		nodesById: Map<string, CfgNode>,
 	) {
-		this.renderer = renderer;
+		super(renderer, "6", false);
 		this.graph = graph;
 		this.nodesById = nodesById;
 
-		const container = renderer.getContainer();
-		this.canvas = document.createElement("canvas");
-		this.canvas.style.position = "absolute";
-		this.canvas.style.inset = "0";
-		this.canvas.style.pointerEvents = "none";
-		this.canvas.style.zIndex = "6";
-		container.appendChild(this.canvas);
-
-		const gl = this.canvas.getContext("webgl2", {
-			alpha: true,
-			premultipliedAlpha: false,
-			antialias: false,
-		});
-		if (!gl) throw new Error("WebGL2 not supported");
-		this.gl = gl;
-
+		const gl = this.gl;
 		this.program = compileSimpleProgram(gl, VERTEX_SHADER, FRAGMENT_SHADER);
 		this.aPosition = gl.getAttribLocation(this.program, "a_position");
 		this.aTexcoord = gl.getAttribLocation(this.program, "a_texcoord");
@@ -148,46 +122,33 @@ export class BlockTextRenderer {
 		this.atlas = createFontAtlas(gl);
 
 		this.buildNodeIndex();
-
-		this.resizeObserver = new ResizeObserver(() => {
-			if (this.syncCanvasSize()) {
-				this.renderer.requestRender();
-			}
-		});
-		this.resizeObserver.observe(container);
-		this.syncCanvasSize();
-
-		this.boundRender = () => this.onFrame();
-		renderer.onRender(this.boundRender);
 	}
 
 	highlightTerm(term: string | null): void {
 		if (this.highlightedTerm === term) return;
 		this.highlightedTerm = term;
 		this.dirty = true;
-		this.onFrame();
+		this.onRender();
 	}
 
 	highlightLineAddress(hexAddress: string | null): void {
 		if (this.highlightedLineAddr === hexAddress) return;
 		this.highlightedLineAddr = hexAddress;
 		this.dirty = true;
-		this.onFrame();
+		this.onRender();
 	}
 
 	markDirtyAndRender(): void {
 		this.dirty = true;
 		this.lastCullTime = 0;
-		this.onFrame();
+		this.onRender();
 	}
 
 	dispose(): void {
-		this.renderer.offRender(this.boundRender);
-		this.resizeObserver.disconnect();
 		this.atlas.dispose(this.gl);
 		this.gl.deleteBuffer(this.vbo);
 		this.gl.deleteProgram(this.program);
-		this.canvas.remove();
+		super.dispose();
 	}
 
 	private buildNodeIndex(): void {
@@ -202,35 +163,7 @@ export class BlockTextRenderer {
 		}
 	}
 
-	private syncCanvasSize(): boolean {
-		const container = this.renderer.getContainer();
-		const w = container.clientWidth;
-		const h = container.clientHeight;
-		const dpr = window.devicePixelRatio || 1;
-		const targetW = Math.round(w * dpr);
-		const targetH = Math.round(h * dpr);
-		if (this.canvas.width === targetW && this.canvas.height === targetH)
-			return false;
-		this.canvas.width = targetW;
-		this.canvas.height = targetH;
-		this.canvas.style.width = `${w}px`;
-		this.canvas.style.height = `${h}px`;
-		this.gl.viewport(0, 0, targetW, targetH);
-		this.dirty = true;
-		return true;
-	}
-
-	private updateBBox(): void {
-		const bbox = this.renderer.getBBox();
-		const prevRange = this.bboxRange;
-		this.bboxCenterX = (bbox.x[0] + bbox.x[1]) / 2;
-		this.bboxCenterY = (bbox.y[0] + bbox.y[1]) / 2;
-		this.bboxRange = Math.max(bbox.x[1] - bbox.x[0], bbox.y[1] - bbox.y[0], 1);
-		this.invBBoxRange = 1 / this.bboxRange;
-		if (this.bboxRange !== prevRange) this.dirty = true;
-	}
-
-	private onFrame(): void {
+	protected onRender(): void {
 		const now = performance.now();
 		if (now - this.lastCullTime >= CULL_INTERVAL_MS) {
 			this.lastCullTime = now;

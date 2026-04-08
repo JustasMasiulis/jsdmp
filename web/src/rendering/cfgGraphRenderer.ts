@@ -12,8 +12,8 @@ export class CfgGraphRenderer {
 	private readonly matrix = new Float32Array(9);
 	private width = 0;
 	private height = 0;
-	private readonly minRatio: number;
-	private readonly maxRatio: number;
+	private minRatio: number;
+	private maxRatio: number;
 
 	private bboxCenterX = 0;
 	private bboxCenterY = 0;
@@ -110,6 +110,11 @@ export class CfgGraphRenderer {
 		return { width: this.width, height: this.height };
 	}
 
+	setZoomBounds(minRatio: number, maxRatio: number): void {
+		this.minRatio = minRatio;
+		this.maxRatio = maxRatio;
+	}
+
 	getBBox(): BBox {
 		return this.graph.bbox;
 	}
@@ -163,7 +168,9 @@ export class CfgGraphRenderer {
 		requestAnimationFrame(() => {
 			this.frameRequested = false;
 			if (this.disposed) return;
-			for (const fn of this.renderCallbacks) fn();
+			if (this.syncDimensions()) this.recomputeMatrix();
+			const cbs = this.renderCallbacks.slice();
+			for (let i = 0; i < cbs.length; i++) cbs[i]();
 		});
 	}
 

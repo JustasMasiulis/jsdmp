@@ -82,8 +82,7 @@ export class DisassemblyGraphView implements IContentRenderer {
 	private textRenderer: BlockTextRenderer | null = null;
 	private selectionLayer: CfgSelectionLayer | null = null;
 	private interactionHandler: CfgInteractionHandler | null = null;
-	private resizeObserver: ResizeObserver | null = null;
-	private pendingSetup: (() => void) | null = null;
+	private pendingFit: (() => void) | null = null;
 
 	element: HTMLElement;
 
@@ -159,9 +158,10 @@ export class DisassemblyGraphView implements IContentRenderer {
 	}
 
 	private disposeGraph() {
-		this.resizeObserver?.disconnect();
-		this.resizeObserver = null;
-		this.pendingSetup = null;
+		if (this.pendingFit && this.graphRenderer) {
+			this.graphRenderer.offRender(this.pendingFit);
+		}
+		this.pendingFit = null;
 		this.interactionHandler?.dispose();
 		this.interactionHandler = null;
 		this.selectionLayer?.dispose();
@@ -243,69 +243,53 @@ export class DisassemblyGraphView implements IContentRenderer {
 		);
 		const nodesById = this.nodesById;
 
-		const setupRenderer = () => {
-			if (this.isDisposed) return;
+		const bboxRange = Math.max(
+			graph.bbox.x[1] - graph.bbox.x[0],
+			graph.bbox.y[1] - graph.bbox.y[0],
+			1,
+		);
 
-			const bboxRange = Math.max(
-				graph.bbox.x[1] - graph.bbox.x[0],
-				graph.bbox.y[1] - graph.bbox.y[0],
-				1,
-			);
+		const MIN_VISIBLE_GRAPH_SPAN = 480;
+		const minRatio = MIN_VISIBLE_GRAPH_SPAN / bboxRange;
 
-			const vpW = this.graphHost.clientWidth;
-			const vpH = this.graphHost.clientHeight;
+		const vpW = this.graphHost.clientWidth;
+		const vpH = this.graphHost.clientHeight;
+		const maxZoomOutRatio = (bboxRange / Math.min(vpW || 1, vpH || 1)) * 1.5;
 
-			const MIN_VISIBLE_GRAPH_SPAN = 480;
-			const maxZoomInRatio = MIN_VISIBLE_GRAPH_SPAN / bboxRange;
-			const maxZoomOutRatio = (bboxRange / Math.min(vpW || 1, vpH || 1)) * 1.5;
+		const renderer = new CfgGraphRenderer(this.graphHost, graph, {
+			minRatio,
+			maxRatio: Math.max(maxZoomOutRatio, minRatio, 1),
+		});
+		this.graphRenderer = renderer;
 
-			const minRatio = maxZoomInRatio;
-			const maxRatio = Math.max(maxZoomOutRatio, minRatio, 1);
+		this.edgeRenderer = new EdgePolylineRenderer(renderer, graph);
+		this.textRenderer = new BlockTextRenderer(renderer, graph, nodesById);
+		this.selectionLayer = new CfgSelectionLayer(renderer, graph, nodesById);
+		this.interactionHandler = new CfgInteractionHandler(
+			renderer,
+			graph,
+			this.textRenderer,
+			nodesById,
+			(selectionStatus) => {
+				this.syncStatus(selectionStatus);
+			},
+			(address) => {
+				this.toolbar.selectAddress(address);
+			},
+		);
 
-			const renderer = new CfgGraphRenderer(this.graphHost, graph, {
-				minRatio,
-				maxRatio,
-			});
-			this.graphRenderer = renderer;
-
-			this.edgeRenderer = new EdgePolylineRenderer(renderer, graph);
-			this.textRenderer = new BlockTextRenderer(renderer, graph, nodesById);
-			this.selectionLayer = new CfgSelectionLayer(renderer, graph, nodesById);
-			this.interactionHandler = new CfgInteractionHandler(
-				renderer,
-				graph,
-				this.textRenderer,
-				nodesById,
-				(selectionStatus) => {
-					this.syncStatus(selectionStatus);
-				},
-				(address) => {
-					this.toolbar.selectAddress(address);
-				},
-			);
-
-			this.interactionHandler.fitToView();
-			renderer.requestRender();
+		const fit = () => {
+			const { width, height } = renderer.getDimensions();
+			if (width <= 0 || height <= 0) return;
+			renderer.offRender(fit);
+			this.pendingFit = null;
+			const maxZoom = (bboxRange / Math.min(width, height)) * 1.5;
+			renderer.setZoomBounds(minRatio, Math.max(maxZoom, minRatio, 1));
+			this.interactionHandler?.fitToView();
 		};
-
-		if (this.graphHost.clientWidth > 0 && this.graphHost.clientHeight > 0) {
-			setupRenderer();
-		} else {
-			this.pendingSetup = setupRenderer;
-			this.resizeObserver = new ResizeObserver((entries) => {
-				for (const entry of entries) {
-					if (entry.contentRect.width > 0 && entry.contentRect.height > 0) {
-						this.resizeObserver?.disconnect();
-						this.resizeObserver = null;
-						const pending = this.pendingSetup;
-						this.pendingSetup = null;
-						pending?.();
-						break;
-					}
-				}
-			});
-			this.resizeObserver.observe(this.graphHost);
-		}
+		this.pendingFit = fit;
+		renderer.onRender(fit);
+		renderer.requestRender();
 
 		this.syncStatus();
 		this.syncControlState();
