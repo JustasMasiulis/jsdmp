@@ -276,6 +276,9 @@ export class DisassemblyGraphView implements IContentRenderer {
 			(address) => {
 				this.toolbar.selectAddress(address);
 			},
+			(address) => {
+				this.toolbar.focusInView(address);
+			},
 		);
 
 		const fit = () => {

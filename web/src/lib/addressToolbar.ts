@@ -6,7 +6,6 @@ import {
 } from "./addressPanelState";
 import type { AddressNavEvent } from "./addressSync";
 import { addressNavSignal, addressSelectSignal } from "./addressSync";
-import type { CpuContext } from "./cpu_context";
 import { DBG } from "./debugState";
 import { fmtHex16 } from "./formatting";
 import type { SignalHandle } from "./reactive";
@@ -36,7 +35,6 @@ export class AddressToolbar {
 	private readonly syncCheckbox: HTMLInputElement;
 	private readonly syncHandle: SignalHandle<AddressNavEvent | null>;
 	private readonly selectHandle: SignalHandle<AddressNavEvent | null>;
-	private readonly contextHandle: SignalHandle<CpuContext | null>;
 	private isDisposed = false;
 
 	private readonly form: HTMLFormElement;
@@ -108,9 +106,6 @@ export class AddressToolbar {
 		this.selectHandle = addressSelectSignal.subscribe(() =>
 			this.onSelectReceive(),
 		);
-		this.contextHandle = DBG.currentContext.subscribe(() =>
-			this.history.clear(),
-		);
 
 		this.restoreState();
 	}
@@ -125,6 +120,11 @@ export class AddressToolbar {
 	navigateToAddress(address: bigint): void {
 		this.history.push(address);
 		this.applyAddress(address, true);
+	}
+
+	focusInView(address: bigint): void {
+		this.history.push(address);
+		this.config.onFocusAddress?.(address);
 	}
 
 	selectAddress(address: bigint): void {
@@ -156,7 +156,6 @@ export class AddressToolbar {
 		this.isDisposed = true;
 		this.syncHandle.dispose();
 		this.selectHandle.dispose();
-		this.contextHandle.dispose();
 		this.form.removeEventListener("submit", this.onAddressSubmit);
 		this.followCheckbox.removeEventListener("change", this.onFollowChange);
 		this.syncCheckbox.removeEventListener("change", this.onSyncChange);

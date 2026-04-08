@@ -8,10 +8,35 @@ import {
 } from "../lib/disassemblyGraph";
 import type { BlockTextRenderer } from "./blockTextProgram";
 import type { CfgGraphRenderer } from "./cfgGraphRenderer";
-import type { CfgRenderGraph } from "./cfgRenderGraph";
+import type { CfgRenderEdge, CfgRenderGraph } from "./cfgRenderGraph";
 
 const SELECTED_BORDER_COLOR = "#3575fe";
 const DEFAULT_BORDER_COLOR = "#d1d5db";
+const EDGE_HIT_THRESHOLD_PX = 6;
+
+function pointToSegmentDistSq(
+	px: number,
+	py: number,
+	ax: number,
+	ay: number,
+	bx: number,
+	by: number,
+): number {
+	const dx = bx - ax;
+	const dy = by - ay;
+	const lenSq = dx * dx + dy * dy;
+	if (lenSq === 0) {
+		const ex = px - ax;
+		const ey = py - ay;
+		return ex * ex + ey * ey;
+	}
+	const t = Math.max(0, Math.min(1, ((px - ax) * dx + (py - ay) * dy) / lenSq));
+	const projX = ax + t * dx;
+	const projY = ay + t * dy;
+	const ex = px - projX;
+	const ey = py - projY;
+	return ex * ex + ey * ey;
+}
 
 type NodePos = {
 	id: string;
@@ -28,6 +53,7 @@ export class CfgInteractionHandler {
 	private readonly nodesById: Map<string, CfgNode>;
 	private readonly statusCallback: (status: string) => void;
 	private readonly addressCallback: ((address: bigint) => void) | null;
+	private readonly navigateCallback: ((address: bigint) => void) | null;
 	private readonly nodePositions: NodePos[] = [];
 	private readonly termCounts: Map<string, number>;
 
@@ -43,6 +69,7 @@ export class CfgInteractionHandler {
 		nodesById: Map<string, CfgNode>,
 		statusCallback: (status: string) => void,
 		addressCallback?: (address: bigint) => void,
+		navigateCallback?: (address: bigint) => void,
 	) {
 		this.renderer = renderer;
 		this.graph = graph;
@@ -50,6 +77,7 @@ export class CfgInteractionHandler {
 		this.nodesById = nodesById;
 		this.statusCallback = statusCallback;
 		this.addressCallback = addressCallback ?? null;
+		this.navigateCallback = navigateCallback ?? null;
 
 		this.termCounts = this.buildTermCounts();
 
@@ -144,6 +172,22 @@ export class CfgInteractionHandler {
 
 		const block = this.findBlockAtPoint(gx, gy);
 		if (!block) {
+			const edge = this.findEdgeAtPoint(graphPos.x, graphPos.y);
+			if (edge) {
+				const sep = edge.key.indexOf("\u2192");
+				const fromId = edge.key.slice(0, sep);
+				const toId = edge.key.slice(sep + 1);
+				const destination = this.isNodeVisible(toId) ? fromId : toId;
+				const destNode = this.nodesById.get(destination);
+				if (destNode && destNode.lines.length > 0) {
+					const address = getCfgLineAddress(destNode.lines[0]);
+					if (address !== null && this.navigateCallback) {
+						this.selectTerm(null);
+						this.navigateCallback(address);
+						return;
+					}
+				}
+			}
 			this.selectNode(null);
 			this.selectTerm(null);
 			this.textRenderer.highlightLineAddress(null);
@@ -159,6 +203,60 @@ export class CfgInteractionHandler {
 			const address = this.findClickedLineAddress(block, gy);
 			if (address !== null) this.addressCallback(address);
 		}
+	}
+
+	private findEdgeAtPoint(gx: number, gy: number): CfgRenderEdge | null {
+		const p0 = this.renderer.viewportToGraph({ x: 0, y: 0 });
+		const p1 = this.renderer.viewportToGraph({
+			x: EDGE_HIT_THRESHOLD_PX,
+			y: 0,
+		});
+		const dx = p1.x - p0.x;
+		const dy = p1.y - p0.y;
+		let thresholdSq = dx * dx + dy * dy;
+
+		let best: CfgRenderEdge | null = null;
+		for (const edge of this.graph.edges) {
+			const pts = edge.polylinePoints;
+			for (let i = 0; i < pts.length - 1; i++) {
+				const distSq = pointToSegmentDistSq(
+					gx,
+					gy,
+					pts[i].x,
+					pts[i].y,
+					pts[i + 1].x,
+					pts[i + 1].y,
+				);
+				if (distSq < thresholdSq) {
+					thresholdSq = distSq;
+					best = edge;
+				}
+			}
+		}
+		return best;
+	}
+
+	private isNodeVisible(nodeId: string): boolean {
+		const node = this.graph.nodeMap.get(nodeId);
+		if (!node) return false;
+
+		const { width, height } = this.renderer.getDimensions();
+		if (width <= 0 || height <= 0) return false;
+
+		const tl = this.renderer.graphToViewport({
+			x: node.x,
+			y: node.y,
+		});
+		const br = this.renderer.graphToViewport({
+			x: node.x + node.width,
+			y: node.y - node.height,
+		});
+
+		const minX = Math.min(tl.x, br.x);
+		const maxX = Math.max(tl.x, br.x);
+		const minY = Math.min(tl.y, br.y);
+		const maxY = Math.max(tl.y, br.y);
+		return maxX >= 0 && minX <= width && maxY >= 0 && minY <= height;
 	}
 
 	private findBlockAtPoint(gx: number, gy: number): NodePos | null {
