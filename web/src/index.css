@@ -653,10 +653,22 @@ Design language notes for future re-additions:
 	}
 }
 
+.disassembly-graph-view-panel__status-row {
+	display: flex;
+	gap: 0.5rem;
+	align-items: center;
+	padding: 0.25rem 0.5rem;
+}
+
 .disassembly-graph-view-panel__status {
 	margin: 0;
 	color: var(--color-fg2);
-	padding: 0.25rem 0.5rem;
+	flex: 1;
+	min-width: 0;
+}
+
+.disassembly-graph-view-panel__button {
+	flex-shrink: 0;
 }
 
 .disassembly-graph-view-panel__graph {

@@ -3,6 +3,7 @@ import type {
 	IContentRenderer,
 } from "dockview-core";
 import { AddressToolbar } from "../lib/addressToolbar";
+import { triskelBuildRenderGraph } from "../lib/analysis/triskel-adapter";
 import type { CpuContext } from "../lib/cpu_context";
 import { DBG } from "../lib/debugState";
 import {
@@ -21,6 +22,12 @@ import {
 	type EdgeDescriptor,
 	GraphLayoutCore,
 } from "../lib/graph-layout-core";
+import {
+	buildNativeCfgCompareJson,
+	downloadTextFile,
+	NATIVE_CFG_COMPARE_KEYBIND,
+	requestNativeCfgCompareSvg,
+} from "../lib/nativeCfgCompare";
 import type { SignalHandle } from "../lib/reactive";
 import { BlockTextRenderer } from "../rendering/blockTextProgram";
 import { CfgGraphRenderer } from "../rendering/cfgGraphRenderer";
@@ -73,7 +80,12 @@ export class DisassemblyGraphView implements IContentRenderer {
 	private isDisposed = false;
 	private reloadToken = 0;
 
+	private useTriskelLayout = false;
+	private isExportingNativeCompare = false;
+	private nativeCompareStatus: string | null = null;
+
 	private readonly statusNode: HTMLParagraphElement;
+	private readonly compareButton: HTMLButtonElement;
 	private readonly graphHost: HTMLDivElement;
 
 	private nodesById: Map<string, CfgNode> | null = null;
@@ -99,6 +111,34 @@ export class DisassemblyGraphView implements IContentRenderer {
 		this.toolbar.navigateToAddress(address);
 	};
 
+	private readonly onGraphKeyDown = (event: KeyboardEvent) => {
+		const key = event.key.toLowerCase();
+		if (key === "l" && event.altKey && !event.ctrlKey && !event.metaKey) {
+			event.preventDefault();
+			this.useTriskelLayout = !this.useTriskelLayout;
+			this.refreshView(true);
+			console.log(
+				`Switched to ${this.useTriskelLayout ? "Triskel" : "GraphLayoutCore"} layout.`,
+			);
+			return;
+		}
+
+		if (
+			key === "s" &&
+			event.altKey &&
+			event.shiftKey &&
+			!event.ctrlKey &&
+			!event.metaKey
+		) {
+			event.preventDefault();
+			void this.exportNativeCompare();
+		}
+	};
+
+	private readonly onCompareButtonClick = () => {
+		void this.exportNativeCompare();
+	};
+
 	constructor(element: HTMLElement, panelId: string) {
 		this.element = element;
 		this.element.setAttribute(
@@ -119,17 +159,31 @@ export class DisassemblyGraphView implements IContentRenderer {
 		statusNode.className = "disassembly-graph-view-panel__status";
 		this.statusNode = statusNode;
 
+		const compareButton = document.createElement("button");
+		compareButton.type = "button";
+		compareButton.className =
+			"memory-view-panel__button disassembly-graph-view-panel__button";
+		compareButton.textContent = "Native SVG";
+		compareButton.title = `Export the current CFG as JSON and render it with native Triskel (${NATIVE_CFG_COMPARE_KEYBIND})`;
+		this.compareButton = compareButton;
+
+		const statusBar = document.createElement("div");
+		statusBar.className = "disassembly-graph-view-panel__status-row";
+		statusBar.append(statusNode, compareButton);
+
 		const graphHost = document.createElement("div");
 		graphHost.className = "disassembly-graph-view-panel__graph";
 		graphHost.hidden = true;
 		graphHost.style.position = "relative";
 		this.graphHost = graphHost;
 
-		this.element.append(statusNode, graphHost);
+		this.element.append(statusBar, graphHost);
 
 		this.element.tabIndex = 0;
 		this.element.addEventListener("keydown", this.toolbar.onKeyDown);
+		this.element.addEventListener("keydown", this.onGraphKeyDown);
 		this.element.addEventListener("click", this.onDisasmLinkClick);
+		this.compareButton.addEventListener("click", this.onCompareButtonClick);
 
 		this.contextHandle = DBG.currentContext.subscribe(() =>
 			this.onContextChanged(),
@@ -152,7 +206,9 @@ export class DisassemblyGraphView implements IContentRenderer {
 		this.toolbar.dispose();
 		this.contextHandle.dispose();
 		this.element.removeEventListener("keydown", this.toolbar.onKeyDown);
+		this.element.removeEventListener("keydown", this.onGraphKeyDown);
 		this.element.removeEventListener("click", this.onDisasmLinkClick);
+		this.compareButton.removeEventListener("click", this.onCompareButtonClick);
 		this.disposeGraph();
 		this.element.replaceChildren();
 	}
@@ -190,6 +246,7 @@ export class DisassemblyGraphView implements IContentRenderer {
 		const token = ++this.reloadToken;
 		const anchorAddress = this.toolbar.currentAnchor();
 		this.isLoadingGraph = true;
+		this.nativeCompareStatus = null;
 
 		if (anchorAddress === null) {
 			this.graphResult = null;
@@ -230,11 +287,16 @@ export class DisassemblyGraphView implements IContentRenderer {
 			return;
 		}
 
-		const descriptor = cfgResultToAnnotatedDescriptor(this.graphResult);
 		this.disposeGraph();
 
-		const layoutCore = new GraphLayoutCore(descriptor, true, true);
-		const graph = buildRenderGraph(this.graphResult, layoutCore);
+		const result = this.graphResult;
+		const graph = this.useTriskelLayout
+			? triskelBuildRenderGraph(result)
+			: (() => {
+					const descriptor = cfgResultToAnnotatedDescriptor(result);
+					const layoutCore = new GraphLayoutCore(descriptor, true, true);
+					return buildRenderGraph(result, layoutCore);
+				})();
 
 		this.graphHost.hidden = false;
 
@@ -300,22 +362,85 @@ export class DisassemblyGraphView implements IContentRenderer {
 
 	private syncStatus(selectionStatus?: string) {
 		const result = this.graphResult;
+		const compareStatus = this.isExportingNativeCompare
+			? " Exporting native SVG..."
+			: this.nativeCompareStatus
+				? ` ${this.nativeCompareStatus}`
+				: "";
 		if (!result) {
 			this.statusNode.textContent = this.isLoadingGraph
 				? "Loading graph..."
-				: "Graph view is idle.";
+				: `Graph view is idle.${compareStatus}`;
 			return;
 		}
 
 		const summary = `${result.stats.blockCount} blocks, ${result.stats.edgeCount} edges, ${result.stats.instructionCount} instr`;
 		const extra = selectionStatus ? ` ${selectionStatus}` : "";
-		this.statusNode.textContent = `${summary}.${extra}`;
+		this.statusNode.textContent = `${summary}.${extra}${compareStatus}`;
 	}
 
 	private syncControlState() {
 		const hasGraph = (this.graphResult?.blocks.length ?? 0) > 0;
 		this.toolbar.syncControlState(hasGraph);
 		this.graphHost.hidden = !hasGraph;
+		this.compareButton.disabled =
+			!hasGraph || this.isLoadingGraph || this.isExportingNativeCompare;
+		this.compareButton.textContent = this.isExportingNativeCompare
+			? "Exporting..."
+			: "Native SVG";
+	}
+
+	private async exportNativeCompare() {
+		if (
+			this.isExportingNativeCompare ||
+			!this.graphResult ||
+			this.graphResult.blocks.length === 0
+		) {
+			return;
+		}
+
+		const result = this.graphResult;
+		const previewWindow = window.open("", "_blank");
+		if (previewWindow) {
+			previewWindow.document.title = "Generating native CFG SVG";
+			previewWindow.document.body.textContent =
+				"Generating native Triskel SVG comparison...";
+		}
+
+		this.isExportingNativeCompare = true;
+		this.nativeCompareStatus = null;
+		this.syncStatus();
+		this.syncControlState();
+
+		try {
+			const { baseName, jsonText } = buildNativeCfgCompareJson(result);
+			downloadTextFile(`${baseName}.json`, jsonText, "application/json");
+
+			const svgText = await requestNativeCfgCompareSvg(jsonText);
+			if (previewWindow && !previewWindow.closed) {
+				const svgUrl = URL.createObjectURL(
+					new Blob([svgText], { type: "image/svg+xml;charset=utf-8" }),
+				);
+				previewWindow.location.replace(svgUrl);
+				setTimeout(() => URL.revokeObjectURL(svgUrl), 60_000);
+				this.nativeCompareStatus = `Opened native SVG (${NATIVE_CFG_COMPARE_KEYBIND}).`;
+			} else {
+				downloadTextFile(`${baseName}.svg`, svgText, "image/svg+xml");
+				this.nativeCompareStatus = "Downloaded native SVG comparison.";
+			}
+		} catch (error) {
+			const message =
+				error instanceof Error ? error.message : "Native comparison failed.";
+			this.nativeCompareStatus = `Native SVG export failed: ${message}`;
+			if (previewWindow && !previewWindow.closed) {
+				previewWindow.document.title = "Native CFG SVG failed";
+				previewWindow.document.body.textContent = this.nativeCompareStatus;
+			}
+		} finally {
+			this.isExportingNativeCompare = false;
+			this.syncStatus();
+			this.syncControlState();
+		}
 	}
 
 	private focusAddress(address: bigint): boolean {

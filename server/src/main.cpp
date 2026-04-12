@@ -19,6 +19,8 @@
 #include <unordered_map>
 #include <vector>
 
+#include "native_cfg_compare.hpp"
+
 namespace fs = std::filesystem;
 
 // ---------------------------------------------------------------------------
@@ -284,7 +286,7 @@ static void set_cors(uWS::HttpResponse<SSL>* res, std::string_view origin) {
     if (is_localhost_origin(origin)) {
         res->writeHeader("Access-Control-Allow-Origin", origin);
     }
-    res->writeHeader("Access-Control-Allow-Methods", "GET, OPTIONS");
+    res->writeHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
     res->writeHeader("Access-Control-Allow-Headers", "*");
 }
 
@@ -333,6 +335,18 @@ static void send_json_error(uWS::HttpResponse<false>* res, uWS::Loop* loop,
     });
 }
 
+static void send_error_owned(uWS::HttpResponse<false>* res, uWS::Loop* loop,
+                             const std::string& origin,
+                             std::shared_ptr<std::atomic<bool>> aborted,
+                             const char* status, std::string body) {
+    loop->defer([res, origin, aborted, status, body = std::move(body)]() {
+        if (aborted->load()) return;
+        set_cors(res, origin);
+        res->writeStatus(status);
+        res->end(body);
+    });
+}
+
 // ---------------------------------------------------------------------------
 // main
 // ---------------------------------------------------------------------------
@@ -357,6 +371,46 @@ int main(int argc, char* argv[]) {
             auto origin = req->getHeader("origin");
             set_cors(res, origin);
             res->end("OK");
+        })
+        .post("/cfg/native-svg", [](auto* res, auto* req) {
+            auto origin = std::string(req->getHeader("origin"));
+            auto body = std::make_shared<std::string>();
+            auto aborted = std::make_shared<std::atomic<bool>>(false);
+            res->onAborted([aborted]() { aborted->store(true); });
+
+            res->onData([res, origin = std::move(origin), body, aborted](
+                            std::string_view chunk, bool isLast) mutable {
+                if (aborted->load()) return;
+                body->append(chunk.data(), chunk.size());
+                if (!isLast) return;
+
+                auto payload = std::move(*body);
+                auto* loop = uWS::Loop::get();
+
+                std::thread([res, loop, origin = std::move(origin), aborted,
+                             payload = std::move(payload)]() mutable {
+                    try {
+                        auto svg = render_native_cfg_svg(payload);
+                        loop->defer([res, origin = std::move(origin), aborted,
+                                     svg = std::move(svg)]() {
+                            if (aborted->load()) return;
+                            set_cors(res, origin);
+                            res->writeHeader("Content-Type",
+                                             "image/svg+xml; charset=utf-8");
+                            res->end(svg);
+                        });
+                    } catch (const std::exception& ex) {
+                        send_error_owned(res, loop, origin, aborted,
+                                         "422 Unprocessable Entity",
+                                         std::string("Native CFG SVG failed: ") +
+                                             ex.what());
+                    } catch (...) {
+                        send_error(res, loop, origin, aborted,
+                                   "500 Internal Server Error",
+                                   "Native CFG SVG failed");
+                    }
+                }).detach();
+            });
         })
         .get("/headers/:name/:key", [](auto* res, auto* req) {
             auto origin = std::string(req->getHeader("origin"));
