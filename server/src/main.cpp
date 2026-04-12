@@ -318,6 +318,21 @@ static void send_error(uWS::HttpResponse<false>* res, uWS::Loop* loop,
     });
 }
 
+static void send_json_error(uWS::HttpResponse<false>* res, uWS::Loop* loop,
+                            const std::string& origin,
+                            std::shared_ptr<std::atomic<bool>> aborted,
+                            const char* status, const char* code) {
+    loop->defer([res, origin, aborted, status, code]() {
+        if (aborted->load()) return;
+        set_cors(res, origin);
+        res->writeStatus(status);
+        res->writeHeader("Content-Type", "application/json");
+        char body[64];
+        int n = snprintf(body, sizeof(body), R"({"error":"%s"})", code);
+        res->end(std::string_view(body, static_cast<size_t>(n)));
+    });
+}
+
 // ---------------------------------------------------------------------------
 // main
 // ---------------------------------------------------------------------------
@@ -446,34 +461,33 @@ int main(int argc, char* argv[]) {
             auto key = std::string(req->getParameter("key"));
             auto qp = parse_query(req->getQuery());
 
+            auto aborted = std::make_shared<std::atomic<bool>>(false);
+            res->onAborted([aborted]() { aborted->store(true); });
+            auto* loop = uWS::Loop::get();
+
             if (qp.rva < 0) {
-                set_cors(res, origin);
-                res->writeStatus("400 Bad Request");
-                res->end("Missing rva query parameter");
+                send_json_error(res, loop, origin, aborted,
+                                "400 Bad Request", "missing_rva");
                 return;
             }
 
-            auto aborted = std::make_shared<std::atomic<bool>>(false);
-            res->onAborted([aborted]() { aborted->store(true); });
-
             auto fut = deduplicated_fetch(name, key);
             auto map_key = name + "/" + key;
-            auto* loop = uWS::Loop::get();
             auto rva = static_cast<DWORD64>(qp.rva);
 
             std::thread([res, loop, fut, origin, aborted, map_key, rva]() {
                 auto path = fut.get();
                 if (path.empty()) {
-                    send_error(res, loop, origin, aborted,
-                               "502 Bad Gateway", "Failed to fetch PDB file");
+                    send_json_error(res, loop, origin, aborted,
+                                    "502 Bad Gateway", "pdb_unavailable");
                     return;
                 }
 
                 std::lock_guard lk(g_dbghelp_mu);
                 DWORD64 base = load_pdb_module(path, map_key);
                 if (!base) {
-                    send_error(res, loop, origin, aborted,
-                               "502 Bad Gateway", "Failed to load PDB");
+                    send_json_error(res, loop, origin, aborted,
+                                    "502 Bad Gateway", "pdb_unavailable");
                     return;
                 }
 
@@ -484,8 +498,8 @@ int main(int argc, char* argv[]) {
                 DWORD64 displacement = 0;
 
                 if (!SymFromAddr(g_sym_handle, base + rva, &displacement, sym)) {
-                    send_error(res, loop, origin, aborted,
-                               "404 Not Found", "No symbol at address");
+                    send_json_error(res, loop, origin, aborted,
+                                    "404 Not Found", "no_symbol");
                     return;
                 }
 

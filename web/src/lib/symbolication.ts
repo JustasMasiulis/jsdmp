@@ -84,33 +84,38 @@ export async function symbolicateSegments(
 	await Promise.all(promises);
 }
 
+type ServerError = { error: string };
+
 export class SymCache {
 	private readonly key: string;
 	private readonly cache: IntervalTree<SymbolInfo>;
-	private readonly inflight: Map<string, Promise<SymbolInfo | null>>;
+	private readonly no_symbols_cache: Set<number>;
+	private readonly inflight: Map<number, Promise<SymbolInfo | null>>;
+	private pdbMissing: boolean;
 
 	constructor(pdbInfo: DebugModuleSymInfo | undefined) {
 		this.key = pdbCacheKey(pdbInfo) ?? "";
 		this.cache = new IntervalTree<SymbolInfo>();
-		this.inflight = new Map<string, Promise<SymbolInfo | null>>();
+		this.inflight = new Map<number, Promise<SymbolInfo | null>>();
+		this.no_symbols_cache = new Set<number>();
+		this.pdbMissing = !this.key;
 	}
 
 	async lookup(rva: number): Promise<SymbolInfo | null> {
-		if (!this.key) return null;
+		if (this.pdbMissing) return null;
 
 		const hits = this.cache.search([rva, rva]) as SymbolInfo[];
-		if (hits.length > 0) {
-			return hits[0];
-		}
+		if (hits.length > 0) return hits[0];
 
-		const inflightKey = `${this.key}${rva}`;
-		const pending = this.inflight.get(inflightKey);
+		if (this.no_symbols_cache.has(rva)) return null;
+
+		const pending = this.inflight.get(rva);
 		if (pending) return pending;
 
 		const promise = this.fetchSymbol(rva).finally(() => {
-			this.inflight.delete(inflightKey);
+			this.inflight.delete(rva);
 		});
-		this.inflight.set(inflightKey, promise);
+		this.inflight.set(rva, promise);
 
 		const result = await promise;
 		if (result) {
@@ -118,15 +123,28 @@ export class SymCache {
 			const hi = result.size > 0 ? result.rva + result.size - 1 : result.rva;
 			this.cache.insert([lo, hi], result);
 		}
-
 		return result;
 	}
 
-	private async fetchSymbol(rva: number) {
+	private async fetchSymbol(rva: number): Promise<SymbolInfo | null> {
 		const base = getSymbolServerUrl().replace(/\/+$/, "");
 		const url = `${base}/pdb/${this.key}/nearest?rva=${rva}`;
 		const response = await fetchWithRetry(url);
-		if (!response.ok) return null;
-		return (await response.json()) as SymbolInfo;
+		const contentType = response.headers.get("content-type") ?? "";
+		if (!contentType.includes("application/json")) {
+			if (!response.ok) this.pdbMissing = true;
+			return null;
+		}
+
+		const body = (await response.json()) as SymbolInfo | ServerError;
+		if ("error" in body) {
+			if (body.error === "pdb_unavailable") {
+				this.pdbMissing = true;
+			} else if (body.error === "no_symbol") {
+				this.no_symbols_cache.add(rva);
+			}
+			return null;
+		}
+		return body;
 	}
 }
