@@ -406,27 +406,29 @@ export class GraphLayoutCore {
 	}
 
 	propagateShifts(root: number) {
-		const block = this.blocks[root];
-		const { pendingRowShift, pendingColShift } = block;
-		block.pendingRowShift = 0;
-		block.pendingColShift = 0;
-		if (pendingRowShift === 0 && pendingColShift === 0) {
-			for (const child of block.treeEdges) {
-				this.propagateShifts(child);
+		const stack = [root];
+		while (stack.length > 0) {
+			const node = stack.pop();
+			assert(node !== undefined);
+			const block = this.blocks[node];
+			const { pendingRowShift, pendingColShift } = block;
+			block.pendingRowShift = 0;
+			block.pendingColShift = 0;
+			for (let i = block.treeEdges.length - 1; i >= 0; i--) {
+				const child = block.treeEdges[i];
+				if (pendingRowShift !== 0 || pendingColShift !== 0) {
+					const childBlock = this.blocks[child];
+					childBlock.row += pendingRowShift;
+					childBlock.col += pendingColShift;
+					for (const rowBound of childBlock.boundingBox.rows) {
+						rowBound.start += pendingColShift;
+						rowBound.end += pendingColShift;
+					}
+					childBlock.pendingRowShift += pendingRowShift;
+					childBlock.pendingColShift += pendingColShift;
+				}
+				stack.push(child);
 			}
-			return;
-		}
-		for (const child of block.treeEdges) {
-			const childBlock = this.blocks[child];
-			childBlock.row += pendingRowShift;
-			childBlock.col += pendingColShift;
-			for (const rowBound of childBlock.boundingBox.rows) {
-				rowBound.start += pendingColShift;
-				rowBound.end += pendingColShift;
-			}
-			childBlock.pendingRowShift += pendingRowShift;
-			childBlock.pendingColShift += pendingColShift;
-			this.propagateShifts(child);
 		}
 	}
 
