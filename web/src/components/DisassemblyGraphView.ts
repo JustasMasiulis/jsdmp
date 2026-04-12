@@ -22,12 +22,11 @@ import {
 	GraphLayoutCore,
 } from "../lib/graph-layout-core";
 import type { SignalHandle } from "../lib/reactive";
-import { BlockTextRenderer } from "../rendering/blockTextProgram";
 import { CfgGraphRenderer } from "../rendering/cfgGraphRenderer";
 import { CfgInteractionHandler } from "../rendering/cfgInteractionHandler";
 import { buildRenderGraph } from "../rendering/cfgRenderGraph";
+import { CfgRenderPipeline } from "../rendering/cfgRenderPipeline";
 import { CfgSelectionLayer } from "../rendering/cfgSelectionLayer";
-import { EdgePolylineRenderer } from "../rendering/edgePolylineProgram";
 
 const PANEL_STATE_KEY = "wasm-dump-debugger:disassembly-graph-panel-state:v1";
 
@@ -78,8 +77,7 @@ export class DisassemblyGraphView implements IContentRenderer {
 
 	private nodesById: Map<string, CfgNode> | null = null;
 	private graphRenderer: CfgGraphRenderer | null = null;
-	private edgeRenderer: EdgePolylineRenderer | null = null;
-	private textRenderer: BlockTextRenderer | null = null;
+	private pipeline: CfgRenderPipeline | null = null;
 	private selectionLayer: CfgSelectionLayer | null = null;
 	private interactionHandler: CfgInteractionHandler | null = null;
 	private pendingFit: (() => void) | null = null;
@@ -166,10 +164,8 @@ export class DisassemblyGraphView implements IContentRenderer {
 		this.interactionHandler = null;
 		this.selectionLayer?.dispose();
 		this.selectionLayer = null;
-		this.textRenderer?.dispose();
-		this.textRenderer = null;
-		this.edgeRenderer?.dispose();
-		this.edgeRenderer = null;
+		this.pipeline?.dispose();
+		this.pipeline = null;
 		this.graphRenderer?.dispose();
 		this.graphRenderer = null;
 		this.nodesById = null;
@@ -262,13 +258,12 @@ export class DisassemblyGraphView implements IContentRenderer {
 		});
 		this.graphRenderer = renderer;
 
-		this.edgeRenderer = new EdgePolylineRenderer(renderer, graph);
-		this.textRenderer = new BlockTextRenderer(renderer, graph, nodesById);
+		this.pipeline = new CfgRenderPipeline(renderer, graph, nodesById);
 		this.selectionLayer = new CfgSelectionLayer(renderer, graph, nodesById);
 		this.interactionHandler = new CfgInteractionHandler(
 			renderer,
 			graph,
-			this.textRenderer,
+			this.pipeline.textPass,
 			nodesById,
 			(selectionStatus) => {
 				this.syncStatus(selectionStatus);
@@ -319,11 +314,11 @@ export class DisassemblyGraphView implements IContentRenderer {
 	}
 
 	private focusAddress(address: bigint): boolean {
-		if (!this.interactionHandler || !this.nodesById || !this.textRenderer)
+		if (!this.interactionHandler || !this.nodesById || !this.pipeline)
 			return false;
 		const hit = this.findLineForAddress(address);
 		if (!hit) return false;
-		this.textRenderer.highlightLineAddress(fmtHex16(address));
+		this.pipeline.textPass.highlightLineAddress(fmtHex16(address));
 		this.interactionHandler.focusLine(hit.blockId, hit.lineIndex);
 		return true;
 	}

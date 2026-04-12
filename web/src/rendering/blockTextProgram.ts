@@ -5,10 +5,9 @@ import {
 	ESTIMATED_CHAR_WIDTH,
 	ESTIMATED_LINE_HEIGHT,
 } from "../lib/disassemblyGraph";
-import { CfgCanvasLayer } from "./cfgCanvasLayer";
 import type { CfgGraphRenderer } from "./cfgGraphRenderer";
 import type { CfgRenderGraph } from "./cfgRenderGraph";
-import { createFontAtlas, type FontAtlas } from "./fontAtlas";
+import type { FontAtlas } from "./fontAtlas";
 import { compileSimpleProgram } from "./utils.";
 
 const VERTEX_SHADER = `#version 300 es
@@ -59,7 +58,8 @@ void main() {
 }
 `;
 
-const FLOATS_PER_QUAD = 48;
+const FLOATS_PER_VERTEX = 8;
+const FLOATS_PER_QUAD = FLOATS_PER_VERTEX * 6;
 const CULL_INTERVAL_MS = 100;
 
 const SYNTAX_COLORS: Record<CfgTextSyntaxKind, [number, number, number]> = {
@@ -91,20 +91,26 @@ type NodeEntry = {
 	h: number;
 };
 
-export class BlockTextRenderer extends CfgCanvasLayer {
+export class BlockTextPass {
+	private readonly gl: WebGL2RenderingContext;
+	private readonly renderer: CfgGraphRenderer;
 	private readonly graph: CfgRenderGraph;
 	private readonly nodesById: Map<string, CfgNode>;
 	private readonly atlas: FontAtlas;
 	private readonly program: WebGLProgram;
-	private readonly vbo: WebGLBuffer | null;
+	private readonly vbo: WebGLBuffer;
+	private readonly vao: WebGLVertexArrayObject;
 
-	private readonly aPosition: number;
-	private readonly aTexcoord: number;
-	private readonly aColor: number;
 	private readonly uMatrix: WebGLUniformLocation | null;
 	private readonly uAtlas: WebGLUniformLocation | null;
 	private readonly uFillColor: WebGLUniformLocation | null;
 	private readonly uBorderWidth: WebGLUniformLocation | null;
+
+	private dirty = true;
+	private bboxCenterX = 0;
+	private bboxCenterY = 0;
+	private bboxRange = 1;
+	private invBBoxRange = 1;
 
 	private nodeEntries: NodeEntry[] = [];
 	private vertexCount = 0;
@@ -117,19 +123,23 @@ export class BlockTextRenderer extends CfgCanvasLayer {
 	private highlightedLineAddr: string | null = null;
 
 	constructor(
+		gl: WebGL2RenderingContext,
 		renderer: CfgGraphRenderer,
 		graph: CfgRenderGraph,
 		nodesById: Map<string, CfgNode>,
+		atlas: FontAtlas,
 	) {
-		super(renderer, "6", false);
+		this.gl = gl;
+		this.renderer = renderer;
 		this.graph = graph;
 		this.nodesById = nodesById;
+		this.atlas = atlas;
 
-		const gl = this.gl;
 		this.program = compileSimpleProgram(gl, VERTEX_SHADER, FRAGMENT_SHADER);
-		this.aPosition = gl.getAttribLocation(this.program, "a_position");
-		this.aTexcoord = gl.getAttribLocation(this.program, "a_texcoord");
-		this.aColor = gl.getAttribLocation(this.program, "a_color");
+
+		const aPosition = gl.getAttribLocation(this.program, "a_position");
+		const aTexcoord = gl.getAttribLocation(this.program, "a_texcoord");
+		const aColor = gl.getAttribLocation(this.program, "a_color");
 		this.uMatrix = gl.getUniformLocation(this.program, "u_matrix");
 		this.uAtlas = gl.getUniformLocation(this.program, "u_atlas");
 		this.uFillColor = gl.getUniformLocation(this.program, "u_fillColor");
@@ -139,8 +149,24 @@ export class BlockTextRenderer extends CfgCanvasLayer {
 		gl.uniform3f(this.uFillColor, BLOCK_BG_R, BLOCK_BG_G, BLOCK_BG_B);
 		gl.uniform1f(this.uBorderWidth, BORDER_WIDTH);
 
-		this.vbo = gl.createBuffer();
-		this.atlas = createFontAtlas(gl);
+		const vbo = gl.createBuffer();
+		if (!vbo) throw new Error("Failed to create buffer");
+		this.vbo = vbo;
+
+		const vao = gl.createVertexArray();
+		if (!vao) throw new Error("Failed to create VAO");
+		this.vao = vao;
+
+		const stride = FLOATS_PER_VERTEX * 4;
+		gl.bindVertexArray(this.vao);
+		gl.bindBuffer(gl.ARRAY_BUFFER, this.vbo);
+		gl.enableVertexAttribArray(aPosition);
+		gl.vertexAttribPointer(aPosition, 2, gl.FLOAT, false, stride, 0);
+		gl.enableVertexAttribArray(aTexcoord);
+		gl.vertexAttribPointer(aTexcoord, 2, gl.FLOAT, false, stride, 8);
+		gl.enableVertexAttribArray(aColor);
+		gl.vertexAttribPointer(aColor, 4, gl.FLOAT, false, stride, 16);
+		gl.bindVertexArray(null);
 
 		this.buildNodeIndex();
 	}
@@ -149,27 +175,57 @@ export class BlockTextRenderer extends CfgCanvasLayer {
 		if (this.highlightedTerm === term) return;
 		this.highlightedTerm = term;
 		this.dirty = true;
-		this.onRender();
+		this.renderer.requestRender();
 	}
 
 	highlightLineAddress(hexAddress: string | null): void {
 		if (this.highlightedLineAddr === hexAddress) return;
 		this.highlightedLineAddr = hexAddress;
 		this.dirty = true;
-		this.onRender();
+		this.renderer.requestRender();
 	}
 
 	markDirtyAndRender(): void {
 		this.dirty = true;
 		this.lastCullTime = 0;
-		this.onRender();
+		this.renderer.requestRender();
+	}
+
+	markDirty(): void {
+		this.dirty = true;
+	}
+
+	render(renderer: CfgGraphRenderer): void {
+		const now = performance.now();
+		if (now - this.lastCullTime >= CULL_INTERVAL_MS) {
+			this.lastCullTime = now;
+			this.updateCull(renderer);
+		}
+
+		if (this.dirty) {
+			this.rebuildBuffer();
+		}
+
+		if (this.vertexCount === 0) return;
+
+		const gl = this.gl;
+		const params = renderer.getRenderParams();
+
+		gl.useProgram(this.program);
+		gl.uniformMatrix3fv(this.uMatrix, false, params.matrix);
+		gl.activeTexture(gl.TEXTURE0);
+		gl.bindTexture(gl.TEXTURE_2D, this.atlas.texture);
+		gl.uniform1i(this.uAtlas, 0);
+
+		gl.bindVertexArray(this.vao);
+		gl.drawArrays(gl.TRIANGLES, 0, this.vertexCount);
 	}
 
 	dispose(): void {
 		this.atlas.dispose(this.gl);
+		this.gl.deleteVertexArray(this.vao);
 		this.gl.deleteBuffer(this.vbo);
 		this.gl.deleteProgram(this.program);
-		super.dispose();
 	}
 
 	private buildNodeIndex(): void {
@@ -184,22 +240,23 @@ export class BlockTextRenderer extends CfgCanvasLayer {
 		}
 	}
 
-	protected onRender(): void {
-		const now = performance.now();
-		if (now - this.lastCullTime >= CULL_INTERVAL_MS) {
-			this.lastCullTime = now;
-			this.updateCull();
-		}
-		this.render();
+	private updateBBox(): void {
+		const bbox = this.graph.bbox;
+		const prevRange = this.bboxRange;
+		this.bboxCenterX = (bbox.x[0] + bbox.x[1]) / 2;
+		this.bboxCenterY = (bbox.y[0] + bbox.y[1]) / 2;
+		this.bboxRange = Math.max(bbox.x[1] - bbox.x[0], bbox.y[1] - bbox.y[0], 1);
+		this.invBBoxRange = 1 / this.bboxRange;
+		if (this.bboxRange !== prevRange) this.dirty = true;
 	}
 
-	private updateCull(): void {
+	private updateCull(renderer: CfgGraphRenderer): void {
 		this.updateBBox();
-		const { width: vpW, height: vpH } = this.renderer.getDimensions();
+		const { width: vpW, height: vpH } = renderer.getDimensions();
 		if (vpW <= 0 || vpH <= 0) return;
 
-		const corner1 = this.renderer.viewportToGraph({ x: -200, y: -200 });
-		const corner2 = this.renderer.viewportToGraph({
+		const corner1 = renderer.viewportToGraph({ x: -200, y: -200 });
+		const corner2 = renderer.viewportToGraph({
 			x: vpW + 200,
 			y: vpH + 200,
 		});
@@ -221,10 +278,16 @@ export class BlockTextRenderer extends CfgCanvasLayer {
 			}
 		}
 
-		if (
-			nextVisible.size !== this.visibleIds.size ||
-			![...nextVisible].every((id) => this.visibleIds.has(id))
-		) {
+		let changed = nextVisible.size !== this.visibleIds.size;
+		if (!changed) {
+			for (const id of nextVisible) {
+				if (!this.visibleIds.has(id)) {
+					changed = true;
+					break;
+				}
+			}
+		}
+		if (changed) {
 			this.visibleIds = nextVisible;
 			this.dirty = true;
 		}
@@ -239,6 +302,7 @@ export class BlockTextRenderer extends CfgCanvasLayer {
 	}
 
 	private rebuildBuffer(): void {
+		console.trace("BlockTextPass render");
 		this.updateBBox();
 
 		const inv = this.invBBoxRange;
@@ -372,67 +436,27 @@ export class BlockTextRenderer extends CfgCanvasLayer {
 							let uvIdx = (code - firstChar) * 4;
 							if (uvIdx < 0 || code > lastChar) uvIdx = fallbackIdx;
 
-							const x1 = charNX + nCharW;
-							const y1 = lineNY - nCharH;
-							const u0 = uvTable[uvIdx];
-							const v0 = uvTable[uvIdx + 1];
-							const u1 = uvTable[uvIdx + 2];
-							const v1 = uvTable[uvIdx + 3];
-
-							buf[o++] = charNX;
-							buf[o++] = lineNY;
-							buf[o++] = u0;
-							buf[o++] = v0;
-							buf[o++] = cr;
-							buf[o++] = cg;
-							buf[o++] = cb;
-							buf[o++] = 1;
-							buf[o++] = x1;
-							buf[o++] = lineNY;
-							buf[o++] = u1;
-							buf[o++] = v0;
-							buf[o++] = cr;
-							buf[o++] = cg;
-							buf[o++] = cb;
-							buf[o++] = 1;
-							buf[o++] = charNX;
-							buf[o++] = y1;
-							buf[o++] = u0;
-							buf[o++] = v1;
-							buf[o++] = cr;
-							buf[o++] = cg;
-							buf[o++] = cb;
-							buf[o++] = 1;
-							buf[o++] = charNX;
-							buf[o++] = y1;
-							buf[o++] = u0;
-							buf[o++] = v1;
-							buf[o++] = cr;
-							buf[o++] = cg;
-							buf[o++] = cb;
-							buf[o++] = 1;
-							buf[o++] = x1;
-							buf[o++] = lineNY;
-							buf[o++] = u1;
-							buf[o++] = v0;
-							buf[o++] = cr;
-							buf[o++] = cg;
-							buf[o++] = cb;
-							buf[o++] = 1;
-							buf[o++] = x1;
-							buf[o++] = y1;
-							buf[o++] = u1;
-							buf[o++] = v1;
-							buf[o++] = cr;
-							buf[o++] = cg;
-							buf[o++] = cb;
-							buf[o++] = 1;
-
+							o = writeQuad(
+								buf,
+								o,
+								charNX,
+								lineNY,
+								nCharW,
+								nCharH,
+								uvTable[uvIdx],
+								uvTable[uvIdx + 1],
+								uvTable[uvIdx + 2],
+								uvTable[uvIdx + 3],
+								cr,
+								cg,
+								cb,
+							);
 							charIdx++;
 						}
 					}
 				} else {
 					const text = line.text;
+					const [pr, pg, pb] = SYNTAX_COLORS.plain;
 					for (let ci = 0; ci < text.length; ci++) {
 						const charNX = 0.5 + (baseGX + ci * charW - cx) * inv;
 
@@ -440,61 +464,21 @@ export class BlockTextRenderer extends CfgCanvasLayer {
 						let uvIdx = (code - firstChar) * 4;
 						if (uvIdx < 0 || code > lastChar) uvIdx = fallbackIdx;
 
-						const x1 = charNX + nCharW;
-						const y1 = lineNY - nCharH;
-						const u0 = uvTable[uvIdx];
-						const v0 = uvTable[uvIdx + 1];
-						const u1 = uvTable[uvIdx + 2];
-						const v1 = uvTable[uvIdx + 3];
-
-						buf[o++] = charNX;
-						buf[o++] = lineNY;
-						buf[o++] = u0;
-						buf[o++] = v0;
-						buf[o++] = 0.1;
-						buf[o++] = 0.1;
-						buf[o++] = 0.1;
-						buf[o++] = 1;
-						buf[o++] = x1;
-						buf[o++] = lineNY;
-						buf[o++] = u1;
-						buf[o++] = v0;
-						buf[o++] = 0.1;
-						buf[o++] = 0.1;
-						buf[o++] = 0.1;
-						buf[o++] = 1;
-						buf[o++] = charNX;
-						buf[o++] = y1;
-						buf[o++] = u0;
-						buf[o++] = v1;
-						buf[o++] = 0.1;
-						buf[o++] = 0.1;
-						buf[o++] = 0.1;
-						buf[o++] = 1;
-						buf[o++] = charNX;
-						buf[o++] = y1;
-						buf[o++] = u0;
-						buf[o++] = v1;
-						buf[o++] = 0.1;
-						buf[o++] = 0.1;
-						buf[o++] = 0.1;
-						buf[o++] = 1;
-						buf[o++] = x1;
-						buf[o++] = lineNY;
-						buf[o++] = u1;
-						buf[o++] = v0;
-						buf[o++] = 0.1;
-						buf[o++] = 0.1;
-						buf[o++] = 0.1;
-						buf[o++] = 1;
-						buf[o++] = x1;
-						buf[o++] = y1;
-						buf[o++] = u1;
-						buf[o++] = v1;
-						buf[o++] = 0.1;
-						buf[o++] = 0.1;
-						buf[o++] = 0.1;
-						buf[o++] = 1;
+						o = writeQuad(
+							buf,
+							o,
+							charNX,
+							lineNY,
+							nCharW,
+							nCharH,
+							uvTable[uvIdx],
+							uvTable[uvIdx + 1],
+							uvTable[uvIdx + 2],
+							uvTable[uvIdx + 3],
+							pr,
+							pg,
+							pb,
+						);
 					}
 				}
 			}
@@ -505,43 +489,6 @@ export class BlockTextRenderer extends CfgCanvasLayer {
 		gl.bufferData(gl.ARRAY_BUFFER, buf, gl.DYNAMIC_DRAW, 0, o);
 		this.vertexCount = o / 8;
 		this.dirty = false;
-	}
-
-	private render(): void {
-		if (this.dirty) {
-			this.rebuildBuffer();
-		}
-
-		const gl = this.gl;
-		gl.clearColor(0, 0, 0, 0);
-		gl.clear(gl.COLOR_BUFFER_BIT);
-
-		if (this.vertexCount === 0) return;
-
-		const params = this.renderer.getRenderParams();
-
-		gl.enable(gl.BLEND);
-		gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
-
-		gl.useProgram(this.program);
-		gl.uniformMatrix3fv(this.uMatrix, false, params.matrix);
-		gl.activeTexture(gl.TEXTURE0);
-		gl.bindTexture(gl.TEXTURE_2D, this.atlas.texture);
-		gl.uniform1i(this.uAtlas, 0);
-
-		gl.bindBuffer(gl.ARRAY_BUFFER, this.vbo);
-		const stride = 32;
-
-		gl.enableVertexAttribArray(this.aPosition);
-		gl.vertexAttribPointer(this.aPosition, 2, gl.FLOAT, false, stride, 0);
-
-		gl.enableVertexAttribArray(this.aTexcoord);
-		gl.vertexAttribPointer(this.aTexcoord, 2, gl.FLOAT, false, stride, 8);
-
-		gl.enableVertexAttribArray(this.aColor);
-		gl.vertexAttribPointer(this.aColor, 4, gl.FLOAT, false, stride, 16);
-
-		gl.drawArrays(gl.TRIANGLES, 0, this.vertexCount);
 	}
 }
 

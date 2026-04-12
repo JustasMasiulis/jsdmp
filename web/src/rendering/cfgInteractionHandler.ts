@@ -6,7 +6,7 @@ import {
 	ESTIMATED_LINE_HEIGHT,
 	getCfgLineAddress,
 } from "../lib/disassemblyGraph";
-import type { BlockTextRenderer } from "./blockTextProgram";
+import type { BlockTextPass } from "./blockTextProgram";
 import type { CfgGraphRenderer } from "./cfgGraphRenderer";
 import type { CfgRenderEdge, CfgRenderGraph } from "./cfgRenderGraph";
 
@@ -49,7 +49,7 @@ type NodePos = {
 export class CfgInteractionHandler {
 	private readonly renderer: CfgGraphRenderer;
 	private readonly graph: CfgRenderGraph;
-	private readonly textRenderer: BlockTextRenderer;
+	private readonly textRenderer: BlockTextPass;
 	private readonly nodesById: Map<string, CfgNode>;
 	private readonly statusCallback: (status: string) => void;
 	private readonly addressCallback: ((address: bigint) => void) | null;
@@ -65,7 +65,7 @@ export class CfgInteractionHandler {
 	constructor(
 		renderer: CfgGraphRenderer,
 		graph: CfgRenderGraph,
-		textRenderer: BlockTextRenderer,
+		textRenderer: BlockTextPass,
 		nodesById: Map<string, CfgNode>,
 		statusCallback: (status: string) => void,
 		addressCallback?: (address: bigint) => void,

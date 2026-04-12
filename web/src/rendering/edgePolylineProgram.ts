@@ -1,19 +1,18 @@
-import { CfgCanvasLayer } from "./cfgCanvasLayer";
 import type { CfgGraphRenderer } from "./cfgGraphRenderer";
 import type { CfgRenderGraph } from "./cfgRenderGraph";
 import { trimPolylineEnd } from "./cfgRenderGraph";
 import { compileSimpleProgram } from "./utils.";
 
-const VERTEX_SHADER = `
-attribute vec2 a_position;
-attribute vec2 a_normal;
-attribute vec4 a_color;
+const VERTEX_SHADER = `#version 300 es
+in vec2 a_position;
+in vec2 a_normal;
+in vec4 a_color;
 
 uniform mat3 u_matrix;
 uniform float u_thickness;
 uniform vec2 u_resolution;
 
-varying vec4 v_color;
+out vec4 v_color;
 
 void main() {
     vec3 graphPos = u_matrix * vec3(a_position, 1.0);
@@ -28,12 +27,13 @@ void main() {
 }
 `;
 
-const FRAGMENT_SHADER = `
+const FRAGMENT_SHADER = `#version 300 es
 precision mediump float;
-varying vec4 v_color;
+in vec4 v_color;
+out vec4 fragColor;
 
 void main() {
-    gl_FragColor = v_color;
+    fragColor = v_color;
 }
 `;
 
@@ -157,29 +157,32 @@ function writeSegmentQuad(
 	return offset;
 }
 
-export class EdgePolylineRenderer extends CfgCanvasLayer {
-	private graph: CfgRenderGraph;
-	private program: WebGLProgram;
-	private vbo: WebGLBuffer;
+export class EdgePolylinePass {
+	private readonly gl: WebGL2RenderingContext;
+	private readonly graph: CfgRenderGraph;
+	private readonly program: WebGLProgram;
+	private readonly vbo: WebGLBuffer;
+	private readonly vao: WebGLVertexArrayObject;
 	private vertexCount = 0;
+	private dirty = true;
 
-	private aPosition: number;
-	private aNormal: number;
-	private aColor: number;
-	private uMatrix: WebGLUniformLocation;
-	private uThickness: WebGLUniformLocation;
-	private uResolution: WebGLUniformLocation;
+	private bboxCenterX = 0;
+	private bboxCenterY = 0;
+	private bboxRange = 1;
 
-	constructor(renderer: CfgGraphRenderer, graph: CfgRenderGraph) {
-		super(renderer, "5", true);
+	private readonly uMatrix: WebGLUniformLocation;
+	private readonly uThickness: WebGLUniformLocation;
+	private readonly uResolution: WebGLUniformLocation;
+
+	constructor(gl: WebGL2RenderingContext, graph: CfgRenderGraph) {
+		this.gl = gl;
 		this.graph = graph;
 
-		const gl = this.gl;
 		this.program = compileSimpleProgram(gl, VERTEX_SHADER, FRAGMENT_SHADER);
 
-		this.aPosition = gl.getAttribLocation(this.program, "a_position");
-		this.aNormal = gl.getAttribLocation(this.program, "a_normal");
-		this.aColor = gl.getAttribLocation(this.program, "a_color");
+		const aPosition = gl.getAttribLocation(this.program, "a_position");
+		const aNormal = gl.getAttribLocation(this.program, "a_normal");
+		const aColor = gl.getAttribLocation(this.program, "a_color");
 
 		const uMatrix = gl.getUniformLocation(this.program, "u_matrix");
 		const uThickness = gl.getUniformLocation(this.program, "u_thickness");
@@ -194,10 +197,60 @@ export class EdgePolylineRenderer extends CfgCanvasLayer {
 		const vbo = gl.createBuffer();
 		if (!vbo) throw new Error("Failed to create buffer");
 		this.vbo = vbo;
+
+		const vao = gl.createVertexArray();
+		if (!vao) throw new Error("Failed to create VAO");
+		this.vao = vao;
+
+		const stride = FLOATS_PER_VERTEX * 4;
+		gl.bindVertexArray(this.vao);
+		gl.bindBuffer(gl.ARRAY_BUFFER, this.vbo);
+		gl.enableVertexAttribArray(aPosition);
+		gl.vertexAttribPointer(aPosition, 2, gl.FLOAT, false, stride, 0);
+		gl.enableVertexAttribArray(aNormal);
+		gl.vertexAttribPointer(aNormal, 2, gl.FLOAT, false, stride, 8);
+		gl.enableVertexAttribArray(aColor);
+		gl.vertexAttribPointer(aColor, 4, gl.FLOAT, false, stride, 16);
+		gl.bindVertexArray(null);
 	}
 
-	markDirty() {
+	markDirty(): void {
 		this.dirty = true;
+	}
+
+	render(renderer: CfgGraphRenderer, canvas: HTMLCanvasElement): void {
+		if (this.dirty) {
+			this.rebuildBuffer();
+			this.dirty = false;
+		}
+
+		if (this.vertexCount === 0) return;
+
+		const gl = this.gl;
+		const params = renderer.getRenderParams();
+
+		gl.useProgram(this.program);
+		gl.uniformMatrix3fv(this.uMatrix, false, params.matrix);
+		gl.uniform1f(this.uThickness, 0.5 * (window.devicePixelRatio || 1));
+		gl.uniform2f(this.uResolution, canvas.width, canvas.height);
+
+		gl.bindVertexArray(this.vao);
+		gl.drawArrays(gl.TRIANGLES, 0, this.vertexCount);
+	}
+
+	dispose(): void {
+		this.gl.deleteVertexArray(this.vao);
+		this.gl.deleteBuffer(this.vbo);
+		this.gl.deleteProgram(this.program);
+	}
+
+	private updateBBox(): void {
+		const bbox = this.graph.bbox;
+		const prevRange = this.bboxRange;
+		this.bboxCenterX = (bbox.x[0] + bbox.x[1]) / 2;
+		this.bboxCenterY = (bbox.y[0] + bbox.y[1]) / 2;
+		this.bboxRange = Math.max(bbox.x[1] - bbox.x[0], bbox.y[1] - bbox.y[0], 1);
+		if (this.bboxRange !== prevRange) this.dirty = true;
 	}
 
 	private normalizePoint(p: PolylinePoint): PolylinePoint {
@@ -207,7 +260,7 @@ export class EdgePolylineRenderer extends CfgCanvasLayer {
 		};
 	}
 
-	private rebuildBuffer() {
+	private rebuildBuffer(): void {
 		this.updateBBox();
 
 		let totalSegments = 0;
@@ -264,47 +317,5 @@ export class EdgePolylineRenderer extends CfgCanvasLayer {
 		gl.bindBuffer(gl.ARRAY_BUFFER, this.vbo);
 		gl.bufferData(gl.ARRAY_BUFFER, buf, gl.DYNAMIC_DRAW);
 		this.vertexCount = offset / FLOATS_PER_VERTEX;
-		this.dirty = false;
-	}
-
-	protected onRender() {
-		if (this.dirty) {
-			this.rebuildBuffer();
-		}
-
-		if (this.vertexCount === 0) return;
-
-		const gl = this.gl;
-		const params = this.renderer.getRenderParams();
-
-		gl.clear(gl.COLOR_BUFFER_BIT);
-		gl.enable(gl.BLEND);
-		gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
-
-		gl.useProgram(this.program);
-
-		gl.uniformMatrix3fv(this.uMatrix, false, params.matrix);
-		gl.uniform1f(this.uThickness, 0.5 * (window.devicePixelRatio || 1));
-		gl.uniform2f(this.uResolution, this.canvas.width, this.canvas.height);
-
-		gl.bindBuffer(gl.ARRAY_BUFFER, this.vbo);
-		const stride = FLOATS_PER_VERTEX * 4;
-
-		gl.enableVertexAttribArray(this.aPosition);
-		gl.vertexAttribPointer(this.aPosition, 2, gl.FLOAT, false, stride, 0);
-
-		gl.enableVertexAttribArray(this.aNormal);
-		gl.vertexAttribPointer(this.aNormal, 2, gl.FLOAT, false, stride, 8);
-
-		gl.enableVertexAttribArray(this.aColor);
-		gl.vertexAttribPointer(this.aColor, 4, gl.FLOAT, false, stride, 16);
-
-		gl.drawArrays(gl.TRIANGLES, 0, this.vertexCount);
-	}
-
-	dispose() {
-		this.gl.deleteBuffer(this.vbo);
-		this.gl.deleteProgram(this.program);
-		super.dispose();
 	}
 }
