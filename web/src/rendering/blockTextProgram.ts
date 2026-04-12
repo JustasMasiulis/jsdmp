@@ -11,15 +11,15 @@ import type { CfgRenderGraph } from "./cfgRenderGraph";
 import { createFontAtlas, type FontAtlas } from "./fontAtlas";
 import { compileSimpleProgram } from "./utils.";
 
-const VERTEX_SHADER = `
-attribute vec2 a_position;
-attribute vec2 a_texcoord;
-attribute vec4 a_color;
+const VERTEX_SHADER = `#version 300 es
+in vec2 a_position;
+in vec2 a_texcoord;
+in vec4 a_color;
 
 uniform mat3 u_matrix;
 
-varying vec2 v_texcoord;
-varying vec4 v_color;
+out vec2 v_texcoord;
+out vec4 v_color;
 
 void main() {
     vec3 pos = u_matrix * vec3(a_position, 1.0);
@@ -29,20 +29,33 @@ void main() {
 }
 `;
 
-const FRAGMENT_SHADER = `
+const FRAGMENT_SHADER = `#version 300 es
 precision mediump float;
 uniform sampler2D u_atlas;
-varying vec2 v_texcoord;
-varying vec4 v_color;
+uniform vec3 u_fillColor;
+uniform float u_borderWidth;
+in vec2 v_texcoord;
+in vec4 v_color;
+out vec4 fragColor;
 
 void main() {
-    if (v_texcoord.x < 0.0) {
-        gl_FragColor = v_color;
+    if (v_texcoord.x < -1.5) {
+        float u = v_texcoord.x + 3.0;
+        float v = v_texcoord.y;
+        float bu = u_borderWidth * fwidth(u);
+        float bv = u_borderWidth * fwidth(v);
+        if (u < bu || u > 1.0 - bu || v < bv || v > 1.0 - bv)
+            fragColor = v_color;
+        else
+            fragColor = vec4(u_fillColor, 1.0);
         return;
     }
-    float a = texture2D(u_atlas, v_texcoord).a;
-    if (a < 0.01) discard;
-    gl_FragColor = vec4(v_color.rgb, v_color.a * a);
+    if (v_texcoord.x < 0.0) {
+        fragColor = v_color;
+        return;
+    }
+    float a = texture(u_atlas, v_texcoord).a;
+    fragColor = vec4(v_color.rgb, v_color.a * a);
 }
 `;
 
@@ -90,6 +103,8 @@ export class BlockTextRenderer extends CfgCanvasLayer {
 	private readonly aColor: number;
 	private readonly uMatrix: WebGLUniformLocation | null;
 	private readonly uAtlas: WebGLUniformLocation | null;
+	private readonly uFillColor: WebGLUniformLocation | null;
+	private readonly uBorderWidth: WebGLUniformLocation | null;
 
 	private nodeEntries: NodeEntry[] = [];
 	private vertexCount = 0;
@@ -117,6 +132,12 @@ export class BlockTextRenderer extends CfgCanvasLayer {
 		this.aColor = gl.getAttribLocation(this.program, "a_color");
 		this.uMatrix = gl.getUniformLocation(this.program, "u_matrix");
 		this.uAtlas = gl.getUniformLocation(this.program, "u_atlas");
+		this.uFillColor = gl.getUniformLocation(this.program, "u_fillColor");
+		this.uBorderWidth = gl.getUniformLocation(this.program, "u_borderWidth");
+
+		gl.useProgram(this.program);
+		gl.uniform3f(this.uFillColor, BLOCK_BG_R, BLOCK_BG_G, BLOCK_BG_B);
+		gl.uniform1f(this.uBorderWidth, BORDER_WIDTH);
 
 		this.vbo = gl.createBuffer();
 		this.atlas = createFontAtlas(gl);
@@ -239,7 +260,7 @@ export class BlockTextRenderer extends CfgCanvasLayer {
 		let totalQuads = 0;
 		for (const node of this.nodeEntries) {
 			if (!this.visibleIds.has(node.id)) continue;
-			totalQuads += 5;
+			totalQuads += 1;
 			const cfgNode = this.nodesById.get(node.id);
 			if (!cfgNode) continue;
 			for (const line of cfgNode.lines) {
@@ -283,21 +304,7 @@ export class BlockTextRenderer extends CfgCanvasLayer {
 			const bg = isSelected ? SEL_BORDER_G : BORDER_G;
 			const bb = isSelected ? SEL_BORDER_B : BORDER_B;
 
-			o = solidQuad(
-				buf,
-				o,
-				nx0,
-				ny0,
-				nw,
-				nh,
-				BLOCK_BG_R,
-				BLOCK_BG_G,
-				BLOCK_BG_B,
-			);
-			o = solidQuad(buf, o, nx0, ny0, nw, nBorderW, br, bg, bb);
-			o = solidQuad(buf, o, nx0, ny0 - nh + nBorderW, nw, nBorderW, br, bg, bb);
-			o = solidQuad(buf, o, nx0, ny0, nBorderW, nh, br, bg, bb);
-			o = solidQuad(buf, o, nx0 + nw - nBorderW, ny0, nBorderW, nh, br, bg, bb);
+			o = writeQuad(buf, o, nx0, ny0, nw, nh, -3, 0, -2, 1, br, bg, bb);
 
 			const baseGX = node.x + paddingX;
 			const baseGY = node.y - paddingY;
@@ -312,13 +319,17 @@ export class BlockTextRenderer extends CfgCanvasLayer {
 					this.highlightedLineAddr &&
 					line.segments[0]?.text === this.highlightedLineAddr
 				) {
-					o = solidQuad(
+					o = writeQuad(
 						buf,
 						o,
 						nx0 + nBorderW,
 						lineNY,
 						nw - 2 * nBorderW,
 						nCharH,
+						-1,
+						-1,
+						-1,
+						-1,
 						HIGHLIGHT_R,
 						HIGHLIGHT_G,
 						HIGHLIGHT_B,
@@ -340,13 +351,17 @@ export class BlockTextRenderer extends CfgCanvasLayer {
 							const charNX = 0.5 + (baseGX + charIdx * charW - cx) * inv;
 
 							if (isHl) {
-								o = solidQuad(
+								o = writeQuad(
 									buf,
 									o,
 									charNX,
 									lineNY,
 									nCharW,
 									nCharH,
+									-1,
+									-1,
+									-1,
+									-1,
 									HIGHLIGHT_R,
 									HIGHLIGHT_G,
 									HIGHLIGHT_B,
@@ -487,7 +502,7 @@ export class BlockTextRenderer extends CfgCanvasLayer {
 
 		const gl = this.gl;
 		gl.bindBuffer(gl.ARRAY_BUFFER, this.vbo);
-		gl.bufferData(gl.ARRAY_BUFFER, buf.subarray(0, o), gl.DYNAMIC_DRAW);
+		gl.bufferData(gl.ARRAY_BUFFER, buf, gl.DYNAMIC_DRAW, 0, o);
 		this.vertexCount = o / 8;
 		this.dirty = false;
 	}
@@ -510,7 +525,6 @@ export class BlockTextRenderer extends CfgCanvasLayer {
 
 		gl.useProgram(this.program);
 		gl.uniformMatrix3fv(this.uMatrix, false, params.matrix);
-
 		gl.activeTexture(gl.TEXTURE0);
 		gl.bindTexture(gl.TEXTURE_2D, this.atlas.texture);
 		gl.uniform1i(this.uAtlas, 0);
@@ -531,13 +545,17 @@ export class BlockTextRenderer extends CfgCanvasLayer {
 	}
 }
 
-function solidQuad(
+function writeQuad(
 	buf: Float32Array,
 	o: number,
 	x: number,
 	y: number,
 	w: number,
 	h: number,
+	u0: number,
+	v0: number,
+	u1: number,
+	v1: number,
 	r: number,
 	g: number,
 	b: number,
@@ -546,48 +564,48 @@ function solidQuad(
 	const y1 = y - h;
 	buf[o++] = x;
 	buf[o++] = y;
-	buf[o++] = -1;
-	buf[o++] = -1;
+	buf[o++] = u0;
+	buf[o++] = v0;
 	buf[o++] = r;
 	buf[o++] = g;
 	buf[o++] = b;
 	buf[o++] = 1;
 	buf[o++] = x1;
 	buf[o++] = y;
-	buf[o++] = -1;
-	buf[o++] = -1;
+	buf[o++] = u1;
+	buf[o++] = v0;
 	buf[o++] = r;
 	buf[o++] = g;
 	buf[o++] = b;
 	buf[o++] = 1;
 	buf[o++] = x;
 	buf[o++] = y1;
-	buf[o++] = -1;
-	buf[o++] = -1;
+	buf[o++] = u0;
+	buf[o++] = v1;
 	buf[o++] = r;
 	buf[o++] = g;
 	buf[o++] = b;
 	buf[o++] = 1;
 	buf[o++] = x;
 	buf[o++] = y1;
-	buf[o++] = -1;
-	buf[o++] = -1;
+	buf[o++] = u0;
+	buf[o++] = v1;
 	buf[o++] = r;
 	buf[o++] = g;
 	buf[o++] = b;
 	buf[o++] = 1;
 	buf[o++] = x1;
 	buf[o++] = y;
-	buf[o++] = -1;
-	buf[o++] = -1;
+	buf[o++] = u1;
+	buf[o++] = v0;
 	buf[o++] = r;
 	buf[o++] = g;
 	buf[o++] = b;
 	buf[o++] = 1;
 	buf[o++] = x1;
 	buf[o++] = y1;
-	buf[o++] = -1;
-	buf[o++] = -1;
+	buf[o++] = u1;
+	buf[o++] = v1;
 	buf[o++] = r;
 	buf[o++] = g;
 	buf[o++] = b;

@@ -3,6 +3,7 @@ const ATLAS_ROWS = 6;
 const FIRST_CHAR = 32;
 const LAST_CHAR = 126;
 const RENDER_FONT_SIZE = 32;
+const GLYPH_PAD = 32;
 const FONT_FAMILY =
 	"ui-monospace, 'Cascadia Code', 'Source Code Pro', Menlo, Consolas, 'DejaVu Sans Mono', monospace";
 
@@ -27,8 +28,8 @@ export function createFontAtlas(gl: WebGL2RenderingContext): FontAtlas {
 
 	ctx.font = `${RENDER_FONT_SIZE}px ${FONT_FAMILY}`;
 	const metrics = ctx.measureText("M");
-	const cellWidth = Math.ceil(metrics.width) + 2;
-	const cellHeight = Math.ceil(RENDER_FONT_SIZE * 1.5) + 2;
+	const cellWidth = Math.ceil(metrics.width) + GLYPH_PAD * 2;
+	const cellHeight = Math.ceil(RENDER_FONT_SIZE * 1.5) + GLYPH_PAD * 2;
 
 	const atlasWidth = ATLAS_COLS * cellWidth;
 	const atlasHeight = ATLAS_ROWS * cellHeight;
@@ -43,8 +44,8 @@ export function createFontAtlas(gl: WebGL2RenderingContext): FontAtlas {
 		const idx = code - FIRST_CHAR;
 		const col = idx % ATLAS_COLS;
 		const row = Math.floor(idx / ATLAS_COLS);
-		const x = col * cellWidth + 1;
-		const y = row * cellHeight + 1;
+		const x = col * cellWidth + GLYPH_PAD;
+		const y = row * cellHeight + GLYPH_PAD;
 		ctx.fillText(String.fromCharCode(code), x, y);
 	}
 
@@ -65,7 +66,7 @@ export function createFontAtlas(gl: WebGL2RenderingContext): FontAtlas {
 
 	const invW = 1 / atlasWidth;
 	const invH = 1 / atlasHeight;
-	const glyphW = cellWidth - 2;
+	const glyphW = cellWidth - GLYPH_PAD * 2;
 	const glyphH = Math.round(glyphW * (15 / 7));
 
 	const charCount = LAST_CHAR - FIRST_CHAR + 1;
@@ -73,8 +74,8 @@ export function createFontAtlas(gl: WebGL2RenderingContext): FontAtlas {
 	for (let i = 0; i < charCount; i++) {
 		const col = i % ATLAS_COLS;
 		const row = (i / ATLAS_COLS) | 0;
-		const px = col * cellWidth + 1;
-		const py = row * cellHeight + 1;
+		const px = col * cellWidth + GLYPH_PAD;
+		const py = row * cellHeight + GLYPH_PAD;
 		uvTable[i * 4] = px * invW;
 		uvTable[i * 4 + 1] = py * invH;
 		uvTable[i * 4 + 2] = (px + glyphW) * invW;
