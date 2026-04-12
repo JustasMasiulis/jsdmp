@@ -11,9 +11,10 @@ import type { FontAtlas } from "./fontAtlas";
 import { compileSimpleProgram } from "./utils.";
 
 const VERTEX_SHADER = `#version 300 es
-in vec2 a_position;
-in vec2 a_texcoord;
-in vec4 a_color;
+in vec2 a_corner;
+in vec4 a_rect;
+in vec4 a_uv;
+in vec3 a_color;
 
 uniform mat3 u_matrix;
 
@@ -21,10 +22,11 @@ out vec2 v_texcoord;
 out vec4 v_color;
 
 void main() {
-    vec3 pos = u_matrix * vec3(a_position, 1.0);
-    gl_Position = vec4(pos.xy, 0.0, 1.0);
-    v_texcoord = a_texcoord;
-    v_color = a_color;
+    vec2 pos = a_rect.xy + a_corner * vec2(a_rect.z, -a_rect.w);
+    vec3 transformed = u_matrix * vec3(pos, 1.0);
+    gl_Position = vec4(transformed.xy, 0.0, 1.0);
+    v_texcoord = mix(a_uv.xy, a_uv.zw, a_corner);
+    v_color = vec4(a_color, 1.0);
 }
 `;
 
@@ -58,8 +60,8 @@ void main() {
 }
 `;
 
-const FLOATS_PER_VERTEX = 8;
-const FLOATS_PER_QUAD = FLOATS_PER_VERTEX * 6;
+const FLOATS_PER_INSTANCE = 11;
+const INSTANCE_STRIDE_BYTES = FLOATS_PER_INSTANCE * 4;
 const CULL_INTERVAL_MS = 100;
 
 const SYNTAX_COLORS: Record<CfgTextSyntaxKind, [number, number, number]> = {
@@ -98,7 +100,8 @@ export class BlockTextPass {
 	private readonly nodesById: Map<string, CfgNode>;
 	private readonly atlas: FontAtlas;
 	private readonly program: WebGLProgram;
-	private readonly vbo: WebGLBuffer;
+	private readonly cornerVbo: WebGLBuffer;
+	private readonly instanceVbo: WebGLBuffer;
 	private readonly vao: WebGLVertexArrayObject;
 
 	private readonly uMatrix: WebGLUniformLocation | null;
@@ -113,11 +116,12 @@ export class BlockTextPass {
 	private invBBoxRange = 1;
 
 	private nodeEntries: NodeEntry[] = [];
-	private vertexCount = 0;
+	private instanceCount = 0;
 	private lastCullTime = 0;
 	private visibleIds = new Set<string>();
 	private buf: Float32Array = new Float32Array(0);
 	private bufCapacity = 0;
+	private gpuBufferCapacity = 0;
 
 	private highlightedTerm: string | null = null;
 	private highlightedLineAddr: string | null = null;
@@ -136,36 +140,65 @@ export class BlockTextPass {
 		this.atlas = atlas;
 
 		this.program = compileSimpleProgram(gl, VERTEX_SHADER, FRAGMENT_SHADER);
-
-		const aPosition = gl.getAttribLocation(this.program, "a_position");
-		const aTexcoord = gl.getAttribLocation(this.program, "a_texcoord");
-		const aColor = gl.getAttribLocation(this.program, "a_color");
 		this.uMatrix = gl.getUniformLocation(this.program, "u_matrix");
 		this.uAtlas = gl.getUniformLocation(this.program, "u_atlas");
 		this.uFillColor = gl.getUniformLocation(this.program, "u_fillColor");
 		this.uBorderWidth = gl.getUniformLocation(this.program, "u_borderWidth");
 
+		const aCorner = gl.getAttribLocation(this.program, "a_corner");
+		const aRect = gl.getAttribLocation(this.program, "a_rect");
+		const aUv = gl.getAttribLocation(this.program, "a_uv");
+		const aColor = gl.getAttribLocation(this.program, "a_color");
+
 		gl.useProgram(this.program);
 		gl.uniform3f(this.uFillColor, BLOCK_BG_R, BLOCK_BG_G, BLOCK_BG_B);
 		gl.uniform1f(this.uBorderWidth, BORDER_WIDTH);
+		gl.uniform1i(this.uAtlas, 0);
 
-		const vbo = gl.createBuffer();
-		if (!vbo) throw new Error("Failed to create buffer");
-		this.vbo = vbo;
+		const cornerVbo = gl.createBuffer();
+		if (!cornerVbo) throw new Error("Failed to create corner VBO");
+		this.cornerVbo = cornerVbo;
+		gl.bindBuffer(gl.ARRAY_BUFFER, this.cornerVbo);
+		gl.bufferData(
+			gl.ARRAY_BUFFER,
+			new Float32Array([0, 0, 1, 0, 0, 1, 1, 1]),
+			gl.STATIC_DRAW,
+		);
+
+		const instanceVbo = gl.createBuffer();
+		if (!instanceVbo) throw new Error("Failed to create instance VBO");
+		this.instanceVbo = instanceVbo;
 
 		const vao = gl.createVertexArray();
 		if (!vao) throw new Error("Failed to create VAO");
 		this.vao = vao;
 
-		const stride = FLOATS_PER_VERTEX * 4;
 		gl.bindVertexArray(this.vao);
-		gl.bindBuffer(gl.ARRAY_BUFFER, this.vbo);
-		gl.enableVertexAttribArray(aPosition);
-		gl.vertexAttribPointer(aPosition, 2, gl.FLOAT, false, stride, 0);
-		gl.enableVertexAttribArray(aTexcoord);
-		gl.vertexAttribPointer(aTexcoord, 2, gl.FLOAT, false, stride, 8);
+
+		gl.bindBuffer(gl.ARRAY_BUFFER, this.cornerVbo);
+		gl.enableVertexAttribArray(aCorner);
+		gl.vertexAttribPointer(aCorner, 2, gl.FLOAT, false, 0, 0);
+
+		gl.bindBuffer(gl.ARRAY_BUFFER, this.instanceVbo);
+		gl.enableVertexAttribArray(aRect);
+		gl.vertexAttribPointer(aRect, 4, gl.FLOAT, false, INSTANCE_STRIDE_BYTES, 0);
+		gl.vertexAttribDivisor(aRect, 1);
+
+		gl.enableVertexAttribArray(aUv);
+		gl.vertexAttribPointer(aUv, 4, gl.FLOAT, false, INSTANCE_STRIDE_BYTES, 16);
+		gl.vertexAttribDivisor(aUv, 1);
+
 		gl.enableVertexAttribArray(aColor);
-		gl.vertexAttribPointer(aColor, 4, gl.FLOAT, false, stride, 16);
+		gl.vertexAttribPointer(
+			aColor,
+			3,
+			gl.FLOAT,
+			false,
+			INSTANCE_STRIDE_BYTES,
+			32,
+		);
+		gl.vertexAttribDivisor(aColor, 1);
+
 		gl.bindVertexArray(null);
 
 		this.buildNodeIndex();
@@ -196,6 +229,8 @@ export class BlockTextPass {
 	}
 
 	render(renderer: CfgGraphRenderer): void {
+		this.updateBBox();
+
 		const now = performance.now();
 		if (now - this.lastCullTime >= CULL_INTERVAL_MS) {
 			this.lastCullTime = now;
@@ -206,25 +241,24 @@ export class BlockTextPass {
 			this.rebuildBuffer();
 		}
 
-		if (this.vertexCount === 0) return;
+		if (this.instanceCount === 0) return;
 
 		const gl = this.gl;
 		const params = renderer.getRenderParams();
 
 		gl.useProgram(this.program);
 		gl.uniformMatrix3fv(this.uMatrix, false, params.matrix);
-		gl.activeTexture(gl.TEXTURE0);
 		gl.bindTexture(gl.TEXTURE_2D, this.atlas.texture);
-		gl.uniform1i(this.uAtlas, 0);
 
 		gl.bindVertexArray(this.vao);
-		gl.drawArrays(gl.TRIANGLES, 0, this.vertexCount);
+		gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, this.instanceCount);
 	}
 
 	dispose(): void {
 		this.atlas.dispose(this.gl);
 		this.gl.deleteVertexArray(this.vao);
-		this.gl.deleteBuffer(this.vbo);
+		this.gl.deleteBuffer(this.cornerVbo);
+		this.gl.deleteBuffer(this.instanceVbo);
 		this.gl.deleteProgram(this.program);
 	}
 
@@ -251,7 +285,6 @@ export class BlockTextPass {
 	}
 
 	private updateCull(renderer: CfgGraphRenderer): void {
-		this.updateBBox();
 		const { width: vpW, height: vpH } = renderer.getDimensions();
 		if (vpW <= 0 || vpH <= 0) return;
 
@@ -293,8 +326,8 @@ export class BlockTextPass {
 		}
 	}
 
-	private ensureBuffer(quads: number): void {
-		const needed = quads * FLOATS_PER_QUAD;
+	private ensureBuffer(instances: number): void {
+		const needed = instances * FLOATS_PER_INSTANCE;
 		if (needed <= this.bufCapacity) return;
 		const cap = Math.max(needed, this.bufCapacity * 2, 65536);
 		this.buf = new Float32Array(cap);
@@ -302,9 +335,6 @@ export class BlockTextPass {
 	}
 
 	private rebuildBuffer(): void {
-		console.trace("BlockTextPass render");
-		this.updateBBox();
-
 		const inv = this.invBBoxRange;
 		const cx = this.bboxCenterX;
 		const cy = this.bboxCenterY;
@@ -368,7 +398,7 @@ export class BlockTextPass {
 			const bg = isSelected ? SEL_BORDER_G : BORDER_G;
 			const bb = isSelected ? SEL_BORDER_B : BORDER_B;
 
-			o = writeQuad(buf, o, nx0, ny0, nw, nh, -3, 0, -2, 1, br, bg, bb);
+			o = writeInstance(buf, o, nx0, ny0, nw, nh, -3, 0, -2, 1, br, bg, bb);
 
 			const baseGX = node.x + paddingX;
 			const baseGY = node.y - paddingY;
@@ -377,13 +407,13 @@ export class BlockTextPass {
 				const line = cfgNode.lines[li];
 				const lineGY = baseGY - li * charH;
 				const lineNY = 0.5 + (lineGY - cy) * inv;
-				let charIdx = 0;
+				let charNX = 0.5 + (baseGX - cx) * inv;
 
 				if (
 					this.highlightedLineAddr &&
 					line.segments[0]?.text === this.highlightedLineAddr
 				) {
-					o = writeQuad(
+					o = writeInstance(
 						buf,
 						o,
 						nx0 + nBorderW,
@@ -412,10 +442,8 @@ export class BlockTextPass {
 							seg.term === this.highlightedTerm;
 
 						for (let ci = 0; ci < seg.text.length; ci++) {
-							const charNX = 0.5 + (baseGX + charIdx * charW - cx) * inv;
-
 							if (isHl) {
-								o = writeQuad(
+								o = writeInstance(
 									buf,
 									o,
 									charNX,
@@ -436,7 +464,7 @@ export class BlockTextPass {
 							let uvIdx = (code - firstChar) * 4;
 							if (uvIdx < 0 || code > lastChar) uvIdx = fallbackIdx;
 
-							o = writeQuad(
+							o = writeInstance(
 								buf,
 								o,
 								charNX,
@@ -451,20 +479,18 @@ export class BlockTextPass {
 								cg,
 								cb,
 							);
-							charIdx++;
+							charNX += nCharW;
 						}
 					}
 				} else {
 					const text = line.text;
 					const [pr, pg, pb] = SYNTAX_COLORS.plain;
 					for (let ci = 0; ci < text.length; ci++) {
-						const charNX = 0.5 + (baseGX + ci * charW - cx) * inv;
-
 						const code = text.charCodeAt(ci);
 						let uvIdx = (code - firstChar) * 4;
 						if (uvIdx < 0 || code > lastChar) uvIdx = fallbackIdx;
 
-						o = writeQuad(
+						o = writeInstance(
 							buf,
 							o,
 							charNX,
@@ -479,20 +505,26 @@ export class BlockTextPass {
 							pg,
 							pb,
 						);
+						charNX += nCharW;
 					}
 				}
 			}
 		}
 
 		const gl = this.gl;
-		gl.bindBuffer(gl.ARRAY_BUFFER, this.vbo);
-		gl.bufferData(gl.ARRAY_BUFFER, buf, gl.DYNAMIC_DRAW, 0, o);
-		this.vertexCount = o / 8;
+		gl.bindBuffer(gl.ARRAY_BUFFER, this.instanceVbo);
+		if (o > this.gpuBufferCapacity) {
+			gl.bufferData(gl.ARRAY_BUFFER, buf.buffer, gl.DYNAMIC_DRAW);
+			this.gpuBufferCapacity = buf.length;
+		} else {
+			gl.bufferSubData(gl.ARRAY_BUFFER, 0, buf, 0, o);
+		}
+		this.instanceCount = o / FLOATS_PER_INSTANCE;
 		this.dirty = false;
 	}
 }
 
-function writeQuad(
+function writeInstance(
 	buf: Float32Array,
 	o: number,
 	x: number,
@@ -507,55 +539,16 @@ function writeQuad(
 	g: number,
 	b: number,
 ): number {
-	const x1 = x + w;
-	const y1 = y - h;
 	buf[o++] = x;
 	buf[o++] = y;
+	buf[o++] = w;
+	buf[o++] = h;
 	buf[o++] = u0;
 	buf[o++] = v0;
-	buf[o++] = r;
-	buf[o++] = g;
-	buf[o++] = b;
-	buf[o++] = 1;
-	buf[o++] = x1;
-	buf[o++] = y;
-	buf[o++] = u1;
-	buf[o++] = v0;
-	buf[o++] = r;
-	buf[o++] = g;
-	buf[o++] = b;
-	buf[o++] = 1;
-	buf[o++] = x;
-	buf[o++] = y1;
-	buf[o++] = u0;
-	buf[o++] = v1;
-	buf[o++] = r;
-	buf[o++] = g;
-	buf[o++] = b;
-	buf[o++] = 1;
-	buf[o++] = x;
-	buf[o++] = y1;
-	buf[o++] = u0;
-	buf[o++] = v1;
-	buf[o++] = r;
-	buf[o++] = g;
-	buf[o++] = b;
-	buf[o++] = 1;
-	buf[o++] = x1;
-	buf[o++] = y;
-	buf[o++] = u1;
-	buf[o++] = v0;
-	buf[o++] = r;
-	buf[o++] = g;
-	buf[o++] = b;
-	buf[o++] = 1;
-	buf[o++] = x1;
-	buf[o++] = y1;
 	buf[o++] = u1;
 	buf[o++] = v1;
 	buf[o++] = r;
 	buf[o++] = g;
 	buf[o++] = b;
-	buf[o++] = 1;
 	return o;
 }
