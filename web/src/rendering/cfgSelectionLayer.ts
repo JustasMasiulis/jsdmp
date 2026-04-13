@@ -137,6 +137,7 @@ export class CfgSelectionLayer {
 	}
 
 	private syncTransform(): void {
+		if (this.renderer.isDragging()) return;
 		const bbox = this.renderer.getBBox();
 		const bboxRange = Math.max(bbox.x[1] - bbox.x[0], bbox.y[1] - bbox.y[0], 1);
 

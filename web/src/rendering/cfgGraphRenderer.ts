@@ -107,6 +107,10 @@ export class CfgGraphRenderer {
 		return this.camera.ratio;
 	}
 
+	isDragging(): boolean {
+		return this.dragging || this.touchIds.length > 0;
+	}
+
 	getDimensions(): Dimensions {
 		return { width: this.width, height: this.height };
 	}
@@ -316,6 +320,7 @@ export class CfgGraphRenderer {
 		this.dragging = false;
 		this.didDrag = false;
 		if (didDrag) {
+			this.requestRender();
 			this.container.addEventListener("click", (e) => e.stopPropagation(), {
 				once: true,
 				capture: true,
@@ -411,12 +416,17 @@ export class CfgGraphRenderer {
 	}
 
 	private handleTouchEnd(e: TouchEvent): void {
+		const hadTouches = this.touchIds.length > 0;
 		for (let i = 0; i < e.changedTouches.length; i++) {
 			const idx = this.touchIds.indexOf(e.changedTouches[i].identifier);
 			if (idx >= 0) this.touchIds.splice(idx, 1);
 		}
 
 		const tracked = this.getTrackedTouches(e);
-		if (tracked.length > 0) this.syncTouchAnchor(tracked);
+		if (tracked.length > 0) {
+			this.syncTouchAnchor(tracked);
+		} else if (hadTouches) {
+			this.requestRender();
+		}
 	}
 }
