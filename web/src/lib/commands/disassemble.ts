@@ -4,9 +4,9 @@ import {
 	parseAddressAndCount,
 } from "../commandEngine";
 import {
+	AMD64_MAX_INSTR_LEN,
 	decodeInstruction,
 	type InstrTextSegment,
-	MAX_INSTRUCTION_LENGTH,
 	seg,
 } from "../disassembly";
 import { fmtHex } from "../formatting";
@@ -31,7 +31,7 @@ export async function unassembleCommand(
 	for (let i = 0; i < count; i++) {
 		let bytes: Uint8Array;
 		try {
-			bytes = await dbg.read(currentAddr, MAX_INSTRUCTION_LENGTH, 1);
+			bytes = await dbg.read(currentAddr, AMD64_MAX_INSTR_LEN, 1);
 		} catch {
 			lines.push(fmtHex(currentAddr, 16).toLowerCase() + " ??");
 			break;

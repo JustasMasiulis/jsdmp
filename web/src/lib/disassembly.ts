@@ -1,18 +1,19 @@
 /** biome-ignore-all lint/style/useTemplate: string concatenation has better performance */
+import { ProcessorArch } from "./debug_interface";
 import {
 	type InstrTextSegment,
 	parseInstructionText,
 } from "./instructionParser";
-import { ARCH_AMD64, WASM_EXPORTS, WASM_MEMORY } from "./wasm";
+import { WASM_EXPORTS, WASM_MEMORY } from "./wasm";
 
+export { ProcessorArch } from "./debug_interface";
 export type { InstrTextSegment } from "./instructionParser";
 export { joinSegmentText, seg } from "./instructionParser";
-export { ARCH_AMD64, ARCH_ARM64 } from "./wasm";
 
-export const MAX_INSTRUCTION_LENGTH = 15;
+export const AMD64_MAX_INSTR_LEN = 15;
 
 export const maxInstructionLength = (arch: number): number =>
-	arch === ARCH_AMD64 ? 15 : 4;
+	arch === ProcessorArch.ARCH_AMD64 ? AMD64_MAX_INSTR_LEN : 4;
 
 export type DecodedControlFlowKind =
 	| "none"
@@ -88,30 +89,37 @@ export const readPackedHeader = (view: DataView): DecodedInstructionHeader => {
 	};
 };
 
-const capBytes = (bytes: Uint8Array, arch: number): Uint8Array => {
-	const max = maxInstructionLength(arch);
-	return bytes.byteLength > max ? bytes.subarray(0, max) : bytes;
-};
-
 export const decodeInstruction = (
 	bytes: Uint8Array,
 	runtimeAddress: bigint,
 	arch: number,
 ): DecodedInstruction | null => {
-	if (bytes.byteLength === 0) return null;
 	const wasm = WASM_EXPORTS;
 	if (!wasm) return null;
 
-	const candidateBytes = capBytes(bytes, arch);
+	let availableLen: number;
+	let decodeFn: (length: number, runtimeAddress: bigint) => number;
+	switch (arch) {
+		case ProcessorArch.ARCH_AMD64:
+			if (bytes.byteLength === 0) return null;
+			availableLen = Math.min(bytes.byteLength, AMD64_MAX_INSTR_LEN);
+			decodeFn = wasm.wasm_amd64_decode_full;
+			break;
+		case ProcessorArch.ARCH_ARM64:
+			if (bytes.byteLength < 4) return null;
+			availableLen = Math.min(bytes.byteLength, 4);
+			decodeFn = wasm.wasm_arm64_decode_full;
+			break;
+		default:
+			throw new Error(`Unsupported architecture: ${arch}`);
+	}
+
 	new Uint8Array(WASM_MEMORY.buffer).set(
-		candidateBytes,
+		bytes.subarray(0, availableLen),
 		wasm.disassembly_buffer,
 	);
 
-	if (
-		wasm.wasm_decode_full(arch, candidateBytes.byteLength, runtimeAddress) < 0
-	)
-		return null;
+	if (decodeFn(availableLen, runtimeAddress) < 0) return null;
 
 	const bufBase = wasm.decoded_buffer;
 	const view = new DataView(WASM_MEMORY.buffer, bufBase, 256);
@@ -148,7 +156,7 @@ export const decodeInstruction = (
 
 	return {
 		length,
-		bytes: candidateBytes.slice(0, length),
+		bytes: bytes.slice(0, length),
 		mnemonic,
 		operandSegments,
 		controlFlow: {
@@ -163,15 +171,27 @@ export const decodeInstructionLength = (
 	bytes: Uint8Array,
 	arch: number,
 ): number => {
-	if (bytes.byteLength === 0) return -1;
 	const wasm = WASM_EXPORTS;
 	if (!wasm) return -1;
 
-	const candidateBytes = capBytes(bytes, arch);
-	new Uint8Array(WASM_MEMORY.buffer).set(
-		candidateBytes,
-		wasm.disassembly_buffer,
-	);
+	if (bytes.byteLength === 0) return -1;
 
-	return wasm.wasm_decode_length(arch, candidateBytes.byteLength);
+	switch (arch) {
+		case ProcessorArch.ARCH_AMD64: {
+			if (bytes.byteLength === 0) return -1;
+			const availableLen = Math.min(bytes.byteLength, AMD64_MAX_INSTR_LEN);
+
+			new Uint8Array(WASM_MEMORY.buffer).set(
+				bytes.subarray(0, availableLen),
+				wasm.disassembly_buffer,
+			);
+
+			return wasm.wasm_amd64_decode_length(availableLen);
+		}
+		case ProcessorArch.ARCH_ARM64:
+			if (bytes.byteLength < 4) return -1;
+			return 4;
+		default:
+			throw new Error(`Unsupported architecture: ${arch}`);
+	}
 };

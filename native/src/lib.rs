@@ -30,22 +30,21 @@ pub extern "C" fn wasm_get_decoded_buffer() -> *mut u8 {
 }
 
 #[no_mangle]
-pub extern "C" fn wasm_decode_length(arch: u32, length: u32) -> i32 {
+pub extern "C" fn wasm_amd64_decode_length(length: u32) -> i32 {
     let input = disassembly_input(length);
-    match arch {
-        0 => amd64::decode_length(input),
-        1 => arm64::decode_length(input),
-        _ => -1,
-    }
+    amd64::decode_length(input)
 }
 
 #[no_mangle]
-pub extern "C" fn wasm_decode_full(arch: u32, length: u32, runtime_address: u64) -> i32 {
+pub extern "C" fn wasm_amd64_decode_full(length: u32, runtime_address: u64) -> i32 {
     let input = disassembly_input(length);
     let out = unsafe { &mut (*(&raw mut DECODED_BUFFER)) };
-    match arch {
-        0 => amd64::decode_full(input, runtime_address, out),
-        1 => arm64::decode_full(input, runtime_address, out),
-        _ => -1,
-    }
+    amd64::decode_full(input, runtime_address, out)
+}
+
+#[no_mangle]
+pub extern "C" fn wasm_arm64_decode_full(length: u32, runtime_address: u64) -> i32 {
+    let input = disassembly_input(length);
+    let out = unsafe { &mut (*(&raw mut DECODED_BUFFER)) };
+    arm64::decode_full(input, runtime_address, out)
 }

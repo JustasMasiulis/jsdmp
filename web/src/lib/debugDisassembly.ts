@@ -1,9 +1,9 @@
 import type { DebugInterface, DebugModule } from "./debug_interface";
 import {
+	AMD64_MAX_INSTR_LEN,
 	decodeInstruction,
 	decodeInstructionLength,
 	type InstrTextSegment,
-	MAX_INSTRUCTION_LENGTH,
 	maxInstructionLength,
 	seg,
 } from "./disassembly";
@@ -94,7 +94,7 @@ type DecodedLineBase = Omit<DisassemblyLine, "isCurrent">;
 const decodeInstructionAt = async (
 	source: DisassemblyMemorySource,
 	address: bigint,
-	maxBytes = MAX_INSTRUCTION_LENGTH,
+	maxBytes = AMD64_MAX_INSTR_LEN,
 	arch: number,
 ): Promise<DecodedLineBase | null> => {
 	const maxLen = maxInstructionLength(arch);
