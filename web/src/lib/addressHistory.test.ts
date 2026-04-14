@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { AddressHistory } from "../addressHistory";
+import { AddressHistory } from "./addressHistory";
 
 describe("AddressHistory", () => {
 	test("starts empty", () => {
