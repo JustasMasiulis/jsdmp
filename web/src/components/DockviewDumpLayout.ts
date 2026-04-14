@@ -14,10 +14,8 @@ import {
 import { CommandView } from "./CommandView";
 import { DisassemblyGraphView } from "./DisassemblyGraphView";
 import { DisassemblyView } from "./DisassemblyView";
-import { ExceptionView } from "./ExceptionView";
 import { MemoryView } from "./MemoryView";
 import { ModulesView } from "./ModulesView";
-import { SummaryView } from "./SummaryView";
 import { ThreadsView } from "./ThreadsView";
 
 type ComponentFactory = (el: HTMLElement, panelId: string) => IContentRenderer;
@@ -26,11 +24,9 @@ const COMPONENT_FACTORIES = new Map<string, ComponentFactory>([
 	["disassembly", (el, id) => new DisassemblyView(el, id)],
 	["disassembly-graph", (el, id) => new DisassemblyGraphView(el, id)],
 	["memory-view", (el, id) => new MemoryView(el, id)],
-	["exception", (el) => new ExceptionView(el)],
 	["modules", (el) => new ModulesView(el)],
 	["threads", (el) => new ThreadsView(el)],
 	["command", (el) => new CommandView(el)],
-	["summary", (el) => new SummaryView(el)],
 ]);
 
 export type LayoutCallbacks = {

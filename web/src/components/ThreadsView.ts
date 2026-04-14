@@ -8,7 +8,7 @@ import { DBG } from "../lib/debugState";
 import { fmtHex8, fmtHex16, fmtPriority } from "../lib/formatting";
 import type { SignalHandle } from "../lib/reactive";
 
-import { EMPTY_CELL } from "../lib/templates";
+const EMPTY_CELL = "-";
 
 const threadToRow = (t: DebugThread): string[] => [
 	String(t.id),

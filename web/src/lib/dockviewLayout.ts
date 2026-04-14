@@ -4,7 +4,7 @@ import type {
 	SerializedDockview,
 } from "dockview-core";
 
-export const LAYOUT_STORAGE_KEY = "wasm-dump-debugger:dockview:v1";
+export const LAYOUT_STORAGE_KEY = "wasm-dump-debugger:dockview:v2";
 type PanelSpec = {
 	id: string;
 	component: string;
@@ -12,8 +12,6 @@ type PanelSpec = {
 };
 
 export const PANEL_SPECS = [
-	{ id: "summary", component: "summary", title: "Summary" },
-	{ id: "exception", component: "exception", title: "Exception" },
 	{ id: "disassembly", component: "disassembly", title: "Disassembly" },
 	{
 		id: "disassembly-graph",
@@ -164,33 +162,25 @@ export const addPanelInstance = (
 export const applyDefaultLayout = (dockview: DockviewApi) => {
 	dockview.clear();
 
-	addPanelIfMissing(dockview, "summary");
-	addPanelIfMissing(dockview, "disassembly", {
-		direction: "right",
-		referencePanel: "summary",
-	});
+	addPanelIfMissing(dockview, "disassembly");
 	addPanelIfMissing(dockview, "disassembly-graph", {
 		direction: "right",
 		referencePanel: "disassembly",
 	});
-	addPanelIfMissing(dockview, "exception", {
-		direction: "below",
-		referencePanel: "summary",
-	});
 	addPanelIfMissing(dockview, "modules", {
-		direction: "below",
+		direction: "right",
 		referencePanel: "disassembly-graph",
 	});
 	addPanelIfMissing(dockview, "threads", {
-		direction: "right",
+		direction: "below",
 		referencePanel: "modules",
 	});
 	addPanelIfMissing(dockview, "command", {
 		direction: "below",
-		referencePanel: "exception",
+		referencePanel: "disassembly",
 	});
 	addPanelIfMissing(dockview, "memory", {
 		direction: "within",
-		referencePanel: "summary",
+		referencePanel: "disassembly",
 	});
 };

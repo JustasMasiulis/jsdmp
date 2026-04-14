@@ -8,8 +8,102 @@ import {
 } from "../lib/commandEngine";
 import type { DebugThread } from "../lib/debug_interface";
 import { DBG } from "../lib/debugState";
+import { fmtHex, fmtOs, fmtProductAndSuite } from "../lib/formatting";
+import { getMinidumpStreamTypeName } from "../lib/minidump_debug_interface";
 import type { SignalHandle } from "../lib/reactive";
 import { renderSegments } from "../lib/syntaxHighlight";
+
+const formatTimestamp = (timestamp: number): string => {
+	if (!timestamp) return "0 (unset)";
+	return `${timestamp} (${new Date(timestamp * 1000).toISOString()})`;
+};
+
+const collectStartupBanner = (): string[] => {
+	const lines: string[] = [];
+	const di = DBG;
+
+	lines.push("************* Dump Summary *************");
+	lines.push(`Checksum:     ${fmtHex(di.checksum, 8)}`);
+	lines.push(`Timestamp:    ${formatTimestamp(di.timestamp)}`);
+	lines.push(`Flags:        ${fmtHex(di.flags, 16)}`);
+	lines.push(`Streams:      ${di.streamCount}`);
+	const streamTypes =
+		di.streamTypes.length > 0
+			? di.streamTypes.map(getMinidumpStreamTypeName).join(", ")
+			: "none";
+	lines.push(`Stream Types: ${streamTypes}`);
+
+	const si = di.systemInfo;
+	if (si) {
+		lines.push("");
+		lines.push("************* System Information *************");
+		lines.push(fmtOs(si));
+		lines.push(fmtProductAndSuite(si));
+		lines.push(
+			`CPU Revision: level ${si.processorLevel}, rev ${fmtHex(si.processorRevision, 4)}`,
+		);
+		if (si.cpu.type === "x86") {
+			lines.push(`CPU Vendor:   ${si.cpu.vendorId || "unknown"}`);
+		} else {
+			lines.push(
+				`CPU Features: ${fmtHex(si.cpu.processorFeatures[0], 16)}, ${fmtHex(si.cpu.processorFeatures[1], 16)}`,
+			);
+		}
+	}
+
+	const mi = di.miscInfo;
+	if (mi) {
+		lines.push("");
+		lines.push("************* Misc Information *************");
+		lines.push(`MiscInfo Size:   ${mi.sizeOfInfo}`);
+		lines.push(`MiscInfo Flags1: ${fmtHex(mi.flags1, 8)}`);
+		const miscRow = (label: string, value: number | null, suffix = "") => {
+			if (value !== null) lines.push(`${label}${value}${suffix}`);
+		};
+		miscRow("Process ID:               ", mi.processId);
+		if (mi.processCreateTime !== null) {
+			lines.push(
+				`Process Create Time:      ${formatTimestamp(mi.processCreateTime)}`,
+			);
+		}
+		miscRow("Process User Time:        ", mi.processUserTime, " sec");
+		miscRow("Process Kernel Time:      ", mi.processKernelTime, " sec");
+		miscRow("CPU Max MHz:              ", mi.processorMaxMhz);
+		miscRow("CPU Current MHz:          ", mi.processorCurrentMhz);
+		miscRow("CPU MHz Limit:            ", mi.processorMhzLimit);
+		miscRow("CPU Max Idle State:       ", mi.processorMaxIdleState);
+		miscRow("CPU Current Idle State:   ", mi.processorCurrentIdleState);
+	}
+
+	const ei = di.exceptionInfo;
+	lines.push("");
+	lines.push("************* Exception *************");
+	if (!ei) {
+		lines.push("No exception information");
+	} else {
+		const r = ei.exceptionRecord;
+		lines.push(`Exception Thread ID:  ${ei.threadId}`);
+		lines.push(`Exception Code:       ${fmtHex(r.exceptionCode, 8)}`);
+		lines.push(`Exception Flags:      ${fmtHex(r.exceptionFlags, 8)}`);
+		lines.push(`Exception Address:    ${fmtHex(r.exceptionAddress, 16)}`);
+		lines.push(`Exception Record:     ${fmtHex(r.exceptionRecord, 16)}`);
+		lines.push(`Exception Parameters: ${r.numberParameters}`);
+		lines.push(
+			`Exception Context:    size=${ei.contextLocation.size}, rva=${fmtHex(ei.contextLocation.rva, 8)}`,
+		);
+		if (r.numberParameters > 0) {
+			r.exceptionInformation
+				.slice(0, r.numberParameters)
+				.forEach((value, index) => {
+					lines.push(`  [${index}] = ${fmtHex(value, 16)}`);
+				});
+		}
+	}
+
+	lines.push("");
+	lines.push("Type .help for a list of commands");
+	return lines;
+};
 
 export class CommandView implements IContentRenderer {
 	element: HTMLElement;
@@ -58,7 +152,9 @@ export class CommandView implements IContentRenderer {
 		this.handle = DBG.currentThread.subscribe(() => this.updatePrompt());
 		this.updatePrompt();
 
-		this.appendOutputLine("Type .help for a list of commands");
+		for (const line of collectStartupBanner()) {
+			this.appendOutputLine(line);
+		}
 	}
 
 	init(_: GroupPanelPartInitParameters): void {}

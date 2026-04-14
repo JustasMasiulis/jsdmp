@@ -7,7 +7,8 @@ import type { DebugModule, DebugUnloadedModule } from "../lib/debug_interface";
 import { DBG } from "../lib/debugState";
 import { fmtHex8, fmtHex16 } from "../lib/formatting";
 import { Signal, type SignalHandle } from "../lib/reactive";
-import { EMPTY_CELL } from "../lib/templates";
+
+const EMPTY_CELL = "-";
 
 const moduleToRow = (m: DebugModule) => html`
 <tr>
