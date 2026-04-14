@@ -1,8 +1,16 @@
 import { DockviewDumpLayout } from "./components/DockviewDumpLayout";
 import { setDBG } from "./lib/debugState";
-import { ALLOWED_DUMP_EXTENSIONS, isSupportedDumpFile } from "./lib/dumpInfo";
 import { MiniDump } from "./lib/minidump";
 import { MinidumpDebugInterface } from "./lib/minidump_debug_interface";
+
+const ALLOWED_DUMP_EXTENSIONS = [".dmp", ".mdmp", ".dump"] as const;
+
+const isSupportedDumpFile = (file: Pick<File, "name">): boolean => {
+	const lowerName = file.name.toLowerCase();
+	return ALLOWED_DUMP_EXTENSIONS.some((extension) =>
+		lowerName.endsWith(extension),
+	);
+};
 
 export function initWasmDumpDebugger(root: HTMLElement): void {
 	new WasmDumpDebugger(root);
