@@ -1,4 +1,4 @@
-import type { Context } from "./cpu_context";
+import type { Amd64Context } from "./cpu_context";
 import { type DebugModule, findModuleForAddress } from "./debug_interface";
 import {
 	type MemoryReader,
@@ -81,7 +81,7 @@ async function unwindPrologue(
 	imageBase: bigint,
 	controlPc: bigint,
 	functionEntry: RuntimeFunction,
-	ctx: Context,
+	ctx: Amd64Context,
 	initialInfo?: UnwindInfo | null,
 ): Promise<void> {
 	let entry: RuntimeFunction | null = functionEntry;
@@ -322,7 +322,7 @@ function isInEpilogue(
 async function emulateEpilogue(
 	reader: MemoryReader,
 	controlPc: bigint,
-	ctx: Context,
+	ctx: Amd64Context,
 ): Promise<void> {
 	const buf = await reader(controlPc, 32);
 	return emulateEpilogueCore(buf, ctx, reader);
@@ -330,7 +330,7 @@ async function emulateEpilogue(
 
 async function emulateEpilogueCore(
 	buf: Uint8Array,
-	ctx: Context,
+	ctx: Amd64Context,
 	reader: MemoryReader,
 ): Promise<void> {
 	let i = 0;
@@ -443,7 +443,7 @@ export async function virtualUnwind(
 	imageBase: bigint,
 	controlPc: bigint,
 	functionEntry: RuntimeFunction,
-	ctx: Context,
+	ctx: Amd64Context,
 ): Promise<void> {
 	const info = await readUnwindInfo(
 		reader,
@@ -500,7 +500,7 @@ export type WalkStackResult = {
 export async function walkStack(
 	reader: MemoryReader,
 	modules: DebugModule[],
-	initialContext: Context,
+	initialContext: Amd64Context,
 	maxFrames = 64,
 ): Promise<WalkStackResult> {
 	const frames: StackFrame[] = [];

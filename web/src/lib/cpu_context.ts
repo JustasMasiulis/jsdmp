@@ -1,8 +1,7 @@
-import { readU16, readU32, readU64 } from "./reader";
-
 export const CONTEXT_AMD64 = 0x00100000;
+export const CONTEXT_ARM64 = 0x00400000;
 
-export const GPR_NAMES = [
+export const AMD64_GPR_NAMES = [
 	"rax",
 	"rcx",
 	"rdx",
@@ -21,7 +20,7 @@ export const GPR_NAMES = [
 	"r15",
 ] as const;
 
-export class Context {
+export class Amd64Context {
 	private _address: bigint;
 	private _data: DataView;
 
@@ -39,7 +38,7 @@ export class Context {
 		}
 	}
 
-	clone(): Context {
+	clone(): Amd64Context {
 		const src = new Uint8Array(
 			this._data.buffer,
 			this._data.byteOffset,
@@ -47,7 +46,7 @@ export class Context {
 		);
 		const buf = new ArrayBuffer(src.byteLength);
 		new Uint8Array(buf).set(src);
-		return new Context(buf, this._address);
+		return new Amd64Context(buf, this._address);
 	}
 
 	get address(): bigint {
@@ -55,15 +54,15 @@ export class Context {
 	}
 
 	get context_flags(): number {
-		return readU32(this._data, 0x30);
+		return this._data.getUint32(0x30, true);
 	}
 
 	get flags(): number {
-		return readU32(this._data, 0x44);
+		return this._data.getUint32(0x44, true);
 	}
 
 	get ip(): bigint {
-		return readU64(this._data, 0xf8);
+		return this._data.getBigUint64(0xf8, true);
 	}
 
 	set ip(value: bigint) {
@@ -71,7 +70,7 @@ export class Context {
 	}
 
 	get sp(): bigint {
-		return readU64(this._data, 0x98);
+		return this._data.getBigUint64(0x98, true);
 	}
 
 	set sp(value: bigint) {
@@ -79,7 +78,7 @@ export class Context {
 	}
 
 	gpr(idx: number): bigint {
-		return readU64(this._data, 0x78 + idx * 8);
+		return this._data.getBigUint64(0x78 + idx * 8, true);
 	}
 
 	setGpr(idx: number, value: bigint) {
@@ -88,7 +87,10 @@ export class Context {
 
 	xmm(idx: number): [bigint, bigint] {
 		const off = 0x1a0 + idx * 16;
-		return [readU64(this._data, off), readU64(this._data, off + 8)];
+		return [
+			this._data.getBigUint64(off, true),
+			this._data.getBigUint64(off + 8, true),
+		];
 	}
 
 	setXmm(idx: number, lo: bigint, hi: bigint) {
@@ -98,11 +100,9 @@ export class Context {
 	}
 
 	seg(idx: number): number {
-		return readU16(this._data, 0x38 + idx * 2);
+		return this._data.getUint16(0x38 + idx * 2, true);
 	}
 }
-
-export const CONTEXT_ARM64 = 0x00400000;
 
 export const ARM64_GPR_NAMES = [
 	"x0",
@@ -171,15 +171,15 @@ export class Arm64Context {
 	}
 
 	get context_flags(): number {
-		return readU32(this._data, 0x0);
+		return this._data.getUint32(0x0, true);
 	}
 
 	get cpsr(): number {
-		return readU32(this._data, 0x4);
+		return this._data.getUint32(0x4, true);
 	}
 
 	get ip(): bigint {
-		return readU64(this._data, 0x108);
+		return this._data.getBigUint64(0x108, true);
 	}
 
 	set ip(value: bigint) {
@@ -187,7 +187,7 @@ export class Arm64Context {
 	}
 
 	get sp(): bigint {
-		return readU64(this._data, 0x100);
+		return this._data.getBigUint64(0x100, true);
 	}
 
 	set sp(value: bigint) {
@@ -196,9 +196,9 @@ export class Arm64Context {
 
 	gpr(idx: number): bigint {
 		if (idx < 0 || idx > 30) throw new RangeError("GPR index must be 0-30");
-		if (idx <= 28) return readU64(this._data, 0x08 + idx * 8);
-		if (idx === 29) return readU64(this._data, 0xf0);
-		return readU64(this._data, 0xf8);
+		if (idx <= 28) return this._data.getBigUint64(0x08 + idx * 8, true);
+		if (idx === 29) return this._data.getBigUint64(0xf0, true);
+		return this._data.getBigUint64(0xf8, true);
 	}
 
 	setGpr(idx: number, value: bigint) {
@@ -211,7 +211,10 @@ export class Arm64Context {
 	simd(idx: number): [bigint, bigint] {
 		if (idx < 0 || idx > 31) throw new RangeError("SIMD index must be 0-31");
 		const off = 0x110 + idx * 16;
-		return [readU64(this._data, off), readU64(this._data, off + 8)];
+		return [
+			this._data.getBigUint64(off, true),
+			this._data.getBigUint64(off + 8, true),
+		];
 	}
 
 	setSimd(idx: number, lo: bigint, hi: bigint) {
@@ -222,4 +225,4 @@ export class Arm64Context {
 	}
 }
 
-export type CpuContext = Context | Arm64Context;
+export type CpuContext = Amd64Context | Arm64Context;

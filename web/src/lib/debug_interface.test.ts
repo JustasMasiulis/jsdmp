@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { CONTEXT_AMD64, Context } from "./cpu_context";
+import { Amd64Context, CONTEXT_AMD64 } from "./cpu_context";
 import type {
 	MinidumpAssociatedThread,
 	MinidumpExceptionStream,
@@ -175,8 +175,8 @@ describe("MinidumpDebugInterface", () => {
 		const di = new MinidumpDebugInterface(source);
 
 		expect(di.currentThread.state?.id).toBe(7);
-		expect(di.currentContext.state).toBeInstanceOf(Context);
-		expect(di.threads.state[0]?.context).toBeInstanceOf(Context);
+		expect(di.currentContext.state).toBeInstanceOf(Amd64Context);
+		expect(di.threads.state[0]?.context).toBeInstanceOf(Amd64Context);
 		expect(di.threads.state[0]?.exception).toBeNull();
 		expect(await di.read(0x5000n, 3)).toEqual(
 			new Uint8Array([0x90, 0x90, 0xc3]),
@@ -252,7 +252,7 @@ describe("MinidumpDebugInterface", () => {
 		const di = new MinidumpDebugInterface(source);
 
 		expect(di.currentThread.state?.id).toBe(11);
-		expect(di.currentContext.state).toBeInstanceOf(Context);
+		expect(di.currentContext.state).toBeInstanceOf(Amd64Context);
 		expect(di.currentContext.state?.ip).toBe(0x402000n);
 		expect(di.checksum).toBe(0x12345678);
 		expect(di.systemInfo?.processorArchitectureName).toBe("x64");
@@ -268,7 +268,7 @@ describe("MinidumpDebugInterface", () => {
 		expect(thread?.exception).not.toBeNull();
 		expect(thread?.exception?.code).toBe(0xc0000005);
 		expect(thread?.exception?.address).toBe(0x5000n);
-		expect(thread?.exception?.context).toBeInstanceOf(Context);
+		expect(thread?.exception?.context).toBeInstanceOf(Amd64Context);
 		expect(thread?.exception?.context?.ip).toBe(0x402000n);
 	});
 

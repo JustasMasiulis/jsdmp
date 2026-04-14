@@ -1,18 +1,18 @@
 import {
+	AMD64_GPR_NAMES,
+	Amd64Context,
 	ARM64_GPR_NAMES,
 	Arm64Context,
-	Context,
 	type CpuContext,
-	GPR_NAMES,
 } from "./cpu_context";
 
-const AMD64_REGISTER_MAP: Record<string, (ctx: Context) => bigint> =
+const AMD64_REGISTER_MAP: Record<string, (ctx: Amd64Context) => bigint> =
 	Object.fromEntries([
-		...GPR_NAMES.map(
-			(name, idx) => [name, (ctx: Context) => ctx.gpr(idx)] as const,
+		...AMD64_GPR_NAMES.map(
+			(name, idx) => [name, (ctx: Amd64Context) => ctx.gpr(idx)] as const,
 		),
-		["rip", (ctx: Context) => ctx.ip],
-		["rflags", (ctx: Context) => BigInt(ctx.flags)],
+		["rip", (ctx: Amd64Context) => ctx.ip],
+		["rflags", (ctx: Amd64Context) => BigInt(ctx.flags)],
 	]);
 
 const ARM64_REGISTER_MAP: Record<string, (ctx: Arm64Context) => bigint> =
@@ -130,7 +130,7 @@ class Parser {
 					throw new Error(
 						`Cannot read register '${token}': no context available`,
 					);
-			} else if (this.ctx instanceof Context) {
+			} else if (this.ctx instanceof Amd64Context) {
 				const regFn = AMD64_REGISTER_MAP[token.toLowerCase()];
 				if (regFn) return regFn(this.ctx);
 			} else if (this.ctx instanceof Arm64Context) {

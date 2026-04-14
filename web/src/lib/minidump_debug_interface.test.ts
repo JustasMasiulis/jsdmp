@@ -1,9 +1,9 @@
 import { describe, expect, it } from "bun:test";
 import {
+	Amd64Context,
 	Arm64Context,
 	CONTEXT_AMD64,
 	CONTEXT_ARM64,
-	Context,
 } from "./cpu_context";
 import type {
 	MinidumpAssociatedThread,
@@ -128,7 +128,7 @@ describe("MinidumpDebugInterface architecture routing", () => {
 		});
 		const di = new MinidumpDebugInterface(source);
 		expect(di.processorArchitecture).toBe(9);
-		expect(di.currentContext.state).toBeInstanceOf(Context);
+		expect(di.currentContext.state).toBeInstanceOf(Amd64Context);
 		expect(di.currentContext.state?.ip).toBe(0x401000n);
 	});
 

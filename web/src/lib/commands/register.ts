@@ -1,9 +1,9 @@
 import type { CommandOutput } from "../commandEngine";
 import {
+	AMD64_GPR_NAMES,
+	type Amd64Context,
 	ARM64_GPR_NAMES,
 	Arm64Context,
-	type Context,
-	GPR_NAMES,
 } from "../cpu_context";
 import { fmtHex } from "../formatting";
 import type { MinidumpDebugInterface } from "../minidump_debug_interface";
@@ -11,8 +11,8 @@ import type { MinidumpDebugInterface } from "../minidump_debug_interface";
 const fmtReg = (name: string, value: bigint): string =>
 	`${name.padStart(3)}=${fmtHex(value, 16).toLowerCase()}`;
 
-function formatAmd64Registers(ctx: Context): string[] {
-	const gpr = (idx: number) => fmtReg(GPR_NAMES[idx], ctx.gpr(idx));
+function formatAmd64Registers(ctx: Amd64Context): string[] {
+	const gpr = (idx: number) => fmtReg(AMD64_GPR_NAMES[idx], ctx.gpr(idx));
 
 	const lines: string[] = [];
 	lines.push(`${gpr(0)} ${gpr(3)} ${gpr(1)}`);
@@ -55,7 +55,7 @@ export function registerCommand(
 	const lines =
 		ctx instanceof Arm64Context
 			? formatArm64Registers(ctx)
-			: formatAmd64Registers(ctx as Context);
+			: formatAmd64Registers(ctx as Amd64Context);
 
 	return Promise.resolve({ lines });
 }

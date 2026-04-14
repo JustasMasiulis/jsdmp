@@ -1,9 +1,9 @@
+import type { WalkStackResult } from "../amd64_unwinder";
 import type { CommandOutput } from "../commandEngine";
-import { Arm64Context, Context } from "../cpu_context";
+import { Amd64Context, Arm64Context } from "../cpu_context";
 import { fmtHex } from "../formatting";
 import type { MinidumpDebugInterface } from "../minidump_debug_interface";
 import { resolveSymbol } from "../symbolication";
-import type { WalkStackResult } from "../unwinder";
 
 export async function stackCommand(
 	dbg: MinidumpDebugInterface,
@@ -18,8 +18,8 @@ export async function stackCommand(
 		const reader = (addr: bigint, size: number) => dbg.read(addr, size);
 
 		let result: WalkStackResult;
-		if (ctx instanceof Context) {
-			const { walkStack } = await import("../unwinder");
+		if (ctx instanceof Amd64Context) {
+			const { walkStack } = await import("../amd64_unwinder");
 			result = await walkStack(reader, modules, ctx.clone(), 64);
 		} else if (ctx instanceof Arm64Context) {
 			const { arm64WalkStack } = await import("../arm64_unwinder");

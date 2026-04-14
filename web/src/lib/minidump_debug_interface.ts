@@ -1,4 +1,4 @@
-import { Arm64Context, Context, type CpuContext } from "./cpu_context";
+import { Amd64Context, Arm64Context, type CpuContext } from "./cpu_context";
 import {
 	type DebugInterface,
 	type DebugMemoryRange,
@@ -274,7 +274,7 @@ export class MinidumpDebugInterface implements DebugInterface {
 
 	private createContext(bytes: Uint8Array): CpuContext {
 		if (this.processorArchitecture === 12) return new Arm64Context(bytes);
-		return new Context(bytes);
+		return new Amd64Context(bytes);
 	}
 
 	private registerThreadContext(

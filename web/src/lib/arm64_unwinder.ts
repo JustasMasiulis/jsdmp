@@ -1,8 +1,8 @@
+import type { StackFrame, WalkStackResult } from "./amd64_unwinder";
 import type { Arm64Context } from "./cpu_context";
 import { type DebugModule, findModuleForAddress } from "./debug_interface";
 import type { MemoryReader } from "./pe";
 import { getModulePeFile } from "./symbolServer";
-import type { StackFrame, WalkStackResult } from "./unwinder";
 import { basename } from "./utils";
 
 // --- ARM64 pdata / xdata types ---

@@ -1,17 +1,3 @@
-import { type CommandOutput, parseAddressAndCount } from "../commandEngine";
-import { GPR_NAMES } from "../cpu_context";
-import { findModuleForAddress } from "../debug_interface";
-import { fmtHex } from "../formatting";
-import type { MinidumpDebugInterface } from "../minidump_debug_interface";
-import {
-	type RuntimeFunction,
-	readUnwindInfo,
-	UNW_FLAG_CHAININFO,
-	type UnwindCode,
-	type UnwindInfo,
-} from "../pe";
-import { resolveSymbol } from "../symbolication";
-import { getModulePeFile } from "../symbolServer";
 import {
 	UWOP_ALLOC_LARGE,
 	UWOP_ALLOC_SMALL,
@@ -24,7 +10,21 @@ import {
 	UWOP_SAVE_XMM128_FAR,
 	UWOP_SET_FPREG,
 	unwindOpSlots,
-} from "../unwinder";
+} from "../amd64_unwinder";
+import { type CommandOutput, parseAddressAndCount } from "../commandEngine";
+import { AMD64_GPR_NAMES } from "../cpu_context";
+import { findModuleForAddress } from "../debug_interface";
+import { fmtHex } from "../formatting";
+import type { MinidumpDebugInterface } from "../minidump_debug_interface";
+import {
+	type RuntimeFunction,
+	readUnwindInfo,
+	UNW_FLAG_CHAININFO,
+	type UnwindCode,
+	type UnwindInfo,
+} from "../pe";
+import { resolveSymbol } from "../symbolication";
+import { getModulePeFile } from "../symbolServer";
 import { basename } from "../utils";
 
 function formatUnwindFlags(flags: number): string {
@@ -44,7 +44,7 @@ function formatUwop(
 ): string {
 	switch (code.unwindOp) {
 		case UWOP_PUSH_NONVOL:
-			return `PUSH_NONVOL ${GPR_NAMES[code.opInfo]}`;
+			return `PUSH_NONVOL ${AMD64_GPR_NAMES[code.opInfo]}`;
 		case UWOP_ALLOC_SMALL:
 			return `ALLOC_SMALL 0x${fmtHex(code.opInfo * 8 + 8, 2).toLowerCase()}`;
 		case UWOP_ALLOC_LARGE:
@@ -53,11 +53,11 @@ function formatUwop(
 			}
 			return `ALLOC_LARGE 0x${fmtHex(((codes[index + 2].frameOffset << 16) | codes[index + 1].frameOffset) >>> 0, 1).toLowerCase()}`;
 		case UWOP_SET_FPREG:
-			return `SET_FPREG ${GPR_NAMES[info.frameRegister]}`;
+			return `SET_FPREG ${AMD64_GPR_NAMES[info.frameRegister]}`;
 		case UWOP_SAVE_NONVOL:
-			return `SAVE_NONVOL ${GPR_NAMES[code.opInfo]} at 0x${fmtHex(codes[index + 1].frameOffset * 8, 1).toLowerCase()}`;
+			return `SAVE_NONVOL ${AMD64_GPR_NAMES[code.opInfo]} at 0x${fmtHex(codes[index + 1].frameOffset * 8, 1).toLowerCase()}`;
 		case UWOP_SAVE_NONVOL_FAR:
-			return `SAVE_NONVOL_FAR ${GPR_NAMES[code.opInfo]} at 0x${fmtHex(((codes[index + 2].frameOffset << 16) | codes[index + 1].frameOffset) >>> 0, 1).toLowerCase()}`;
+			return `SAVE_NONVOL_FAR ${AMD64_GPR_NAMES[code.opInfo]} at 0x${fmtHex(((codes[index + 2].frameOffset << 16) | codes[index + 1].frameOffset) >>> 0, 1).toLowerCase()}`;
 		case UWOP_EPILOG:
 			return "EPILOG";
 		case UWOP_SAVE_XMM128:
@@ -96,7 +96,7 @@ function formatFunctionEntry(
 	);
 	lines.push(`    CountOfCodes      ${info.countOfUnwindCodes}`);
 	lines.push(
-		`    FrameRegister     ${info.frameRegister !== 0 ? GPR_NAMES[info.frameRegister] : "none"}`,
+		`    FrameRegister     ${info.frameRegister !== 0 ? AMD64_GPR_NAMES[info.frameRegister] : "none"}`,
 	);
 	lines.push(
 		`    FrameOffset       0x${fmtHex(info.frameOffset, 2).toLowerCase()}`,
