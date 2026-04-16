@@ -4,6 +4,9 @@
 #include <winhttp.h>
 #include <DbgHelp.h>
 
+#include <glaze/glaze.hpp>
+
+#include <algorithm>
 #include <atomic>
 #include <cstdint>
 #include <cstdio>
@@ -11,6 +14,7 @@
 #include <filesystem>
 #include <fstream>
 #include <future>
+#include <limits>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -35,9 +39,22 @@ static std::unordered_map<std::string, std::shared_future<std::string>> g_inflig
 static std::mutex g_filecache_mu;
 static std::unordered_map<std::string, std::shared_ptr<std::vector<uint8_t>>> g_filecache;
 
+constexpr DWORD64 kModuleLoadSpan = 0x10000000ull;
+
+struct SymbolLookupResult {
+    std::string name;
+    DWORD64 rva = 0;
+    DWORD64 size = 0;
+};
+
+struct LoadedPdbModule {
+    DWORD64 base = 0;
+    std::vector<SymbolLookupResult> symbols;
+};
+
 static std::mutex g_dbghelp_mu;
-static std::unordered_map<std::string, DWORD64> g_loaded_pdbs;
-static DWORD64 g_next_base = 0x10000000;
+static std::unordered_map<std::string, LoadedPdbModule> g_loaded_pdbs;
+static DWORD64 g_next_base = kModuleLoadSpan;
 static HANDLE g_sym_handle = reinterpret_cast<HANDLE>(1);
 
 // ---------------------------------------------------------------------------
@@ -250,25 +267,185 @@ static void init_dbghelp() {
         fprintf(stderr, "SymInitialize failed: %lu\n", GetLastError());
 }
 
-static DWORD64 load_pdb_module(const std::string& pdb_path, const std::string& map_key) {
-    auto it = g_loaded_pdbs.find(map_key);
-    if (it != g_loaded_pdbs.end()) return it->second;
+struct SymbolCacheBuildContext {
+    DWORD64 base = 0;
+    std::vector<SymbolLookupResult>* symbols = nullptr;
+};
 
-    DWORD64 base = g_next_base;
-    g_next_base += 0x10000000;
+static BOOL CALLBACK build_symbol_cache_callback(PSYMBOL_INFO symbol, ULONG, PVOID user_context) {
+    if (!symbol || !user_context) return FALSE;
 
-    std::wstring wide_path(pdb_path.begin(), pdb_path.end());
-    DWORD64 loaded = SymLoadModuleExW(g_sym_handle, nullptr, wide_path.c_str(),
-                                       nullptr, base, 0x10000000, nullptr, 0);
-    if (!loaded) {
-        fprintf(stderr, "[dbghelp] SymLoadModuleExW failed for %s: %lu\n",
-                pdb_path.c_str(), GetLastError());
-        return 0;
+    auto* ctx = reinterpret_cast<SymbolCacheBuildContext*>(user_context);
+    if (!ctx->symbols) return FALSE;
+    if (symbol->Address < ctx->base) return TRUE;
+    if (!symbol->NameLen) return TRUE;
+
+    ctx->symbols->push_back({
+        .name = std::string(symbol->Name, symbol->NameLen),
+        .rva = symbol->Address - ctx->base,
+        .size = static_cast<DWORD64>(symbol->Size),
+    });
+    return TRUE;
+}
+
+static void normalize_symbol_cache(std::vector<SymbolLookupResult>* symbols) {
+    if (!symbols || symbols->empty()) return;
+
+    std::stable_sort(symbols->begin(), symbols->end(),
+                     [](const SymbolLookupResult& lhs, const SymbolLookupResult& rhs) {
+                         if (lhs.rva != rhs.rva) return lhs.rva < rhs.rva;
+                         return lhs.size > rhs.size;
+                     });
+
+    std::vector<SymbolLookupResult> normalized;
+    normalized.reserve(symbols->size());
+    for (auto& symbol : *symbols) {
+        if (!normalized.empty() && normalized.back().rva == symbol.rva) {
+            if (normalized.back().name == symbol.name) {
+                normalized.back().size = std::max(normalized.back().size, symbol.size);
+                continue;
+            }
+            if (symbol.size > normalized.back().size) {
+                normalized.back() = std::move(symbol);
+            }
+            continue;
+        }
+        normalized.push_back(std::move(symbol));
     }
 
-    g_loaded_pdbs[map_key] = base;
-    printf("[dbghelp] loaded %s at base 0x%llx\n", pdb_path.c_str(), base);
-    return base;
+    // DbgHelp often reports size 0 for publics. Fill those from the next symbol
+    // so nearest-symbol queries become a single binary search.
+    for (size_t i = 0; i + 1 < normalized.size(); ++i) {
+        if (normalized[i].size) continue;
+        if (normalized[i + 1].rva <= normalized[i].rva) continue;
+        normalized[i].size = normalized[i + 1].rva - normalized[i].rva;
+    }
+
+    *symbols = std::move(normalized);
+}
+
+static bool build_symbol_cache(const std::string& pdb_path, DWORD64 base,
+                               std::vector<SymbolLookupResult>* symbols) {
+    if (!symbols) return false;
+
+    symbols->clear();
+    SymbolCacheBuildContext ctx{
+        .base = base,
+        .symbols = symbols,
+    };
+    if (!SymEnumSymbols(g_sym_handle, base, nullptr, build_symbol_cache_callback, &ctx)) {
+        fprintf(stderr, "[dbghelp] SymEnumSymbols failed for %s: %lu\n",
+                pdb_path.c_str(), GetLastError());
+        return false;
+    }
+
+    normalize_symbol_cache(symbols);
+    return true;
+}
+
+static const LoadedPdbModule* load_pdb_module(const std::string& pdb_path, const std::string& map_key) {
+    auto it = g_loaded_pdbs.find(map_key);
+    if (it != g_loaded_pdbs.end()) return &it->second;
+
+    if (g_next_base > std::numeric_limits<DWORD64>::max() - kModuleLoadSpan) {
+        fprintf(stderr, "[dbghelp] module base space exhausted while loading %s\n",
+                pdb_path.c_str());
+        return nullptr;
+    }
+
+    DWORD64 requested_base = g_next_base;
+    g_next_base += kModuleLoadSpan;
+
+    std::wstring wide_path(pdb_path.begin(), pdb_path.end());
+    DWORD64 base = SymLoadModuleExW(g_sym_handle, nullptr, wide_path.c_str(),
+                                    nullptr, requested_base,
+                                    static_cast<DWORD>(kModuleLoadSpan), nullptr, 0);
+    if (!base) {
+        fprintf(stderr, "[dbghelp] SymLoadModuleExW failed for %s: %lu\n",
+                pdb_path.c_str(), GetLastError());
+        return nullptr;
+    }
+
+    LoadedPdbModule module{
+        .base = base,
+    };
+    if (!build_symbol_cache(pdb_path, base, &module.symbols)) {
+        SymUnloadModule64(g_sym_handle, base);
+        return nullptr;
+    }
+
+    auto [inserted, ok] = g_loaded_pdbs.emplace(map_key, std::move(module));
+    if (!ok) return &inserted->second;
+
+    printf("[dbghelp] loaded %s at base 0x%llx with %zu cached symbols\n",
+           pdb_path.c_str(), base, inserted->second.symbols.size());
+    return &inserted->second;
+}
+
+struct ErrorResponse {
+    std::string_view error{};
+};
+
+struct SymbolResponse {
+    std::string name;
+    uint64_t rva = 0;
+    uint64_t size = 0;
+};
+
+struct BatchSymbolHit {
+    uint64_t queryRva = 0;
+    std::string name;
+    uint64_t rva = 0;
+    uint64_t size = 0;
+};
+
+struct BatchSymbolResponse {
+    std::vector<BatchSymbolHit> found;
+    std::vector<uint64_t> missing;
+};
+
+static SymbolResponse make_symbol_response(const SymbolLookupResult& symbol) {
+    return {
+        .name = symbol.name,
+        .rva = static_cast<uint64_t>(symbol.rva),
+        .size = static_cast<uint64_t>(symbol.size),
+    };
+}
+
+static BatchSymbolHit make_batch_symbol_hit(uint64_t query_rva, const SymbolLookupResult& symbol) {
+    return {
+        .queryRva = query_rva,
+        .name = symbol.name,
+        .rva = static_cast<uint64_t>(symbol.rva),
+        .size = static_cast<uint64_t>(symbol.size),
+    };
+}
+
+template <class T>
+static bool serialize_json(const T& value, std::string* out) {
+    if (!out) return false;
+
+    out->clear();
+    auto ec = glz::write_json(value, *out);
+    if (ec) {
+        fprintf(stderr, "[json] serialization failed\n");
+        return false;
+    }
+    return true;
+}
+
+static bool lookup_symbol(const std::vector<SymbolLookupResult>& symbols,
+                          DWORD64 query_rva, SymbolLookupResult* out) {
+    if (!out || symbols.empty()) return false;
+
+    auto it = std::upper_bound(symbols.begin(), symbols.end(), query_rva,
+                               [](DWORD64 query, const SymbolLookupResult& symbol) {
+                                   return query < symbol.rva;
+                               });
+    if (it == symbols.begin()) return false;
+
+    *out = *std::prev(it);
+    return true;
 }
 
 // ---------------------------------------------------------------------------
@@ -284,7 +461,7 @@ static void set_cors(uWS::HttpResponse<SSL>* res, std::string_view origin) {
     if (is_localhost_origin(origin)) {
         res->writeHeader("Access-Control-Allow-Origin", origin);
     }
-    res->writeHeader("Access-Control-Allow-Methods", "GET, OPTIONS");
+    res->writeHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
     res->writeHeader("Access-Control-Allow-Headers", "*");
 }
 
@@ -318,18 +495,44 @@ static void send_error(uWS::HttpResponse<false>* res, uWS::Loop* loop,
     });
 }
 
+template <class T>
+static void send_json_value(uWS::HttpResponse<false>* res, uWS::Loop* loop,
+                            const std::string& origin,
+                            std::shared_ptr<std::atomic<bool>> aborted,
+                            const T& value) {
+    std::string body;
+    if (!serialize_json(value, &body)) {
+        send_error(res, loop, origin, aborted,
+                   "500 Internal Server Error", "JSON serialization failed");
+        return;
+    }
+
+    loop->defer([res, origin, aborted, body = std::move(body)]() {
+        if (aborted->load()) return;
+        set_cors(res, origin);
+        res->writeStatus("200 OK");
+        res->writeHeader("Content-Type", "application/json");
+        res->end(body);
+    });
+}
+
 static void send_json_error(uWS::HttpResponse<false>* res, uWS::Loop* loop,
                             const std::string& origin,
                             std::shared_ptr<std::atomic<bool>> aborted,
                             const char* status, const char* code) {
-    loop->defer([res, origin, aborted, status, code]() {
+    std::string body;
+    if (!serialize_json(ErrorResponse{.error = code}, &body)) {
+        send_error(res, loop, origin, aborted,
+                   "500 Internal Server Error", "JSON serialization failed");
+        return;
+    }
+
+    loop->defer([res, origin, aborted, status, body = std::move(body)]() {
         if (aborted->load()) return;
         set_cors(res, origin);
         res->writeStatus(status);
         res->writeHeader("Content-Type", "application/json");
-        char body[64];
-        int n = snprintf(body, sizeof(body), R"({"error":"%s"})", code);
-        res->end(std::string_view(body, static_cast<size_t>(n)));
+        res->end(body);
     });
 }
 
@@ -484,95 +687,84 @@ int main(int argc, char* argv[]) {
                 }
 
                 std::lock_guard lk(g_dbghelp_mu);
-                DWORD64 base = load_pdb_module(path, map_key);
-                if (!base) {
+                auto* module = load_pdb_module(path, map_key);
+                if (!module) {
                     send_json_error(res, loop, origin, aborted,
                                     "502 Bad Gateway", "pdb_unavailable");
                     return;
                 }
 
-                alignas(SYMBOL_INFO) char sym_buf[sizeof(SYMBOL_INFO) + MAX_SYM_NAME];
-                auto* sym = reinterpret_cast<SYMBOL_INFO*>(sym_buf);
-                sym->SizeOfStruct = sizeof(SYMBOL_INFO);
-                sym->MaxNameLen = MAX_SYM_NAME;
-                DWORD64 displacement = 0;
-
-                if (!SymFromAddr(g_sym_handle, base + rva, &displacement, sym)) {
+                SymbolLookupResult symbol;
+                if (!lookup_symbol(module->symbols, rva, &symbol)) {
                     send_json_error(res, loop, origin, aborted,
                                     "404 Not Found", "no_symbol");
                     return;
                 }
 
-                auto sym_rva = sym->Address - base;
-                auto sym_size = (DWORD64)sym->Size;
-                std::string original_name(sym->Name);
-
-                if (!sym_size) {
-                    // Walk forward: exponential probe then binary search
-                    DWORD64 fwd_lo = 0, fwd_hi = 0x10;
-                    constexpr DWORD64 MAX_PROBE = 0x100000;
-                    while (fwd_hi <= MAX_PROBE) {
-                        DWORD64 disp;
-                        if (!SymFromAddr(g_sym_handle, sym->Address + fwd_hi, &disp, sym) ||
-                            original_name != sym->Name)
-                            break;
-                        fwd_lo = fwd_hi;
-                        fwd_hi *= 2;
-                    }
-                    fwd_hi = std::min(fwd_hi, MAX_PROBE);
-                    while (fwd_lo + 1 < fwd_hi) {
-                        auto mid = fwd_lo + (fwd_hi - fwd_lo) / 2;
-                        DWORD64 disp;
-                        if (SymFromAddr(g_sym_handle, base + sym_rva + mid, &disp, sym) &&
-                            original_name == sym->Name)
-                            fwd_lo = mid;
-                        else
-                            fwd_hi = mid;
-                    }
-
-                    // Walk backward: exponential probe then binary search
-                    DWORD64 bwd_lo = 0, bwd_hi = 0x10;
-                    while (bwd_hi <= MAX_PROBE && sym_rva >= bwd_hi) {
-                        DWORD64 disp;
-                        if (!SymFromAddr(g_sym_handle, base + sym_rva - bwd_hi, &disp, sym) ||
-                            original_name != sym->Name)
-                            break;
-                        bwd_lo = bwd_hi;
-                        bwd_hi *= 2;
-                    }
-                    bwd_hi = std::min({bwd_hi, MAX_PROBE, sym_rva});
-                    while (bwd_lo + 1 < bwd_hi) {
-                        auto mid = bwd_lo + (bwd_hi - bwd_lo) / 2;
-                        DWORD64 disp;
-                        if (SymFromAddr(g_sym_handle, base + sym_rva - mid, &disp, sym) &&
-                            original_name == sym->Name)
-                            bwd_lo = mid;
-                        else
-                            bwd_hi = mid;
-                    }
-
-                    sym_rva -= bwd_lo;
-                    sym_size = fwd_lo + bwd_lo + 1;
-                }
-
-                std::string escaped_name;
-                for (auto ch : original_name) {
-                    if (ch == '"' || ch == '\\') escaped_name += '\\';
-                    escaped_name += ch;
-                }
-                char json[4096];
-                snprintf(json, sizeof(json),
-                         R"({"name":"%s","rva":%llu,"size":%llu})",
-                         escaped_name.c_str(), sym_rva, sym_size);
-                auto json_str = std::string(json);
-
-                loop->defer([res, origin, aborted, json_str]() {
-                    if (aborted->load()) return;
-                    set_cors(res, origin);
-                    res->writeHeader("Content-Type", "application/json");
-                    res->end(json_str);
-                });
+                send_json_value(res, loop, origin, aborted, make_symbol_response(symbol));
             }).detach();
+        })
+        .post("/pdb/:name/:key/nearest-batch", [](auto* res, auto* req) {
+            auto origin = std::string(req->getHeader("origin"));
+            auto name = std::string(req->getParameter("name"));
+            auto key = std::string(req->getParameter("key"));
+
+            auto aborted = std::make_shared<std::atomic<bool>>(false);
+            auto body = std::make_shared<std::string>();
+            res->onAborted([aborted]() { aborted->store(true); });
+
+            auto* loop = uWS::Loop::get();
+            res->onData([res, loop, origin, name, key, aborted, body](std::string_view chunk,
+                                                                       bool is_last) {
+                if (aborted->load()) return;
+
+                body->append(chunk.data(), chunk.size());
+                if (!is_last) return;
+
+                std::vector<uint64_t> rvas;
+                if (auto ec = glz::read_json(rvas, *body); ec || rvas.empty()) {
+                    send_json_error(res, loop, origin, aborted,
+                                    "400 Bad Request", "invalid_rvas");
+                    return;
+                }
+
+                auto fut = deduplicated_fetch(name, key);
+                auto map_key = name + "/" + key;
+
+                std::thread([res, loop, fut, origin, aborted, map_key, rvas = std::move(rvas)]() {
+                    auto path = fut.get();
+                    if (path.empty()) {
+                        send_json_error(res, loop, origin, aborted,
+                                        "502 Bad Gateway", "pdb_unavailable");
+                        return;
+                    }
+
+                    std::lock_guard lk(g_dbghelp_mu);
+                    auto* module = load_pdb_module(path, map_key);
+                    if (!module) {
+                        send_json_error(res, loop, origin, aborted,
+                                        "502 Bad Gateway", "pdb_unavailable");
+                        return;
+                    }
+
+                    BatchSymbolResponse response;
+                    response.found.reserve(rvas.size());
+                    response.missing.reserve(rvas.size());
+                    for (DWORD64 query_rva : rvas) {
+                        SymbolLookupResult symbol;
+                        if (!lookup_symbol(module->symbols, query_rva, &symbol)) {
+                            response.missing.push_back(static_cast<uint64_t>(query_rva));
+                            continue;
+                        }
+
+                        response.found.push_back(
+                            make_batch_symbol_hit(static_cast<uint64_t>(query_rva), symbol)
+                        );
+                    }
+
+                    send_json_value(res, loop, origin, aborted, response);
+                }).detach();
+            });
         })
         .listen(port, [port](auto* listenSocket) {
             if (listenSocket) {

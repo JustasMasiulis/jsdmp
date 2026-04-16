@@ -6,6 +6,15 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 include(FetchContent)
 
+FetchContent_Declare(
+    glaze
+    GIT_REPOSITORY https://github.com/stephenberry/glaze.git
+    GIT_TAG v7.3.2
+    GIT_SHALLOW TRUE
+)
+set(glaze_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+FetchContent_MakeAvailable(glaze)
+
 # uSockets — C library, dependency of uWebSockets
 FetchContent_Declare(
     uSockets
@@ -55,4 +64,4 @@ target_link_libraries(uWebSockets INTERFACE uSockets)
 
 # Main executable
 add_executable(symbol_server src/main.cpp)
-target_link_libraries(symbol_server PRIVATE uWebSockets winhttp dbghelp)
+target_link_libraries(symbol_server PRIVATE uWebSockets glaze::glaze winhttp dbghelp)
