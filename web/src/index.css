@@ -383,7 +383,23 @@ Design language notes for future re-additions:
 		background: color-mix(in oklab, var(--color-sidebar-indicator) 25%, transparent);
 	}
 
-	.memory-view-table__row.dump-disassembly-table__fn-label code {
+	.memory-view-table__row.dump-disassembly-table__block-label {
+		border-top: 1px solid var(--color-border);
+		background: color-mix(in oklab, var(--color-bg2) 80%, white);
+	}
+
+	.memory-view-table__row.dump-disassembly-table__block-label code {
+		color: var(--color-fg2);
+		font-weight: 600;
+		overflow: hidden;
+		text-overflow: ellipsis;
+	}
+
+	.memory-view-table__row.dump-disassembly-table__block-label--overlap code {
+		color: oklch(0.4694 0.1176 58.35);
+	}
+
+	.memory-view-table__row.dump-disassembly-table__note code {
 		color: var(--color-fg2);
 		overflow: hidden;
 		text-overflow: ellipsis;

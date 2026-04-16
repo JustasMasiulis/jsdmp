@@ -1,4 +1,4 @@
-import type { DebugInterface, DebugModule } from "./debug_interface";
+import type { DebugInterface } from "./debug_interface";
 import {
 	type DecodedControlFlow,
 	decodeInstruction,
@@ -6,14 +6,15 @@ import {
 	joinSegmentText,
 	maxInstructionLength,
 } from "./disassembly";
-import { fmtHex16 } from "./formatting";
-import { resolveSymbol, symbolicateSegments } from "./symbolication";
+import { fmtHex, fmtHex16 } from "./formatting";
+import { resolveSymbol, symbolicateSegmentGroups } from "./symbolication";
 
 export type CfgEdgeKind = "true" | "false" | "unconditional";
 
 export type CfgInstruction = {
 	address: bigint;
 	byteLength: number;
+	bytesHex: string;
 	mnemonic: string;
 	operandSegments: InstrTextSegment[];
 	controlFlow: DecodedControlFlow;
@@ -77,6 +78,35 @@ export type CfgBuildResult = {
 	blocks: CfgNode[];
 	edges: CfgEdge[];
 	stats: CfgBuildStats;
+};
+
+export type ReachableCfgBlock = {
+	id: string;
+	address: bigint;
+	title: string;
+	instructions: CfgInstruction[];
+	error: string | null;
+};
+
+export type ReachableCfgEdge = {
+	id: string;
+	fromAddress: bigint;
+	toAddress: bigint;
+	kind: CfgEdgeKind;
+};
+
+export type ReachableCfgBuildResult = {
+	anchorAddress: bigint;
+	blocks: ReachableCfgBlock[];
+	edges: ReachableCfgEdge[];
+	stats: CfgBuildStats;
+};
+
+export type LinearizedCfgBlock = {
+	block: ReachableCfgBlock;
+	incomingEdges: ReachableCfgEdge[];
+	outgoingEdges: ReachableCfgEdge[];
+	overlapSourceAddresses: bigint[];
 };
 
 export const ESTIMATED_CHAR_WIDTH = 7;
@@ -182,6 +212,34 @@ type BuiltBlock = {
 	error: string | null;
 };
 
+const compareBigints = (a: bigint, b: bigint) => {
+	if (a === b) return 0;
+	return a < b ? -1 : 1;
+};
+
+const cfgEdgeTraversalPriority = (kind: CfgEdgeKind) => {
+	switch (kind) {
+		case "false":
+			return 0;
+		case "unconditional":
+			return 1;
+		case "true":
+			return 2;
+	}
+};
+
+const sortCfgEdgesForLinearization = (
+	left: ReachableCfgEdge,
+	right: ReachableCfgEdge,
+) => {
+	const byKind =
+		cfgEdgeTraversalPriority(left.kind) - cfgEdgeTraversalPriority(right.kind);
+	if (byKind !== 0) {
+		return byKind;
+	}
+	return compareBigints(left.toAddress, right.toAddress);
+};
+
 const decodeBlock = async (
 	dbg: DebugInterface,
 	blockAddr: bigint,
@@ -218,6 +276,7 @@ const decodeBlock = async (
 		instructions.push({
 			address: ip,
 			byteLength: decoded.length,
+			bytesHex: [...decoded.bytes].map((b) => fmtHex(b, 2)).join(" "),
 			mnemonic: decoded.mnemonic,
 			operandSegments: decoded.operandSegments,
 			controlFlow: decoded.controlFlow,
@@ -258,37 +317,29 @@ const decodeBlock = async (
 	return { address: blockAddr, instructions, error };
 };
 
-const annotateBlockSymbols = async (
+const collectBlockSymbolicationGroups = (
 	instructions: CfgInstruction[],
-	modules: readonly DebugModule[],
-): Promise<void> => {
-	await Promise.all(
-		instructions.map((instr) => {
-			const addresses = [
-				...(instr.controlFlow.directTargetAddress !== null
-					? [instr.controlFlow.directTargetAddress]
-					: []),
-				...instr.ripRelativeTargets,
-			];
-			if (addresses.length === 0) return undefined;
-			return symbolicateSegments(instr.operandSegments, addresses, modules);
-		}),
-	);
-};
+): Array<{ segments: InstrTextSegment[]; addresses: bigint[] }> =>
+	instructions.flatMap((instr) => {
+		const addresses = [
+			...(instr.controlFlow.directTargetAddress !== null
+				? [instr.controlFlow.directTargetAddress]
+				: []),
+			...instr.ripRelativeTargets,
+		];
+		return addresses.length > 0
+			? [{ segments: instr.operandSegments, addresses }]
+			: [];
+	});
 
-const makeNode = async (
-	block: BuiltBlock,
-	modules: readonly DebugModule[],
-): Promise<CfgNode> => {
-	await annotateBlockSymbols(block.instructions, modules);
+const makeNode = (block: ReachableCfgBlock): CfgNode => {
 	const lines = buildCfgInstructionLines(block.instructions);
 	if (block.error) {
 		lines.push(...buildCfgTextLinesFromLabel(block.error));
 	}
-	const title = await resolveSymbol(block.address, modules);
 	return {
-		id: blockIdForAddress(block.address),
-		title,
+		id: block.id,
+		title: block.title,
 		instructionCount: block.instructions.length,
 		lines,
 	};
@@ -319,10 +370,11 @@ const splitBlock = (
 	];
 };
 
-export const buildCfg2 = async (
+export const buildReachableCfg = async (
 	dbg: DebugInterface,
 	entryAddress: bigint,
-): Promise<CfgBuildResult> => {
+): Promise<ReachableCfgBuildResult> => {
+	performance.mark("buildReachableCfg-start");
 	const arch = dbg.arch;
 	const builtBlocks = new Map<bigint, BuiltBlock>();
 	const knownAddrs = new Set<bigint>([entryAddress]);
@@ -448,28 +500,60 @@ export const buildCfg2 = async (
 
 	// Deduplicate edges and build final output
 	const seenEdges = new Set<string>();
-	const finalEdges: CfgEdge[] = [];
+	const finalEdges: ReachableCfgEdge[] = [];
 	for (const [from, to, kind] of edgeTuples) {
 		const key = `${from}->${to}`;
 		if (!seenEdges.has(key)) {
 			seenEdges.add(key);
 			finalEdges.push({
 				id: key,
-				from: blockIdForAddress(from),
-				to: blockIdForAddress(to),
+				fromAddress: from,
+				toAddress: to,
 				kind,
 			});
 		}
 	}
 
+	performance.mark("buildReachableCfg-end");
+	performance.measure(
+		"buildReachableCfg",
+		"buildReachableCfg-start",
+		"buildReachableCfg-end",
+	);
+
 	const modules = dbg.modules.state;
+	const builtBlockList = [...builtBlocks.values()];
+	await symbolicateSegmentGroups(
+		builtBlockList.flatMap((built) =>
+			collectBlockSymbolicationGroups(built.instructions),
+		),
+		modules,
+	);
+
 	let totalInstructions = 0;
-	const nodePromises: Promise<CfgNode>[] = [];
-	for (const built of builtBlocks.values()) {
+	const blockPromises: Promise<ReachableCfgBlock>[] = [];
+	for (const built of builtBlockList) {
 		totalInstructions += built.instructions.length;
-		nodePromises.push(makeNode(built, modules));
+		blockPromises.push(
+			(async () => {
+				return {
+					id: blockIdForAddress(built.address),
+					address: built.address,
+					title: await resolveSymbol(built.address, modules),
+					instructions: built.instructions,
+					error: built.error,
+				};
+			})(),
+		);
 	}
-	const allBlocks = await Promise.all(nodePromises);
+	const allBlocks = await Promise.all(blockPromises);
+
+	performance.mark("buildReachableCfg-blocksReady");
+	performance.measure(
+		"buildReachableCfg-annotation",
+		"buildReachableCfg-end",
+		"buildReachableCfg-blocksReady",
+	);
 
 	return {
 		anchorAddress: entryAddress,
@@ -481,6 +565,115 @@ export const buildCfg2 = async (
 			instructionCount: totalInstructions,
 			truncated: false,
 		},
+	};
+};
+
+export const linearizeReachableCfg = (
+	result: ReachableCfgBuildResult,
+): LinearizedCfgBlock[] => {
+	const blocksByAddress = new Map<bigint, ReachableCfgBlock>();
+	const incomingEdges = new Map<bigint, ReachableCfgEdge[]>();
+	const outgoingEdges = new Map<bigint, ReachableCfgEdge[]>();
+
+	for (const block of result.blocks) {
+		blocksByAddress.set(block.address, block);
+		incomingEdges.set(block.address, []);
+		outgoingEdges.set(block.address, []);
+	}
+
+	for (const edge of result.edges) {
+		const sourceEdges = outgoingEdges.get(edge.fromAddress);
+		if (sourceEdges) {
+			sourceEdges.push(edge);
+		}
+		const targetEdges = incomingEdges.get(edge.toAddress);
+		if (targetEdges) {
+			targetEdges.push(edge);
+		}
+	}
+
+	for (const edges of incomingEdges.values()) {
+		edges.sort(sortCfgEdgesForLinearization);
+	}
+	for (const edges of outgoingEdges.values()) {
+		edges.sort(sortCfgEdgesForLinearization);
+	}
+
+	const orderedAddresses: bigint[] = [];
+	const visited = new Set<bigint>();
+
+	const visit = (address: bigint) => {
+		if (visited.has(address)) {
+			return;
+		}
+		const block = blocksByAddress.get(address);
+		if (!block) {
+			return;
+		}
+
+		visited.add(address);
+		orderedAddresses.push(address);
+		for (const edge of outgoingEdges.get(address) ?? []) {
+			visit(edge.toAddress);
+		}
+	};
+
+	visit(result.anchorAddress);
+	const remainingAddresses = [...blocksByAddress.keys()].sort(compareBigints);
+	for (const address of remainingAddresses) {
+		visit(address);
+	}
+
+	const overlapSourcesByAddress = new Map<bigint, bigint[]>();
+	for (const block of result.blocks) {
+		const overlapSources = new Set<bigint>();
+		for (const owner of result.blocks) {
+			if (owner.address === block.address) {
+				continue;
+			}
+			for (const instruction of owner.instructions) {
+				const endAddress = instruction.address + BigInt(instruction.byteLength);
+				if (block.address > instruction.address && block.address < endAddress) {
+					overlapSources.add(owner.address);
+				}
+			}
+		}
+		overlapSourcesByAddress.set(
+			block.address,
+			[...overlapSources].sort(compareBigints),
+		);
+	}
+
+	return orderedAddresses.map((address) => {
+		const block = blocksByAddress.get(address);
+		if (!block) {
+			throw new Error(`Missing block for ${fmtHex16(address)}`);
+		}
+		return {
+			block,
+			incomingEdges: incomingEdges.get(address) ?? [],
+			outgoingEdges: outgoingEdges.get(address) ?? [],
+			overlapSourceAddresses: overlapSourcesByAddress.get(address) ?? [],
+		};
+	});
+};
+
+export const buildCfg2 = async (
+	dbg: DebugInterface,
+	entryAddress: bigint,
+): Promise<CfgBuildResult> => {
+	const reachableCfg = await buildReachableCfg(dbg, entryAddress);
+
+	return {
+		anchorAddress: reachableCfg.anchorAddress,
+		blocks: reachableCfg.blocks.map((block) => makeNode(block)),
+		edges: reachableCfg.edges.map((edge) => ({
+			id: edge.id,
+			from: blockIdForAddress(edge.fromAddress),
+			to: blockIdForAddress(edge.toAddress),
+			kind: edge.kind,
+		})),
+		stats: reachableCfg.stats,
 	};
 };
 

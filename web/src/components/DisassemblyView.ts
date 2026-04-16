@@ -4,14 +4,14 @@ import type {
 } from "dockview-core";
 import { AddressToolbar } from "../lib/addressToolbar";
 import type { CpuContext } from "../lib/cpu_context";
-import {
-	buildDisassemblyListing,
-	type DebugDisassemblyListing,
-	type DisassemblyLine,
-	loadNextDisassemblyLines,
-	loadPreviousDisassemblyLines,
-} from "../lib/debugDisassembly";
 import { DBG } from "../lib/debugState";
+import {
+	buildReachableCfg,
+	type CfgInstruction,
+	type LinearizedCfgBlock,
+	linearizeReachableCfg,
+	type ReachableCfgBuildResult,
+} from "../lib/disassemblyGraph";
 import { fmtHex16 } from "../lib/formatting";
 import type { SignalHandle } from "../lib/reactive";
 import {
@@ -22,27 +22,23 @@ import {
 import {
 	FixedRowVirtualTable,
 	type VirtualListingAdapter,
-	type VirtualListingViewportState,
 } from "./VirtualListingTable";
-
-const symbolBase = (sym: string | undefined): string => {
-	if (!sym) return "";
-	const i = sym.lastIndexOf("+0x");
-	return i >= 0 ? sym.slice(0, i) : sym;
-};
 
 const ROW_HEIGHT_PX = 20;
 const OVERSCAN_ROWS = 10;
 const DEFAULT_VIEWPORT_HEIGHT_PX = 320;
 const WHEEL_ROWS_PER_TICK = 2;
-const BACKWARD_LOAD_THRESHOLD_ROWS = 8;
-const FORWARD_LOAD_THRESHOLD_ROWS = 4;
 const DISASSEMBLY_PANEL_STATE_KEY =
 	"wasm-dump-debugger:disassembly-panel-state:v1";
 
 type ViewRow =
-	| { kind: "instruction"; line: DisassemblyLine; lineIndex: number }
-	| { kind: "label"; text: string };
+	| { kind: "block_label"; block: LinearizedCfgBlock; text: string }
+	| {
+			kind: "instruction";
+			block: LinearizedCfgBlock;
+			instruction: CfgInstruction;
+	  }
+	| { kind: "note"; block: LinearizedCfgBlock; text: string };
 
 type DisassemblyRowState = {
 	addressCode: HTMLElement;
@@ -52,45 +48,46 @@ type DisassemblyRowState = {
 
 const renderInstructionLine = (
 	parent: HTMLElement,
-	line: DisassemblyLine,
+	instruction: Pick<CfgInstruction, "mnemonic" | "operandSegments">,
 	onNavigate?: AddressNavigator,
 ) => {
 	parent.textContent = "";
 	const mnemonicCol = document.createElement("span");
 	mnemonicCol.className = "disasm-mnemonic-col";
-	renderSegment(mnemonicCol, { text: line.mnemonic, syntaxKind: "mnemonic" });
+	renderSegment(mnemonicCol, {
+		text: instruction.mnemonic,
+		syntaxKind: "mnemonic",
+	});
 	parent.appendChild(mnemonicCol);
-	if (line.operandSegments.length > 0) {
-		renderSegments(parent, line.operandSegments, onNavigate);
+	if (instruction.operandSegments.length > 0) {
+		renderSegments(parent, instruction.operandSegments, onNavigate);
 	}
 };
 
 const getPanelStorageKey = (panelId: string) =>
 	`${DISASSEMBLY_PANEL_STATE_KEY}:${panelId}`;
 
-const toDecodeErrorListing = (
-	message: string,
-	anchorAddress: bigint | null,
-): DebugDisassemblyListing => ({
-	status: "decode_error",
-	message,
-	anchorAddress,
-	anchorLineIndex: -1,
-	hasMorePrevious: false,
-	hasMoreNext: false,
-	lines: [],
-});
+const makeBlockLabel = (block: LinearizedCfgBlock) => {
+	const label = block.block.title || `loc_${fmtHex16(block.block.address)}`;
+	if (block.overlapSourceAddresses.length === 0) {
+		return `${label}:`;
+	}
+	const overlapList = block.overlapSourceAddresses
+		.map((address) => `0x${fmtHex16(address)}`)
+		.join(", ");
+	return `${label}: ; overlaps ${overlapList}`;
+};
 
 export class DisassemblyView implements IContentRenderer {
 	element: HTMLElement;
 	private readonly toolbar: AddressToolbar;
 	private readonly contextHandle: SignalHandle<CpuContext | null>;
-	private listing: DebugDisassemblyListing | null = null;
-	private isLoadingPrevious = false;
-	private isLoadingNext = false;
+	private cfgResult: ReachableCfgBuildResult | null = null;
+	private linearBlocks: LinearizedCfgBlock[] = [];
 	private isLoadingListing = false;
 	private isDisposed = false;
 	private reloadToken = 0;
+	private loadErrorMessage: string | null = null;
 	private viewRows: ViewRow[] = [];
 	private anchorViewIndex = -1;
 	private selectedAddress: bigint | null = null;
@@ -111,24 +108,9 @@ export class DisassemblyView implements IContentRenderer {
 		const vr = this.viewRows[rowIndex];
 		if (!vr || vr.kind !== "instruction") return;
 
-		this.selectedAddress = vr.line.address;
-		this.toolbar.selectAddress(vr.line.address);
+		this.selectedAddress = vr.instruction.address;
+		this.toolbar.selectAddress(vr.instruction.address);
 		this.requestRender(true);
-	};
-
-	private readonly onViewportChange = (
-		viewport: VirtualListingViewportState,
-	) => {
-		if (viewport.logicalStartRow <= BACKWARD_LOAD_THRESHOLD_ROWS) {
-			this.maybeLoadPreviousLines();
-		}
-
-		if (
-			viewport.logicalStartRow + viewport.viewportRows >=
-			viewport.rowCount - FORWARD_LOAD_THRESHOLD_ROWS
-		) {
-			this.maybeLoadNextLines();
-		}
 	};
 
 	constructor(element: HTMLElement, panelId: string) {
@@ -150,7 +132,6 @@ export class DisassemblyView implements IContentRenderer {
 			overscanRows: OVERSCAN_ROWS,
 			defaultViewportHeightPx: DEFAULT_VIEWPORT_HEIGHT_PX,
 			wheelRowsPerTick: WHEEL_ROWS_PER_TICK,
-			onViewportChange: this.onViewportChange,
 		});
 		this.tableNode = this.table.element;
 		this.element.appendChild(this.tableNode);
@@ -172,9 +153,9 @@ export class DisassemblyView implements IContentRenderer {
 		if (this.isDisposed) return;
 
 		this.selectedAddress = null;
-		this.listing = null;
-		this.isLoadingPrevious = false;
-		this.isLoadingNext = false;
+		this.cfgResult = null;
+		this.linearBlocks = [];
+		this.loadErrorMessage = null;
 		this.refreshView(true);
 	}
 
@@ -218,11 +199,26 @@ export class DisassemblyView implements IContentRenderer {
 			getRowClassName: (rowIndex) => {
 				const vr = this.viewRows[rowIndex];
 				if (!vr) return "";
-				if (vr.kind === "label") return "dump-disassembly-table__fn-label";
+
+				if (vr.kind === "block_label") {
+					const classes = ["dump-disassembly-table__block-label"];
+					if (vr.block.overlapSourceAddresses.length > 0) {
+						classes.push("dump-disassembly-table__block-label--overlap");
+					}
+					return classes.join(" ");
+				}
+
+				if (vr.kind === "note") {
+					return "dump-disassembly-table__note";
+				}
+
 				const classes: string[] = [];
-				if (vr.line.isCurrent) classes.push("dump-disassembly-table__current");
-				if (vr.line.address === this.selectedAddress)
+				if (vr.instruction.address === this.toolbar.currentAnchor()) {
+					classes.push("dump-disassembly-table__current");
+				}
+				if (vr.instruction.address === this.selectedAddress) {
 					classes.push("dump-disassembly-table__selected");
+				}
 				return classes.join(" ");
 			},
 		};
@@ -241,13 +237,13 @@ export class DisassemblyView implements IContentRenderer {
 
 	private async reloadListing() {
 		const token = ++this.reloadToken;
-		this.isLoadingPrevious = false;
-		this.isLoadingNext = false;
 		this.isLoadingListing = true;
+		this.loadErrorMessage = null;
 
 		const context = DBG.currentContext.state;
 		if (!context) {
-			this.listing = null;
+			this.cfgResult = null;
+			this.linearBlocks = [];
 			this.isLoadingListing = false;
 			this.recomputeRows(true);
 			this.syncControlState();
@@ -257,7 +253,8 @@ export class DisassemblyView implements IContentRenderer {
 
 		const anchorAddress = this.toolbar.currentAnchor();
 		if (anchorAddress === null) {
-			this.listing = null;
+			this.cfgResult = null;
+			this.linearBlocks = [];
 			this.isLoadingListing = false;
 			this.recomputeRows(true);
 			this.syncControlState();
@@ -266,20 +263,18 @@ export class DisassemblyView implements IContentRenderer {
 		}
 
 		try {
-			const nextListing = await buildDisassemblyListing(
-				DBG,
-				anchorAddress,
-				DBG.arch,
-			);
+			const cfg = await buildReachableCfg(DBG, anchorAddress);
 			if (this.isDisposed || token !== this.reloadToken) return;
-			this.listing = nextListing;
+			this.cfgResult = cfg;
+			this.linearBlocks = linearizeReachableCfg(cfg);
 		} catch (error) {
 			if (this.isDisposed || token !== this.reloadToken) return;
-			const message = error instanceof Error ? error.message : String(error);
-			this.listing = toDecodeErrorListing(
-				`Disassembly loading failed: ${message}`,
-				anchorAddress,
-			);
+			this.cfgResult = null;
+			this.linearBlocks = [];
+			this.loadErrorMessage =
+				error instanceof Error
+					? `Disassembly loading failed: ${error.message}`
+					: `Disassembly loading failed: ${String(error)}`;
 		} finally {
 			if (!this.isDisposed && token === this.reloadToken) {
 				this.isLoadingListing = false;
@@ -290,34 +285,12 @@ export class DisassemblyView implements IContentRenderer {
 		}
 	}
 
-	private lines(): readonly DisassemblyLine[] {
-		return this.listing?.lines ?? [];
-	}
-
-	private firstLoadedAddress() {
-		return this.lines()[0]?.address ?? null;
-	}
-
-	private lastLoadedEndAddress() {
-		const lines = this.lines();
-		const lastLine = lines[lines.length - 1];
-		if (!lastLine) return null;
-		return lastLine.address + BigInt(lastLine.byteLength);
-	}
-
-	private recomputeRows(scrollToCurrent: boolean) {
+	private recomputeRows(scrollToAnchor: boolean) {
 		this.buildViewRows();
 		this.table.setRowCount(this.viewRows.length);
-		if (!scrollToCurrent || this.viewRows.length === 0) return;
-
-		let scrollTarget = this.anchorViewIndex;
-		if (scrollTarget < 0) {
-			scrollTarget = this.viewRows.findIndex(
-				(vr) => vr.kind === "instruction" && vr.line.isCurrent,
-			);
-		}
-		if (scrollTarget >= 0) {
-			this.table.scrollToRow(Math.max(0, scrollTarget - 6));
+		if (!scrollToAnchor || this.viewRows.length === 0) return;
+		if (this.anchorViewIndex >= 0) {
+			this.table.scrollToRow(Math.max(0, this.anchorViewIndex - 6));
 		}
 	}
 
@@ -331,8 +304,11 @@ export class DisassemblyView implements IContentRenderer {
 		if (this.isLoadingListing) {
 			return "Loading disassembly...";
 		}
-		if (this.listing) {
-			return this.listing.message || "No disassembly instructions available.";
+		if (this.loadErrorMessage) {
+			return this.loadErrorMessage;
+		}
+		if (this.cfgResult) {
+			return "No reachable instructions available.";
 		}
 		if (
 			!this.toolbar.followInstructionPointer &&
@@ -351,7 +327,7 @@ export class DisassemblyView implements IContentRenderer {
 
 	private focusAddress(address: bigint): boolean {
 		const idx = this.viewRows.findIndex(
-			(vr) => vr.kind === "instruction" && vr.line.address === address,
+			(vr) => vr.kind === "instruction" && vr.instruction.address === address,
 		);
 		if (idx < 0) return false;
 		this.selectedAddress = address;
@@ -361,114 +337,51 @@ export class DisassemblyView implements IContentRenderer {
 		return true;
 	}
 
-	private async maybeLoadPreviousLines() {
-		if (this.isDisposed || this.isLoadingPrevious || this.isLoadingNext) return;
-
-		const listing = this.listing;
-		const beforeAddress = this.firstLoadedAddress();
-		if (!listing || beforeAddress === null || !listing.hasMorePrevious) return;
-
-		this.isLoadingPrevious = true;
-
-		try {
-			const currentListing = this.listing;
-			if (
-				!currentListing ||
-				currentListing.lines.length === 0 ||
-				currentListing.lines[0]?.address !== beforeAddress
-			) {
-				return;
-			}
-
-			const previousLoad = await loadPreviousDisassemblyLines(
-				DBG,
-				beforeAddress,
-				DBG.arch,
-			);
-			currentListing.hasMorePrevious = previousLoad.hasMoreBefore;
-			if (previousLoad.lines.length === 0) return;
-
-			currentListing.lines.unshift(...previousLoad.lines);
-			if (currentListing.anchorLineIndex >= 0) {
-				currentListing.anchorLineIndex += previousLoad.lines.length;
-			}
-			const prevViewCount = this.viewRows.length;
-			this.buildViewRows();
-			const viewDelta = this.viewRows.length - prevViewCount;
-			this.table.setRowCount(this.viewRows.length);
-			this.table.shiftViewportRows(viewDelta);
-		} catch {
-			const currentListing = this.listing;
-			if (currentListing) {
-				currentListing.hasMorePrevious = false;
-			}
-		} finally {
-			if (!this.isDisposed) {
-				this.isLoadingPrevious = false;
-			}
-		}
-	}
-
-	private async maybeLoadNextLines() {
-		if (this.isDisposed || this.isLoadingPrevious || this.isLoadingNext) return;
-
-		const listing = this.listing;
-		const startAddress = this.lastLoadedEndAddress();
-		if (!listing || startAddress === null || !listing.hasMoreNext) return;
-
-		this.isLoadingNext = true;
-
-		try {
-			const currentListing = this.listing;
-			if (!currentListing || this.lastLoadedEndAddress() !== startAddress)
-				return;
-
-			const nextLoad = await loadNextDisassemblyLines(
-				DBG,
-				startAddress,
-				DBG.arch,
-			);
-			currentListing.hasMoreNext = nextLoad.hasMoreAfter;
-			if (nextLoad.lines.length === 0) return;
-
-			currentListing.lines.push(...nextLoad.lines);
-			this.buildViewRows();
-			this.table.setRowCount(this.viewRows.length);
-			this.requestRender(true);
-		} catch {
-			const currentListing = this.listing;
-			if (currentListing) {
-				currentListing.hasMoreNext = false;
-			}
-		} finally {
-			if (!this.isDisposed) {
-				this.isLoadingNext = false;
-			}
-		}
-	}
-
 	private requestRender(forceRows: boolean) {
 		this.table.requestRender(forceRows);
 	}
 
 	private buildViewRows() {
-		const lines = this.lines();
 		const rows: ViewRow[] = [];
-		const anchorLineIndex = this.listing?.anchorLineIndex ?? -1;
+		const anchorAddress = this.toolbar.currentAnchor();
 		let anchorViewIndex = -1;
-		let prevSymBase = "";
 
-		for (let i = 0; i < lines.length; i++) {
-			const line = lines[i];
-			const curSymBase = symbolBase(line.symbol);
-			if (curSymBase && curSymBase !== prevSymBase) {
-				rows.push({ kind: "label", text: curSymBase + ":" });
+		for (const block of this.linearBlocks) {
+			const labelRowIndex = rows.length;
+			rows.push({
+				kind: "block_label",
+				block,
+				text: makeBlockLabel(block),
+			});
+			if (
+				anchorViewIndex < 0 &&
+				block.block.address === anchorAddress &&
+				block.block.instructions.length === 0
+			) {
+				anchorViewIndex = labelRowIndex;
 			}
-			if (i === anchorLineIndex) {
-				anchorViewIndex = rows.length;
+
+			for (const instruction of block.block.instructions) {
+				if (anchorViewIndex < 0 && instruction.address === anchorAddress) {
+					anchorViewIndex = rows.length;
+				}
+				rows.push({ kind: "instruction", block, instruction });
 			}
-			rows.push({ kind: "instruction", line, lineIndex: i });
-			prevSymBase = curSymBase;
+
+			if (block.block.error) {
+				if (
+					anchorViewIndex < 0 &&
+					block.block.address === anchorAddress &&
+					block.block.instructions.length === 0
+				) {
+					anchorViewIndex = rows.length;
+				}
+				rows.push({
+					kind: "note",
+					block,
+					text: block.block.error,
+				});
+			}
 		}
 
 		this.viewRows = rows;
@@ -485,18 +398,29 @@ export class DisassemblyView implements IContentRenderer {
 			return;
 		}
 
-		if (vr.kind === "label") {
-			row.addressCode.textContent = vr.text;
-			row.addressCode.title = "";
+		if (vr.kind === "block_label") {
+			row.addressCode.textContent = fmtHex16(vr.block.block.address);
+			row.addressCode.title = vr.block.block.title;
 			row.bytesCode.textContent = "";
-			row.instructionCode.textContent = "";
+			row.instructionCode.textContent = vr.text;
 			return;
 		}
 
-		const line = vr.line;
-		row.addressCode.textContent = fmtHex16(line.address);
-		row.addressCode.title = line.symbol ?? "";
-		row.bytesCode.textContent = line.bytesHex;
-		renderInstructionLine(row.instructionCode, line, this.navigateToAddress);
+		if (vr.kind === "note") {
+			row.addressCode.textContent = "";
+			row.addressCode.title = "";
+			row.bytesCode.textContent = "";
+			row.instructionCode.textContent = vr.text;
+			return;
+		}
+
+		row.addressCode.textContent = fmtHex16(vr.instruction.address);
+		row.addressCode.title = vr.block.block.title;
+		row.bytesCode.textContent = vr.instruction.bytesHex;
+		renderInstructionLine(
+			row.instructionCode,
+			vr.instruction,
+			this.navigateToAddress,
+		);
 	}
 }

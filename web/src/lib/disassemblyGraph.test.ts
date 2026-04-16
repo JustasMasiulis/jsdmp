@@ -1,11 +1,12 @@
 import { afterAll, beforeAll, describe, expect, it } from "bun:test";
-import { ProcessorArch } from "./debug_interface";
-import type { DisassemblyMemorySource } from "./debugDisassembly";
+import { type DebugInterface, ProcessorArch } from "./debug_interface";
 import {
 	buildCfg2,
 	buildCfgInstructionLine,
 	buildCfgInstructionLines,
 	buildCfgTextLinesFromLabel,
+	buildReachableCfg,
+	linearizeReachableCfg,
 } from "./disassemblyGraph";
 import type { InstrTextSegment } from "./instructionParser";
 import { Signal } from "./reactive";
@@ -20,7 +21,7 @@ type MemorySegment = {
 	bytes: Uint8Array;
 };
 
-const makeSource = (segments: MemorySegment[]): DisassemblyMemorySource => ({
+const makeSource = (segments: MemorySegment[]): DebugInterface => ({
 	threads: new Signal([]),
 	modules: new Signal([]),
 	unloadedModules: new Signal([]),
@@ -358,6 +359,70 @@ describe("buildCfg2", () => {
 					edge.kind === "unconditional",
 			),
 		).toBe(true);
+	});
+
+	it("keeps a reachable block that starts in the middle of another instruction", async () => {
+		const entryAddress = 0x1000n;
+		// 1000: 75 05             jne 0x1007
+		// 1002: b8 48 31 c0 c3    mov eax, 0xc3c03148
+		// 1007: eb fa             jmp 0x1003
+		//
+		// 0x1003 lands in the middle of the mov immediate:
+		// 1003: 48 31 c0          xor rax, rax
+		// 1006: c3                ret
+		const bytes = new Uint8Array([
+			0x75, 0x05, 0xb8, 0x48, 0x31, 0xc0, 0xc3, 0xeb, 0xfa,
+		]);
+
+		const reachable = await buildReachableCfg(
+			makeSource([{ start: entryAddress, bytes }]),
+			entryAddress,
+		);
+
+		expect(reachable.blocks.map((block) => block.id).sort()).toEqual([
+			"block:1000",
+			"block:1002",
+			"block:1003",
+			"block:1007",
+		]);
+
+		const block1002 = reachable.blocks.find(
+			(block) => block.id === "block:1002",
+		);
+		expect(
+			block1002?.instructions.map((instruction) => instruction.address),
+		).toEqual([0x1002n]);
+		expect(block1002?.instructions[0]?.bytesHex).toBe("B8 48 31 C0 C3");
+
+		const block1003 = reachable.blocks.find(
+			(block) => block.id === "block:1003",
+		);
+		expect(
+			block1003?.instructions.map((instruction) => instruction.address),
+		).toEqual([0x1003n, 0x1006n]);
+
+		const linearized = linearizeReachableCfg(reachable);
+		expect(
+			linearized.find((block) => block.block.id === "block:1003")
+				?.overlapSourceAddresses,
+		).toEqual([0x1002n]);
+
+		const graphResult = await buildCfg2(
+			makeSource([{ start: entryAddress, bytes }]),
+			entryAddress,
+		);
+		expect(
+			graphResult.blocks.find((block) => block.id === "block:1003")?.lines,
+		).toEqual(
+			expect.arrayContaining([
+				expect.objectContaining({
+					text: "0000000000001003  xor rax, rax",
+				}),
+				expect.objectContaining({
+					text: "0000000000001006  ret",
+				}),
+			]),
+		);
 	});
 
 	it("no block has overlapping instructions with another block", async () => {
