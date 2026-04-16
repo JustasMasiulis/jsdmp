@@ -35,7 +35,6 @@ export type EdgeDescriptor = {
 
 export type NodeDescriptor = {
 	id: string; // typically label for the bb
-	label: string; // really the source
 };
 
 export type AnnotatedNodeDescriptor = NodeDescriptor & {
@@ -91,12 +90,15 @@ type GridCoordinate = {
 
 type EdgeCoordinate = Coordinate & GridCoordinate;
 
+type SegmentSide = "left" | "right" | "neutral";
+
 type EdgeSegment = {
 	start: EdgeCoordinate;
 	end: EdgeCoordinate;
 	horizontalOffset: number;
 	verticalOffset: number;
 	type: SegmentType;
+	preferredSide: SegmentSide;
 	less_than(other: EdgeSegment): boolean;
 };
 
@@ -151,7 +153,9 @@ type RowDescriptor = {
 };
 type EdgeColumnMetadata = {
 	subcolumns: number;
-	intervals: IntervalTree<EdgeSegment>[]; // pointers to segments
+	intervals: IntervalTree<EdgeSegment>[]; // neutral-anchored vertical segments
+	leftIntervals: IntervalTree<EdgeSegment>[]; // anchored against gutter's left bound
+	rightIntervals: IntervalTree<EdgeSegment>[]; // anchored against gutter's right bound
 };
 type EdgeRowMetadata = {
 	subrows: number;
@@ -574,6 +578,8 @@ export class GraphLayoutCore {
 				totalOffset: 0,
 				subcolumns: 0,
 				intervals: [],
+				leftIntervals: [],
+				rightIntervals: [],
 			}));
 	}
 
@@ -725,6 +731,7 @@ export class GraphLayoutCore {
 			verticalOffset: 0,
 			type:
 				start_col === end_col ? SegmentType.Vertical : SegmentType.Horizontal,
+			preferredSide: "neutral",
 			less_than(other: EdgeSegment): boolean {
 				if (this.start.row !== other.start.row)
 					return this.start.row < other.start.row;
@@ -749,13 +756,18 @@ export class GraphLayoutCore {
 				[block.row + 1, edge.mainColumn],
 			),
 		);
-		// vertical segment down the main column
-		edge.path.push(
-			makeSegment(
-				[block.row + 1, edge.mainColumn],
-				[target.row, edge.mainColumn],
-			),
+		// vertical segment down the main column; its preferred side tells the gutter lane
+		// assignment and coordinate tightening which bound to pack against.
+		const mainVertical = makeSegment(
+			[block.row + 1, edge.mainColumn],
+			[target.row, edge.mainColumn],
 		);
+		const s = block.col + 1;
+		const t = target.col + 1;
+		const m = edge.mainColumn;
+		if (s > m && t > m) mainVertical.preferredSide = "right";
+		else if (s < m && t < m) mainVertical.preferredSide = "left";
+		edge.path.push(mainVertical);
 		// horizontal segment over to the target column
 		edge.path.push(
 			makeSegment([target.row, edge.mainColumn], [target.row, target.col + 1]),
@@ -820,6 +832,9 @@ export class GraphLayoutCore {
 				// VV -> V
 				// HH -> H
 				if (prevSegment.type === segment.type) {
+					if (prevSegment.preferredSide === "neutral") {
+						prevSegment.preferredSide = segment.preferredSide;
+					}
 					if (
 						(prevSegment.type === SegmentType.Vertical &&
 							prevSegment.start.col !== segment.start.col) ||
@@ -1008,8 +1023,16 @@ export class GraphLayoutCore {
 			const { segment } = segmentEntry;
 			if (segment.type === SegmentType.Vertical) {
 				const col = this.edgeColumns[segment.start.col];
+				// Route each vertical into the pool matching its preferred side so lane
+				// numbering within each anchor is independent.
+				const pool =
+					segment.preferredSide === "left"
+						? col.leftIntervals
+						: segment.preferredSide === "right"
+							? col.rightIntervals
+							: col.intervals;
 				let inserted = false;
-				for (const tree of col.intervals) {
+				for (const tree of pool) {
 					if (!tree.intersect_any([segment.start.row, segment.end.row])) {
 						tree.insert([segment.start.row, segment.end.row], segment);
 						inserted = true;
@@ -1018,7 +1041,7 @@ export class GraphLayoutCore {
 				}
 				if (!inserted) {
 					const tree = new IntervalTree<EdgeSegment>();
-					col.intervals.push(tree);
+					pool.push(tree);
 					col.subcolumns++;
 					tree.insert([segment.start.row, segment.end.row], segment);
 				}
@@ -1045,15 +1068,42 @@ export class GraphLayoutCore {
 
 	assignEdgeSegments() {
 		this.computeEdgeSegmentIntervals();
-		// Assign offsets
+		// Assign offsets. Lane index within each of the three pools (left-anchored,
+		// right-anchored, neutral) is independent. The gutter is wide enough to hold every
+		// lane across all pools; tightenedVerticalSegmentX then reads the segment's pool to
+		// pack lanes against the correct bound.
 		for (const edgeColumn of this.edgeColumns) {
+			const totalLanes =
+				edgeColumn.leftIntervals.length +
+				edgeColumn.intervals.length +
+				edgeColumn.rightIntervals.length;
 			edgeColumn.width = Math.max(
-				EDGE_SPACING + edgeColumn.intervals.length * EDGE_SPACING,
+				EDGE_SPACING + totalLanes * EDGE_SPACING,
 				2 * EDGE_SPACING,
 			);
-			for (const [i, intervalTree] of edgeColumn.intervals.entries()) {
-				for (const segment of intervalTree.values) {
+			for (const [i, tree] of edgeColumn.leftIntervals.entries()) {
+				// Left pool sort is shortest-first (LEFTU kind): tree 0 holds the shortest wrap
+				// and gets the smallest offset, placing it closest to leftBound — which is the
+				// innermost position for a left-anchored V (nearest the block being wrapped).
+				for (const segment of tree.values) {
 					segment.horizontalOffset = EDGE_SPACING * (i + 1);
+				}
+			}
+			const rightCount = edgeColumn.rightIntervals.length;
+			for (const [i, tree] of edgeColumn.rightIntervals.entries()) {
+				// Right pool sort is longest-first (RIGHTU kind): tree 0 holds the longest
+				// wrap. Reverse the offset numbering so the longest wrap gets the largest
+				// offset and ends up farthest from rightBound — the outermost position when
+				// packed against the right bound (nested wraps look naturally concentric).
+				const offset = EDGE_SPACING * (rightCount - i);
+				for (const segment of tree.values) {
+					segment.horizontalOffset = offset;
+				}
+			}
+			for (const [i, tree] of edgeColumn.intervals.entries()) {
+				for (const segment of tree.values) {
+					segment.horizontalOffset =
+						EDGE_SPACING * (edgeColumn.leftIntervals.length + i + 1);
 				}
 			}
 		}
@@ -1123,6 +1173,69 @@ export class GraphLayoutCore {
 		block.coordinates.y = this.blockRows[block.row].totalOffset;
 	}
 
+	tightenedVerticalSegmentX(segment: EdgeSegment): number {
+		// A vertical edge segment was placed at `edgeColumn.totalOffset + horizontalOffset`,
+		// which uses the column's max block-width across every row. When a wide block in the
+		// same row as the segment widens the adjacent column, the segment sits far from the
+		// narrow block the edge is actually routing around.
+		//
+		// The segment's preferredSide (set at edge construction) already records which bound
+		// to pack against. Here we recompute the row-range-local clearance: scan blocks whose
+		// row is in the segment's row range and classify each by gutter side. Lane numbering
+		// is independent per pool (left / right / neutral) so lanes from the same pool always
+		// stack cleanly from the same side.
+		const c = segment.start.col;
+		const gutter = this.edgeColumns[c];
+		if (segment.preferredSide === "neutral") {
+			return gutter.totalOffset + segment.horizontalOffset;
+		}
+		const r1 = Math.min(segment.start.row, segment.end.row);
+		const r2 = Math.max(segment.start.row, segment.end.row);
+		const gutterCenter = gutter.totalOffset + gutter.width / 2;
+		let leftBound = -Infinity;
+		let rightBound = Number.POSITIVE_INFINITY;
+		for (const other of this.blocks) {
+			if (other.row < r1 || other.row >= r2) continue;
+			const leftEdge = other.coordinates.x;
+			const rightEdge = leftEdge + other.data.width;
+			const center = (leftEdge + rightEdge) / 2;
+			if (center <= gutterCenter) {
+				if (rightEdge > leftBound) leftBound = rightEdge;
+			} else if (leftEdge < rightBound) {
+				rightBound = leftEdge;
+			}
+		}
+		if (leftBound === -Infinity) leftBound = gutter.totalOffset;
+		if (rightBound === Number.POSITIVE_INFINITY) {
+			rightBound = gutter.totalOffset + gutter.width;
+		}
+		const halfSpacing = EDGE_SPACING / 2;
+		if (segment.preferredSide === "right") {
+			const tightX = rightBound - segment.horizontalOffset;
+			if (tightX >= leftBound + halfSpacing) return tightX;
+			return leftBound + halfSpacing;
+		}
+		// preferredSide === "left"
+		const tightX = leftBound + segment.horizontalOffset;
+		if (tightX + halfSpacing <= rightBound) return tightX;
+		return rightBound - halfSpacing;
+	}
+
+	isPortAnchoredVertical(
+		segment: EdgeSegment,
+		source: Block,
+		edge: Edge,
+	): boolean {
+		if (segment.type !== SegmentType.Vertical) return false;
+		const target = this.blocks[edge.dest];
+		const atSourcePort =
+			segment.start.col === source.col + 1 &&
+			segment.start.row === source.row + 1;
+		const atTargetPort =
+			segment.end.col === target.col + 1 && segment.end.row === target.row;
+		return atSourcePort || atTargetPort;
+	}
+
 	computeEdgeCoordinates(block: Block, edge: Edge) {
 		if (edge.path.length === 1) {
 			// Special case: Direct dropdown
@@ -1179,6 +1292,19 @@ export class GraphLayoutCore {
 					this.edgeRows[target.row].totalOffset +
 					this.edgeRows[target.row].height;
 			}
+			// Tighten non-port vertical segments so a narrow block at the segment's rows
+			// doesn't inherit a wide block's column width. Port-anchored verticals must stay
+			// at their block's port x, so they are skipped.
+			for (const segment of edge.path) {
+				if (
+					segment.type !== SegmentType.Vertical ||
+					this.isPortAnchoredVertical(segment, block, edge)
+				)
+					continue;
+				const tightX = this.tightenedVerticalSegmentX(segment);
+				segment.start.x = tightX;
+				segment.end.x = tightX;
+			}
 			// apply offsets to neighbor segments
 			for (let i = 0; i < edge.path.length; i++) {
 				const segment = edge.path[i];
@@ -1210,9 +1336,13 @@ export class GraphLayoutCore {
 		this.updateBlockDimensions();
 		this.computeGridDimensions();
 		this.computeGridOffsets();
-		// Compute block coordinates and edge paths
+		// Block coordinates must be finalized before any edge coordinates: the edge
+		// tightening pass reads every block's final x range to decide how close a vertical
+		// segment can sit to obstacles at its specific rows.
 		for (const block of this.blocks) {
 			this.computeBlockCoordinates(block);
+		}
+		for (const block of this.blocks) {
 			for (const edge of block.edges) {
 				this.computeEdgeCoordinates(block, edge);
 			}

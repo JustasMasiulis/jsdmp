@@ -48,7 +48,6 @@ const cfgResultToAnnotatedDescriptor = (
 		const dims = estimateNodeDimensions(block);
 		return {
 			id: block.id,
-			label: block.lines.map((line) => line.text).join("\n"),
 			width: dims.width,
 			height: dims.height,
 		};

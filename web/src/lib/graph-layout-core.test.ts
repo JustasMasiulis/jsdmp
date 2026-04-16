@@ -6,7 +6,6 @@ type TestBlock = GraphLayoutCore["blocks"][number];
 const makeBlock = (treeEdges: number[] = []): TestBlock => ({
 	data: {
 		id: "",
-		label: "",
 		width: 0,
 		height: 0,
 	},

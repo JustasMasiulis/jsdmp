@@ -30,7 +30,6 @@ function runLayout(input: LayoutInput): LayoutResult {
 	for (let i = 0; i < input.nodeCount; i++) {
 		cfg.nodes.push({
 			id: String(i),
-			label: "",
 			width: input.nodeWidths[i],
 			height: input.nodeHeights[i],
 		});
@@ -694,7 +693,6 @@ function layoutWidth(input: LayoutInput): number {
 	for (let i = 0; i < input.nodeCount; i++) {
 		cfg.nodes.push({
 			id: String(i),
-			label: "",
 			width: input.nodeWidths[i],
 			height: input.nodeHeights[i],
 		});
