@@ -388,6 +388,31 @@ Design language notes for future re-additions:
 		background: color-mix(in oklab, var(--color-bg2) 80%, white);
 	}
 
+	.dump-disassembly-table__sticky-header {
+		display: flex;
+		align-items: center;
+		gap: 0.75rem;
+		height: 24px;
+		padding: 0 0.5rem;
+		border-bottom: 1px solid var(--color-border);
+		background: color-mix(in oklab, var(--color-bg2) 80%, white);
+		font-size: 12px;
+		white-space: nowrap;
+		overflow: hidden;
+	}
+
+	.dump-disassembly-table__sticky-header-address {
+		color: var(--color-fg2);
+		white-space: pre;
+	}
+
+	.dump-disassembly-table__sticky-header-symbol {
+		color: var(--color-fg);
+		font-weight: 600;
+		overflow: hidden;
+		text-overflow: ellipsis;
+	}
+
 	.memory-view-table__row.dump-disassembly-table__block-label code {
 		color: var(--color-fg2);
 		font-weight: 600;
@@ -632,6 +657,7 @@ Design language notes for future re-additions:
 
 	.memory-view-table__row {
 		height: var(--memory-view-row-height, 20px);
+		line-height: var(--memory-view-row-height, 20px);
 	}
 
 	.memory-view-table__cell {

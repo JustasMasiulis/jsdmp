@@ -12,7 +12,7 @@ import {
 	linearizeReachableCfg,
 	type ReachableCfgBuildResult,
 } from "../lib/disassemblyGraph";
-import { fmtHex16 } from "../lib/formatting";
+import { fmtHex, fmtHex16 } from "../lib/formatting";
 import type { SignalHandle } from "../lib/reactive";
 import {
 	type AddressNavigator,
@@ -68,7 +68,7 @@ const getPanelStorageKey = (panelId: string) =>
 	`${DISASSEMBLY_PANEL_STATE_KEY}:${panelId}`;
 
 const makeBlockLabel = (block: LinearizedCfgBlock) => {
-	const label = block.block.title || `loc_${fmtHex16(block.block.address)}`;
+	const label = `loc_${fmtHex(block.block.address)}`;
 	if (block.overlapSourceAddresses.length === 0) {
 		return `${label}:`;
 	}
@@ -91,8 +91,13 @@ export class DisassemblyView implements IContentRenderer {
 	private viewRows: ViewRow[] = [];
 	private anchorViewIndex = -1;
 	private selectedAddress: bigint | null = null;
+	private bytesColumnWidthCh = 0;
+	private addressColumnWidthCh = 16;
 
 	private readonly tableNode: HTMLDivElement;
+	private readonly stickyHeader: HTMLDivElement;
+	private readonly stickyAddressCell: HTMLElement;
+	private readonly stickySymbolCell: HTMLElement;
 	private readonly table: FixedRowVirtualTable<DisassemblyRowState>;
 	private readonly navigateToAddress = (addr: bigint) =>
 		this.toolbar.navigateToAddress(addr);
@@ -134,6 +139,18 @@ export class DisassemblyView implements IContentRenderer {
 			wheelRowsPerTick: WHEEL_ROWS_PER_TICK,
 		});
 		this.tableNode = this.table.element;
+
+		this.stickyHeader = document.createElement("div");
+		this.stickyHeader.className = "dump-disassembly-table__sticky-header";
+		this.stickyHeader.hidden = true;
+		this.stickyAddressCell = document.createElement("code");
+		this.stickyAddressCell.className =
+			"dump-disassembly-table__sticky-header-address";
+		this.stickySymbolCell = document.createElement("code");
+		this.stickySymbolCell.className =
+			"dump-disassembly-table__sticky-header-symbol";
+		this.stickyHeader.append(this.stickyAddressCell, this.stickySymbolCell);
+		this.element.appendChild(this.stickyHeader);
 		this.element.appendChild(this.tableNode);
 
 		this.element.tabIndex = 0;
@@ -187,7 +204,7 @@ export class DisassemblyView implements IContentRenderer {
 					cellClassName: "memory-view-table__cell--instruction",
 				},
 			],
-			gridTemplateColumns: "18ch 34ch minmax(36ch, 1fr)",
+			gridTemplateColumns: `${this.addressColumnWidthCh}ch 0ch minmax(36ch, 1fr)`,
 			createRowState: (cells) => ({
 				addressCode: cells[0].code,
 				bytesCode: cells[1].code,
@@ -298,6 +315,28 @@ export class DisassemblyView implements IContentRenderer {
 		const hasRows = this.viewRows.length > 0;
 		this.toolbar.syncControlState(hasRows);
 		this.tableNode.hidden = !hasRows;
+		this.syncStickyHeader(hasRows);
+	}
+
+	private syncStickyHeader(hasRows: boolean) {
+		const first = hasRows ? this.linearBlocks[0] : undefined;
+		if (!first) {
+			this.stickyHeader.hidden = true;
+			return;
+		}
+		this.stickyHeader.hidden = false;
+		const address = this.formatAddress(first.block.address);
+		if (this.stickyAddressCell.textContent !== address) {
+			this.stickyAddressCell.textContent = address;
+		}
+		if (this.stickySymbolCell.textContent !== first.block.title) {
+			this.stickySymbolCell.textContent = first.block.title;
+			this.stickySymbolCell.title = first.block.title;
+		}
+	}
+
+	private formatAddress(value: bigint): string {
+		return fmtHex(value, this.addressColumnWidthCh, " ");
 	}
 
 	private emptyMessage() {
@@ -345,6 +384,8 @@ export class DisassemblyView implements IContentRenderer {
 		const rows: ViewRow[] = [];
 		const anchorAddress = this.toolbar.currentAnchor();
 		let anchorViewIndex = -1;
+		let maxBytesLen = 0;
+		let maxAddrLen = 0;
 
 		for (const block of this.linearBlocks) {
 			const labelRowIndex = rows.length;
@@ -353,6 +394,8 @@ export class DisassemblyView implements IContentRenderer {
 				block,
 				text: makeBlockLabel(block),
 			});
+			const labelAddrLen = block.block.address.toString(16).length;
+			if (labelAddrLen > maxAddrLen) maxAddrLen = labelAddrLen;
 			if (
 				anchorViewIndex < 0 &&
 				block.block.address === anchorAddress &&
@@ -365,6 +408,11 @@ export class DisassemblyView implements IContentRenderer {
 				if (anchorViewIndex < 0 && instruction.address === anchorAddress) {
 					anchorViewIndex = rows.length;
 				}
+				if (instruction.bytesHex.length > maxBytesLen) {
+					maxBytesLen = instruction.bytesHex.length;
+				}
+				const addrLen = instruction.address.toString(16).length;
+				if (addrLen > maxAddrLen) maxAddrLen = addrLen;
 				rows.push({ kind: "instruction", block, instruction });
 			}
 
@@ -386,6 +434,18 @@ export class DisassemblyView implements IContentRenderer {
 
 		this.viewRows = rows;
 		this.anchorViewIndex = anchorViewIndex;
+
+		const addrWidth = maxAddrLen > 0 ? maxAddrLen : this.addressColumnWidthCh;
+		if (
+			addrWidth !== this.addressColumnWidthCh ||
+			maxBytesLen !== this.bytesColumnWidthCh
+		) {
+			this.addressColumnWidthCh = addrWidth;
+			this.bytesColumnWidthCh = maxBytesLen;
+			this.table.setGridTemplateColumns(
+				`${addrWidth}ch ${maxBytesLen}ch minmax(36ch, 1fr)`,
+			);
+		}
 	}
 
 	private fillRow(row: DisassemblyRowState, rowIndex: number) {
@@ -399,7 +459,7 @@ export class DisassemblyView implements IContentRenderer {
 		}
 
 		if (vr.kind === "block_label") {
-			row.addressCode.textContent = fmtHex16(vr.block.block.address);
+			row.addressCode.textContent = this.formatAddress(vr.block.block.address);
 			row.addressCode.title = vr.block.block.title;
 			row.bytesCode.textContent = "";
 			row.instructionCode.textContent = vr.text;
@@ -414,7 +474,7 @@ export class DisassemblyView implements IContentRenderer {
 			return;
 		}
 
-		row.addressCode.textContent = fmtHex16(vr.instruction.address);
+		row.addressCode.textContent = this.formatAddress(vr.instruction.address);
 		row.addressCode.title = vr.block.block.title;
 		row.bytesCode.textContent = vr.instruction.bytesHex;
 		renderInstructionLine(

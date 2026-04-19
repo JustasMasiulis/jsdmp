@@ -121,10 +121,7 @@ export class FixedRowVirtualTable<TRowState> {
 		this.virtualPanelNode = dom.virtualPanelNode;
 		this.rowsNode = dom.rowsNode;
 
-		this.tableNode.style.setProperty(
-			"--memory-view-grid-template",
-			this.adapter.gridTemplateColumns,
-		);
+		this.setGridTemplateColumns(this.adapter.gridTemplateColumns);
 		this.tableNode.style.setProperty(
 			"--memory-view-row-height",
 			`${this.rowHeightPx}px`,
@@ -148,6 +145,10 @@ export class FixedRowVirtualTable<TRowState> {
 
 	get element() {
 		return this.tableNode;
+	}
+
+	setGridTemplateColumns(template: string) {
+		this.tableNode.style.setProperty("--memory-view-grid-template", template);
 	}
 
 	getLogicalStartRow() {
