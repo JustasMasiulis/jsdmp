@@ -132,6 +132,15 @@ export async function fnentCommand(
 	const ctx = dbg.currentContext.state;
 	const trimmed = args.trim();
 	let address: bigint;
+	const lines: string[] = [];
+	const intoError = (message: string) => {
+		lines.push(message);
+		return {
+			lines,
+			isError: true,
+		};
+	};
+
 	if (!trimmed) {
 		if (!ctx) return { lines: ["No thread context available"], isError: true };
 		address = ctx.ip;
@@ -141,39 +150,52 @@ export async function fnentCommand(
 
 	const mod = findModuleForAddress(address, dbg.modules.state);
 	if (!mod)
-		return {
-			lines: [
-				`No module found for address ${fmtHex(address, 16).toLowerCase()}`,
-			],
-			isError: true,
-		};
+		return intoError(
+			`No module found for address ${fmtHex(address, 16).toLowerCase()}`,
+		);
 
-	const pe = await getModulePeFile(mod);
-	if (!pe)
-		return {
-			lines: [`Failed to load PE for ${basename(mod.path)}`],
-			isError: true,
-		};
+	let pe: Awaited<ReturnType<typeof getModulePeFile>>;
+	try {
+		pe = await getModulePeFile(mod);
+	} catch (e) {
+		return intoError(
+			`Failed to load PE for ${basename(mod.path)}: ${e instanceof Error ? e.message : String(e)}`,
+		);
+	}
+	if (!pe) return intoError(`Failed to load PE for ${basename(mod.path)}`);
 
 	const reader = (addr: bigint, size: number) => dbg.read(addr, size);
 	const rva = Number(address - mod.address);
 
-	const exactEntry = await pe.findRuntimeFunction(reader, mod.address, rva);
+	let exactEntry: RuntimeFunction | null;
+	try {
+		exactEntry = await pe.findRuntimeFunction(reader, mod.address, rva);
+	} catch (e) {
+		return intoError(
+			`Failed to find runtime function for ${fmtHex(address, 16).toLowerCase()}: ${e instanceof Error ? e.message : String(e)}`,
+		);
+	}
 	if (!exactEntry)
-		return {
-			lines: [
-				`No function entry for ${fmtHex(address, 16).toLowerCase()} (leaf function)`,
-			],
-			isError: true,
-		};
+		return intoError(
+			`No function entry for ${fmtHex(address, 16).toLowerCase()} (leaf function)`,
+		);
 
-	const exactInfo = await readUnwindInfo(
-		reader,
-		mod.address,
-		exactEntry.unwindInfoAddress,
-	);
+	let exactInfo: UnwindInfo | null;
+	try {
+		exactInfo = await readUnwindInfo(
+			reader,
+			mod.address,
+			exactEntry.unwindInfoAddress,
+		);
+	} catch (e) {
+		return intoError(
+			`Failed to read unwind info: ${e instanceof Error ? e.message : String(e)}`,
+		);
+	}
 	if (!exactInfo)
 		return { lines: ["Failed to read unwind info"], isError: true };
+
+	let isError = false;
 
 	let rootEntry = exactEntry;
 	let rootInfo = exactInfo;
@@ -184,17 +206,62 @@ export async function fnentCommand(
 		depth < 32
 	) {
 		rootEntry = rootInfo.chainedFunctionEntry;
-		const nextInfo = await readUnwindInfo(
-			reader,
-			mod.address,
-			rootEntry.unwindInfoAddress,
-		);
+		let nextInfo: UnwindInfo | null;
+		try {
+			nextInfo = await readUnwindInfo(
+				reader,
+				mod.address,
+				rootEntry.unwindInfoAddress,
+			);
+		} catch (e) {
+			return intoError(
+				`Error following chain at depth ${depth}: ${e instanceof Error ? e.message : String(e)}`,
+			);
+		}
 		if (!nextInfo) break;
 		rootInfo = nextInfo;
 		depth++;
 	}
 
-	const allEntries = await pe.getAllRuntimeFunctions(reader, mod.address);
+	if (
+		exactEntry.beginAddress !== rootEntry.beginAddress ||
+		exactEntry.endAddress !== rootEntry.endAddress
+	) {
+		lines.push(
+			`Address ${fmtHex(address, 16).toLowerCase()} is in entry 0x${fmtHex(exactEntry.beginAddress, 8).toLowerCase()}..0x${fmtHex(exactEntry.endAddress, 8).toLowerCase()}, which chains to root:`,
+		);
+		lines.push("");
+	}
+
+	let rootSymbol: string;
+	try {
+		rootSymbol = await resolveSymbol(
+			mod.address + BigInt(rootEntry.beginAddress),
+			dbg.modules.state,
+		);
+	} catch (e) {
+		rootSymbol = fmtHex(
+			mod.address + BigInt(rootEntry.beginAddress),
+			16,
+		).toLowerCase();
+		lines.push(
+			`Error resolving symbol: ${e instanceof Error ? e.message : String(e)}`,
+		);
+		isError = true;
+	}
+	lines.push(`${rootSymbol}:`);
+	formatFunctionEntry(rootEntry, rootInfo, lines);
+
+	let allEntries: RuntimeFunction[];
+	try {
+		allEntries = await pe.getAllRuntimeFunctions(reader, mod.address);
+	} catch (e) {
+		lines.push("");
+		lines.push(
+			`Error enumerating runtime functions for child entries: ${e instanceof Error ? e.message : String(e)}`,
+		);
+		return { lines, isError: true };
+	}
 
 	const unwindInfoCache = new Map<number, UnwindInfo | null>();
 	unwindInfoCache.set(exactEntry.unwindInfoAddress, exactInfo);
@@ -212,7 +279,14 @@ export async function fnentCommand(
 	for (const entry of allEntries) {
 		if (entry.beginAddress === rootEntry.beginAddress) continue;
 
-		const info = await getCachedUnwindInfo(entry.unwindInfoAddress);
+		let info: UnwindInfo | null;
+		try {
+			info = await getCachedUnwindInfo(entry.unwindInfoAddress);
+		} catch (e) {
+			return intoError(
+				`Error reading unwind info for entry 0x${fmtHex(entry.beginAddress, 8).toLowerCase()}: ${e instanceof Error ? e.message : String(e)}`,
+			);
+		}
 		if (!info || !(info.flags & UNW_FLAG_CHAININFO)) continue;
 
 		let current = info;
@@ -228,9 +302,16 @@ export async function fnentCommand(
 				children.push({ entry, info });
 				break;
 			}
-			const next = await getCachedUnwindInfo(
-				current.chainedFunctionEntry.unwindInfoAddress,
-			);
+			let next: UnwindInfo | null;
+			try {
+				next = await getCachedUnwindInfo(
+					current.chainedFunctionEntry.unwindInfoAddress,
+				);
+			} catch (e) {
+				return intoError(
+					`Error following chain for entry 0x${fmtHex(entry.beginAddress, 8).toLowerCase()}: ${e instanceof Error ? e.message : String(e)}`,
+				);
+			}
 			if (!next) break;
 			current = next;
 			chainDepth++;
@@ -239,34 +320,27 @@ export async function fnentCommand(
 
 	children.sort((a, b) => a.entry.beginAddress - b.entry.beginAddress);
 
-	const lines: string[] = [];
-
-	if (
-		exactEntry.beginAddress !== rootEntry.beginAddress ||
-		exactEntry.endAddress !== rootEntry.endAddress
-	) {
-		lines.push(
-			`Address ${fmtHex(address, 16).toLowerCase()} is in entry 0x${fmtHex(exactEntry.beginAddress, 8).toLowerCase()}..0x${fmtHex(exactEntry.endAddress, 8).toLowerCase()}, which chains to root:`,
-		);
-		lines.push("");
-	}
-
-	const rootSymbol = await resolveSymbol(
-		mod.address + BigInt(rootEntry.beginAddress),
-		dbg.modules.state,
-	);
-	lines.push(`${rootSymbol}:`);
-	formatFunctionEntry(rootEntry, rootInfo, lines);
-
 	for (const child of children) {
-		const childSymbol = await resolveSymbol(
-			mod.address + BigInt(child.entry.beginAddress),
-			dbg.modules.state,
-		);
+		let childSymbol: string;
+		try {
+			childSymbol = await resolveSymbol(
+				mod.address + BigInt(child.entry.beginAddress),
+				dbg.modules.state,
+			);
+		} catch (e) {
+			childSymbol = fmtHex(
+				mod.address + BigInt(child.entry.beginAddress),
+				16,
+			).toLowerCase();
+			lines.push(
+				`Error resolving symbol: ${e instanceof Error ? e.message : String(e)}`,
+			);
+			isError = true;
+		}
 		lines.push("");
 		lines.push(`Child entry ${childSymbol}:`);
 		formatFunctionEntry(child.entry, child.info, lines);
 	}
 
-	return { lines };
+	return { lines, isError: isError || undefined };
 }
