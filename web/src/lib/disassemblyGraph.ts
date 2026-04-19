@@ -582,14 +582,8 @@ export const linearizeReachableCfg = (
 	}
 
 	for (const edge of result.edges) {
-		const sourceEdges = outgoingEdges.get(edge.fromAddress);
-		if (sourceEdges) {
-			sourceEdges.push(edge);
-		}
-		const targetEdges = incomingEdges.get(edge.toAddress);
-		if (targetEdges) {
-			targetEdges.push(edge);
-		}
+		outgoingEdges.get(edge.fromAddress)?.push(edge);
+		incomingEdges.get(edge.toAddress)?.push(edge);
 	}
 
 	for (const edges of incomingEdges.values()) {
@@ -599,49 +593,77 @@ export const linearizeReachableCfg = (
 		edges.sort(sortCfgEdgesForLinearization);
 	}
 
+	const sortedBlockAddresses = [...blocksByAddress.keys()].sort(compareBigints);
+
+	// Iterative pre-order DFS. Children pushed in reverse so the first outgoing
+	// edge is popped (and thus visited) first, matching the prior recursive order.
 	const orderedAddresses: bigint[] = [];
 	const visited = new Set<bigint>();
+	const stack: bigint[] = [];
 
-	const visit = (address: bigint) => {
-		if (visited.has(address)) {
-			return;
-		}
-		const block = blocksByAddress.get(address);
-		if (!block) {
-			return;
-		}
-
-		visited.add(address);
-		orderedAddresses.push(address);
-		for (const edge of outgoingEdges.get(address) ?? []) {
-			visit(edge.toAddress);
-		}
-	};
-
-	visit(result.anchorAddress);
-	const remainingAddresses = [...blocksByAddress.keys()].sort(compareBigints);
-	for (const address of remainingAddresses) {
-		visit(address);
-	}
-
-	const overlapSourcesByAddress = new Map<bigint, bigint[]>();
-	for (const block of result.blocks) {
-		const overlapSources = new Set<bigint>();
-		for (const owner of result.blocks) {
-			if (owner.address === block.address) {
-				continue;
-			}
-			for (const instruction of owner.instructions) {
-				const endAddress = instruction.address + BigInt(instruction.byteLength);
-				if (block.address > instruction.address && block.address < endAddress) {
-					overlapSources.add(owner.address);
+	const visitFrom = (root: bigint) => {
+		if (visited.has(root) || !blocksByAddress.has(root)) return;
+		stack.push(root);
+		while (stack.length > 0) {
+			const address = stack.pop() as bigint;
+			if (visited.has(address)) continue;
+			visited.add(address);
+			orderedAddresses.push(address);
+			const outgoing = outgoingEdges.get(address);
+			if (!outgoing) continue;
+			for (let i = outgoing.length - 1; i >= 0; i--) {
+				const next = outgoing[i].toAddress;
+				if (!visited.has(next) && blocksByAddress.has(next)) {
+					stack.push(next);
 				}
 			}
 		}
-		overlapSourcesByAddress.set(
-			block.address,
-			[...overlapSources].sort(compareBigints),
-		);
+	};
+
+	visitFrom(result.anchorAddress);
+	for (const address of sortedBlockAddresses) {
+		visitFrom(address);
+	}
+
+	// Overlap detection: for each instruction, find block-start addresses
+	// strictly inside (instruction.start, instruction.end) via binary search
+	// over sortedBlockAddresses. The inner scan is bounded by max instruction
+	// length (15 bytes on x86, 4 on ARM64), so this is O(M·log N) overall.
+	const overlapSourcesByAddress = new Map<bigint, Set<bigint>>();
+	for (const address of sortedBlockAddresses) {
+		overlapSourcesByAddress.set(address, new Set());
+	}
+
+	const upperBoundAddress = (value: bigint): number => {
+		let lo = 0;
+		let hi = sortedBlockAddresses.length;
+		while (lo < hi) {
+			const mid = (lo + hi) >>> 1;
+			if (sortedBlockAddresses[mid] <= value) {
+				lo = mid + 1;
+			} else {
+				hi = mid;
+			}
+		}
+		return lo;
+	};
+
+	for (const owner of result.blocks) {
+		for (const instruction of owner.instructions) {
+			const startAddress = instruction.address;
+			const endAddress = startAddress + BigInt(instruction.byteLength);
+			let i = upperBoundAddress(startAddress);
+			while (
+				i < sortedBlockAddresses.length &&
+				sortedBlockAddresses[i] < endAddress
+			) {
+				const targetAddress = sortedBlockAddresses[i];
+				if (targetAddress !== owner.address) {
+					overlapSourcesByAddress.get(targetAddress)?.add(owner.address);
+				}
+				i++;
+			}
+		}
 	}
 
 	return orderedAddresses.map((address) => {
@@ -649,11 +671,12 @@ export const linearizeReachableCfg = (
 		if (!block) {
 			throw new Error(`Missing block for ${fmtHex16(address)}`);
 		}
+		const sources = overlapSourcesByAddress.get(address);
 		return {
 			block,
 			incomingEdges: incomingEdges.get(address) ?? [],
 			outgoingEdges: outgoingEdges.get(address) ?? [],
-			overlapSourceAddresses: overlapSourcesByAddress.get(address) ?? [],
+			overlapSourceAddresses: sources ? [...sources].sort(compareBigints) : [],
 		};
 	});
 };
